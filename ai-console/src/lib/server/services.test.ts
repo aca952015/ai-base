@@ -6,14 +6,14 @@ import { checkService, resolveHttpEndpoint, resolveTcpTarget } from "./services"
 
 describe("service target resolution", () => {
   it("prefers config, then environment, then the catalog default", () => {
-    expect(resolveHttpEndpoint(serviceById.bifrost, { enabled: true }, {
-      BIFROST_URL: "http://gateway.internal",
+    expect(resolveHttpEndpoint(serviceById["llm-gateway"], { enabled: true }, {
+      LLM_GATEWAY_URL: "http://gateway.internal",
     })).toBe("http://gateway.internal");
-    expect(resolveHttpEndpoint(serviceById.bifrost, {
+    expect(resolveHttpEndpoint(serviceById["llm-gateway"], {
       enabled: true,
       endpoint: "http://configured.internal",
     }, {})).toBe("http://configured.internal");
-    expect(resolveHttpEndpoint(serviceById.bifrost, { enabled: true }, {})).toBe(
+    expect(resolveHttpEndpoint(serviceById["llm-gateway"], { enabled: true }, {})).toBe(
       "http://localhost:8080",
     );
   });

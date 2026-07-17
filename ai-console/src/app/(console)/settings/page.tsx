@@ -19,16 +19,17 @@ export default async function SettingsPage() {
   const connectorApiReady = !data.errors.openConnector;
   const runtimeTokenConfigured = Boolean(process.env.OPEN_CONNECTOR_RUNTIME_TOKEN);
   const oidcConfigured = process.env.OIDC_ENABLED === "true";
+  const gatewayReady = data.services.some((service) => service.id === "llm-gateway" && service.status === "healthy");
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="本地控制面配置" title="系统设置" description="管理环境、预算和服务端点；组件配置状态来自实际 API，不回显任何密钥。" />
+      <PageHeader eyebrow="本地控制面配置" title="系统设置" description="管理运行环境和服务端点；组件状态来自实际配置与 API，不回显任何密钥。" />
       <div className="settings-notice" role="note"><ServerCog size={19} aria-hidden="true" /><div><strong>配置与生产发布分离</strong><p>此页面验证并保存 Console 本地配置。正式环境建议由 SOPS + age 管理敏感变量，再通过受控发布流程注入。</p></div></div>
       <SectionCard title="基础设置与服务端点" description="停用能力后，健康检查会标记为“尚未配置”，而不是误报服务故障。"><SettingsForm /></SectionCard>
       <div className="dashboard-grid dashboard-grid--equal">
         <SectionCard title="真实配置状态" description="只展示 API 可用性和配置计数，不读取或回显原始值。">
           <ul className="secret-list">
-            <li><span><KeyRound size={16} /><strong>Bifrost 模型供应商</strong></span><SecretState ready={data.modelGateway.providerCount > 0} readyLabel={`${data.modelGateway.providerCount} 个`} /></li>
+            <li><span><KeyRound size={16} /><strong>大模型网关 API</strong></span><SecretState ready={gatewayReady} readyLabel={`${data.modelGateway.channelCount} 个渠道 / ${data.modelGateway.modelCount} 个模型`} /></li>
             <li><span><LockKeyhole size={16} /><strong>OpenConnector Admin API</strong></span><SecretState ready={connectorApiReady} /></li>
             <li><span><KeyRound size={16} /><strong>OpenConnector Runtime Token</strong></span><SecretState ready={runtimeTokenConfigured} readyLabel="服务端已注入" /></li>
             <li><span><LockKeyhole size={16} /><strong>企业 OIDC</strong></span><SecretState ready={oidcConfigured} /></li>
@@ -38,7 +39,8 @@ export default async function SettingsPage() {
           <ul className="check-list">
             <li><ShieldCheck size={16} /><span><strong>Token 仅在服务端</strong>聚合 API 不向浏览器返回原始凭证</span></li>
             <li><ShieldCheck size={16} /><span><strong>知识只读</strong>Console 以只读挂载读取 SilverBullet 文件元数据</span></li>
-            <li><ShieldCheck size={16} /><span><strong>日志字段白名单</strong>不转发 Bifrost Prompt/Output 或 Jaeger Span 日志</span></li>
+            <li><ShieldCheck size={16} /><span><strong>网关单一职责</strong>不启用 MCP、管理 UI、数据库或评测能力</span></li>
+            <li><ShieldCheck size={16} /><span><strong>请求体隔离</strong>Console 不读取模型请求/响应或 Jaeger Span 日志</span></li>
             {!oidcConfigured ? <li className="is-warning"><TriangleAlert size={16} /><span><strong>OIDC 未接入</strong>当前仅适用于 loopback 本机验证</span></li> : null}
           </ul>
         </SectionCard>

@@ -24,7 +24,7 @@ export default async function DashboardPage() {
       <PageHeader
         eyebrow={`真实组件数据 · ${formatDateTime(data.generatedAt)}`}
         title="控制台总览"
-        description="直接汇总 Agent Runtime、Bifrost、OpenConnector、SilverBullet、PostgreSQL 与 Jaeger 的实际数据。"
+        description="直接汇总 Agent Runtime、Envoy AI Gateway、OpenConnector、SilverBullet、PostgreSQL 与 Jaeger 的实际数据。"
         actions={<QuickActions />}
       />
 
@@ -43,7 +43,7 @@ export default async function DashboardPage() {
       <section className="metric-grid" aria-label="真实运行指标">
         <MetricCard label="健康组件" value={`${healthyCount}/${data.services.length}`} detail="实时 HTTP/TCP 探测" trend={issueServices.length ? `${issueServices.length} 项异常` : "无异常"} icon={CircleCheck} tone="positive" />
         <MetricCard label="Runtime 事件" value={formatNumber(data.runtime.eventCount)} detail={`${data.runtime.agents.length} 个注册或观测 Agent`} trend="PostgreSQL" icon={Bot} />
-        <MetricCard label="模型请求" value={formatNumber(data.modelGateway.requestCount)} detail={`${data.modelGateway.providerCount} 个供应商 · ${data.modelGateway.modelCount} 个模型`} trend="Bifrost" icon={BrainCircuit} />
+        <MetricCard label="网关模型" value={formatNumber(data.modelGateway.modelCount)} detail={`${data.modelGateway.channelCount} 个启用渠道`} trend="Envoy AI Gateway" icon={BrainCircuit} />
         <MetricCard label="Jaeger Trace" value={formatNumber(data.tracing.recentTraceCount)} detail="最近查询，含健康检查" trend={`${data.tracing.errorTraceCount} 个错误`} icon={Activity} tone={data.tracing.errorTraceCount ? "warning" : "positive"} />
       </section>
 
@@ -52,7 +52,7 @@ export default async function DashboardPage() {
       </SectionCard>
 
       <section className="real-data-grid" aria-label="组件真实摘要">
-        <article><span><BrainCircuit size={18} /></span><div><strong>Bifrost</strong><p>{data.modelGateway.providerCount} 个供应商，{data.modelGateway.requestCount} 次模型请求，成本 US${data.modelGateway.totalCostUsd.toFixed(4)}</p></div></article>
+        <article><span><BrainCircuit size={18} /></span><div><strong>Envoy AI Gateway</strong><p>{data.modelGateway.channelCount} 个渠道，{data.modelGateway.modelCount} 个已发布模型；渠道由 Console 管理</p></div></article>
         <article><span><Network size={18} /></span><div><strong>OpenConnector</strong><p>{formatNumber(data.connector.providerCount)} 个 Provider，{data.connector.connectionCount} 个连接，{data.connector.authenticatedAppCount} 个认证连接</p></div></article>
         <article><span><NotebookTabs size={18} /></span><div><strong>SilverBullet</strong><p>{data.knowledge.documentCount} 篇 Markdown，合计 {formatBytes(data.knowledge.totalBytes)}</p></div></article>
         <article><span><Database size={18} /></span><div><strong>PostgreSQL</strong><p>pgvector {data.runtime.pgvector}，数据库 {formatBytes(data.runtime.databaseSizeBytes)}</p></div></article>

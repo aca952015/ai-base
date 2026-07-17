@@ -11,7 +11,8 @@ services:
     environment:
       AI_CONSOLE_DATA_DIR: /data
       AGENT_RUNTIME_URL: http://agent-runtime:8000
-      BIFROST_URL: http://bifrost:8080
+      LLM_GATEWAY_URL: http://llm-gateway:1975
+      LLM_GATEWAY_ADMIN_URL: http://llm-gateway:1064
       OPEN_CONNECTOR_URL: http://open-connector:3000
       OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
       OPEN_CONNECTOR_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:-local-admin-token-change-me}
@@ -27,8 +28,8 @@ services:
     depends_on:
       agent-runtime:
         condition: service_healthy
-      bifrost:
-        condition: service_started
+      llm-gateway:
+        condition: service_healthy
       open-connector:
         condition: service_started
       silverbullet:
@@ -54,7 +55,7 @@ services:
       - "127.0.0.1:18000:8000"
     environment:
       DATABASE_URL: postgresql://ai_base:${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}@postgres:5432/ai_base
-      BIFROST_URL: http://bifrost:8080
+      LLM_GATEWAY_URL: http://llm-gateway:1975
       OPEN_CONNECTOR_URL: http://open-connector:3000
       OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
@@ -94,22 +95,29 @@ services:
       retries: 20
       start_period: 10s
 
-  bifrost:
-    image: maximhq/bifrost:v1.6.4
+  llm-gateway:
+    build:
+      context: .
+      dockerfile: deploy/llm-gateway/Dockerfile
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8080:1975"
     environment:
-      APP_HOST: 0.0.0.0
-      APP_PORT: "8080"
+      AIGW_RUN_ID: "0"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-not-configured}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      LLM_GATEWAY_CONFIG_PATH: /control/llm-gateway-config.yaml
+      LLM_GATEWAY_REVISION_PATH: /control/llm-gateway-revision
     volumes:
-      - bifrost-data:/app/data
+      - console-data:/control:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1"]
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:1064/health"]
       interval: 15s
       timeout: 5s
       retries: 10
-      start_period: 15s
+      start_period: 30s
 
   open-connector:
     image: ghcr.io/oomol-lab/open-connector:v1.2.0
@@ -179,7 +187,6 @@ services:
         condition: service_healthy
 
 volumes:
-  bifrost-data:
   console-data:
   open-connector-data:
   postgres-data:

@@ -90,7 +90,11 @@ async function checkHttpService(
 
   let healthUrl: URL;
   try {
-    healthUrl = new URL(definition.probe.path, `${baseEndpoint.replace(/\/$/, "")}/`);
+    const probeEndpoint = definition.probe.endpointEnv
+      ? process.env[definition.probe.endpointEnv] || definition.probe.defaultEndpoint
+      : baseEndpoint;
+    if (!probeEndpoint) throw new Error("missing probe endpoint");
+    healthUrl = new URL(definition.probe.path, `${probeEndpoint.replace(/\/$/, "")}/`);
   } catch {
     return offlineSnapshot(definition, baseEndpoint, startedAt, "健康检查地址无效");
   }

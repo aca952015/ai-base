@@ -1,6 +1,6 @@
 export type ServiceId =
   | "agent-runtime"
-  | "bifrost"
+  | "llm-gateway"
   | "open-connector"
   | "silverbullet"
   | "postgres"
@@ -25,7 +25,7 @@ export type ServiceGroup =
   | "observability";
 
 export type ProbeConfig =
-  | { type: "http"; path: string }
+  | { type: "http"; path: string; endpointEnv?: string; defaultEndpoint?: string }
   | { type: "tcp"; hostEnv: string; portEnv: string }
   | { type: "manual" };
 
@@ -138,13 +138,9 @@ export type ComponentDataSnapshot = {
     recentEvents: RuntimeEventSnapshot[];
   };
   modelGateway: {
-    providerCount: number;
+    channelCount: number;
     modelCount: number;
-    requestCount: number;
-    successRate: number | null;
-    averageLatencyMs: number | null;
-    totalTokens: number;
-    totalCostUsd: number;
+    models: string[];
   };
   connector: {
     providerCount: number;

@@ -11,6 +11,7 @@ import type {
   TraceSnapshot,
 } from "../control-plane/types";
 import { checkServices } from "./services";
+import { readGatewayChannels } from "./gateway-config";
 
 const FETCH_TIMEOUT_MS = 2_500;
 const CACHE_TTL_MS = 10_000;
@@ -56,33 +57,11 @@ async function collectRuntime() {
   };
 }
 
-async function collectBifrost() {
-  const base = process.env.BIFROST_URL || "http://localhost:8080";
-  const [providers, models, logs] = await Promise.all([
-    fetchJson<{ providers?: unknown[]; total?: number }>(`${base}/api/providers`),
-    fetchJson<{ data?: unknown[] }>(`${base}/v1/models`),
-    fetchJson<{
-      pagination?: { total_count?: number };
-      stats?: {
-        total_requests?: number;
-        success_rate?: number;
-        average_latency?: number;
-        total_tokens?: number;
-        total_cost?: number;
-      };
-    }>(`${base}/api/logs?limit=1`),
-  ]);
-  const requestCount = logs.stats?.total_requests ?? logs.pagination?.total_count ?? 0;
-
-  return {
-    providerCount: providers.total ?? providers.providers?.length ?? 0,
-    modelCount: models.data?.length ?? 0,
-    requestCount,
-    successRate: requestCount > 0 ? (logs.stats?.success_rate ?? 0) : null,
-    averageLatencyMs: requestCount > 0 ? (logs.stats?.average_latency ?? 0) : null,
-    totalTokens: logs.stats?.total_tokens ?? 0,
-    totalCostUsd: logs.stats?.total_cost ?? 0,
-  };
+async function collectLlmGateway() {
+  const snapshot = await readGatewayChannels();
+  const enabledChannels = snapshot.channels.filter((channel) => channel.enabled && channel.keyConfigured);
+  const models = enabledChannels.flatMap((channel) => channel.models.map((model) => model.publicName));
+  return { channelCount: enabledChannels.length, modelCount: models.length, models };
 }
 
 type ConnectorConnectionPayload = {
@@ -252,7 +231,7 @@ export async function getComponentData(
   const [services, runtime, modelGateway, connector, knowledge, tracing, evaluation] = await Promise.all([
     checkServices(config),
     safe("runtime", collectRuntime, { database: "unknown", pgvector: "missing", databaseSizeBytes: 0, eventCount: 0, eventTypes: {}, agents: [], recentEvents: [] }),
-    safe("bifrost", collectBifrost, { providerCount: 0, modelCount: 0, requestCount: 0, successRate: null, averageLatencyMs: null, totalTokens: 0, totalCostUsd: 0 }),
+    safe("llmGateway", collectLlmGateway, { channelCount: 0, modelCount: 0, models: [] }),
     safe("openConnector", collectConnector, { providerCount: 0, appCount: 0, authenticatedAppCount: 0, connectionCount: 0, recentRunCount: 0, connections: [] }),
     safe("knowledge", collectKnowledge, { documentCount: 0, totalBytes: 0, latestModifiedAt: undefined, documents: [] }),
     safe("jaeger", collectTracing, { serviceCount: 0, recentTraceCount: 0, spanCount: 0, errorTraceCount: 0, traces: [] }),

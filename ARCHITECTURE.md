@@ -18,7 +18,7 @@ Pomerium ── AI Console / Component Portal (Next.js)
                     │
         ┌───────────┼──────────────┬──────────────┐
         ▼           ▼              ▼              ▼
-     Bifrost     MCP 工具层    Open Connector   SilverBullet
+ Envoy AI GW    MCP 工具层    Open Connector   SilverBullet
         │           │              │              │ Markdown
    外部大模型    内部业务 API     外部 SaaS        ▼
         │           │              │        PostgreSQL + pgvector
@@ -37,7 +37,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 控制台与组件 Portal | Next.js 16 + React 19 | 统一打开专业工作台、管理端点、查看状态、触发安全占位动作、汇总运行证据 | 不直接控制 Docker/Kubernetes，不复制专业组件界面 |
 | Agent Runtime | FastAPI + `pydantic-ai-slim` | Agent 运行、结构化输出、身份上下文、业务策略 | 不保存外部 SaaS 密钥 |
 | 持久工作流 | DBOS | 审批、队列、定时和恢复 | 复用 PostgreSQL，不加消息队列 |
-| 模型网关 | Bifrost | 外部模型协议、路由、重试、回退和密钥隔离 | 内部只使用稳定模型别名 |
+| 大模型网关 | Envoy AI Gateway standalone | OpenAI 兼容入口、供应商协议转换、模型路由与流式转发 | 网关本身无 UI/数据库；Console 生成原生资源配置；不启用 MCP Route |
 | 内部工具 | 官方 MCP SDK + 薄注册层 | JSON Schema、版本、作用域、风险等级、幂等和审计 | MCP 是协议，不当作安全沙箱 |
 | 外部系统 | Open Connector | OAuth、连接凭证、Action 目录和执行 | HTTP 为主接入，MCP 为兼容入口 |
 | 知识工作台 | SilverBullet | 类 Obsidian 的 Markdown、双向链接和人工审阅 | Markdown 是知识源，不将向量库当主数据 |
@@ -45,7 +45,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 评测 | Promptfoo | 黄金集、回归、安全、红队与发布门禁 | Docker profile / CI 按需运行 |
 | 可观测 | OpenTelemetry + Jaeger v2 | Agent、模型、检索、工具的统一 Trace | Trace 不替代合规审计账本 |
 | 身份边界 | Pomerium Core + 企业 OIDC | 登录、反向代理和路由策略 | Pomerium 不是 IdP |
-| 密钥配置 | SOPS + age | 版本化加密配置和受控发布 | 控制台不回显明文 |
+| 密钥配置 | Console 数据卷；生产发布可接 SOPS + age | 渠道 Key 独立文件、版本化配置和受控发布 | API/控制台不回显明文；生产环境加密静态存储 |
 
 ## Open Connector 边界
 
@@ -74,17 +74,19 @@ SilverBullet 提供浏览器内 Markdown 编辑、Wiki Link、双向链接和插
 
 - 一站式组件 Portal、七个管理页面和 Agent 详情页；
 - 为每个组件提供实时状态、工作台入口、内部管理入口和端点配置入口；
-- 服务端聚合 Agent Runtime、Bifrost、OpenConnector、SilverBullet、Jaeger 与 Promptfoo 的真实运行摘要；
+- 通过独立卡片页面管理大模型渠道、Provider/Base URL、服务端 Key、模型别名和启停状态，并原子生成 Envoy AI Gateway 原生资源；
+- 通过单独修订文件触发网关进程重载，Key 以文件替换方式注入生成过程，不写入路由 YAML 或浏览器响应；
+- 服务端聚合 Agent Runtime、Envoy AI Gateway、OpenConnector、SilverBullet、Jaeger 与 Promptfoo 的真实运行摘要；
 - JSON 配置读取、字段白名单校验和原子写入；
 - HTTP/TCP 服务健康探测；
 - 知识同步、评测等动作采用安全占位实现，不执行外部命令；
 - 未接入或无结果的能力显示“未配置”或真实空状态，不以演示数据补齐。
 
-聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token 仅存在于服务端环境；SilverBullet Space 以只读目录挂载，默认只读取文件元数据；Bifrost Prompt/Output、知识正文、OpenConnector 凭证与 Jaeger Span 日志均不进入浏览器响应。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
+聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token 与大模型渠道 Key 仅存在于服务端环境；SilverBullet Space 以只读目录挂载，默认只读取文件元数据；大模型网关的请求/响应、知识正文、外部凭证与 Jaeger Span 日志均不进入浏览器响应。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
 
 Portal 负责发现、导航和治理，专业组件负责深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 
-默认 Compose 启动 AI Console、Agent Runtime、Bifrost、OpenConnector、SilverBullet、PostgreSQL/pgvector 和 Jaeger。Promptfoo 位于 `quality` profile；Pomerium 位于需要企业 OIDC 凭据的 `oidc` profile。所有宿主机端口仅绑定 loopback。
+默认 Compose 启动 AI Console、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、SilverBullet、PostgreSQL/pgvector 和 Jaeger。Promptfoo 位于 `quality` profile；Pomerium 位于需要企业 OIDC 凭据的 `oidc` profile。所有宿主机端口仅绑定 loopback。
 
 下一阶段再接入企业 OIDC、Promptfoo 结果导出、SilverBullet 分块/Embedding 索引、发布审批与审计表，不在当前浏览器控制台中添加容器管理权限。
 
@@ -100,7 +102,7 @@ Portal 负责发现、导航和治理，专业组件负责深度操作。外部�
 - [Open Connector](https://github.com/oomol-lab/open-connector)
 - [SilverBullet](https://github.com/silverbulletmd/silverbullet)
 - [PydanticAI](https://github.com/pydantic/pydantic-ai)
-- [Bifrost](https://github.com/maximhq/bifrost)
+- [Envoy AI Gateway](https://github.com/envoyproxy/ai-gateway)
 - [Model Context Protocol Python SDK](https://github.com/modelcontextprotocol/python-sdk)
 - [pgvector](https://github.com/pgvector/pgvector)
 - [OpenTelemetry Python](https://github.com/open-telemetry/opentelemetry-python)

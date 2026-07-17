@@ -39,12 +39,10 @@ export const portalEntries: PortalEntry[] = [
     manageLabel: "管理 Agent",
   },
   {
-    id: "bifrost",
+    id: "llm-gateway",
     category: "build",
-    workspaceUrl: "http://localhost:8080",
-    workspaceLabel: "打开模型网关",
-    managePath: "/capabilities#models",
-    manageLabel: "管理模型能力",
+    managePath: "/model-channels",
+    manageLabel: "配置模型渠道",
   },
   {
     id: "open-connector",

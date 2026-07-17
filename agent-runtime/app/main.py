@@ -190,7 +190,7 @@ def stack() -> dict[str, object]:
             "dbos": version("dbos"),
         },
         "services": {
-            "modelGateway": os.environ.get("BIFROST_URL", "not-configured"),
+            "modelGateway": os.environ.get("LLM_GATEWAY_URL", "not-configured"),
             "externalConnector": os.environ.get("OPEN_CONNECTOR_URL", "not-configured"),
             "tracing": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "not-configured"),
         },

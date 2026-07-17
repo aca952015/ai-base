@@ -2,10 +2,10 @@ import { Activity, ArrowRight, BrainCircuit, ExternalLink, LayoutGrid, Network, 
 import Link from "next/link";
 
 const quickLinks = [
-  { name: "模型网关", product: "Bifrost", url: "http://localhost:8080", icon: BrainCircuit },
-  { name: "外部连接", product: "Open Connector", url: "http://localhost:3100", icon: Network },
-  { name: "知识工作台", product: "SilverBullet", url: "http://localhost:3001", icon: NotebookTabs },
-  { name: "链路追踪", product: "Jaeger", url: "http://localhost:16686", icon: Activity },
+  { name: "大模型网关", product: "配置模型渠道", url: "/model-channels", icon: BrainCircuit, external: false },
+  { name: "外部连接", product: "Open Connector", url: "http://localhost:3100", icon: Network, external: true },
+  { name: "知识工作台", product: "SilverBullet", url: "http://localhost:3001", icon: NotebookTabs, external: true },
+  { name: "链路追踪", product: "Jaeger", url: "http://localhost:16686", icon: Activity, external: true },
 ];
 
 export function PortalQuickLinks() {
@@ -22,13 +22,14 @@ export function PortalQuickLinks() {
       <div className="portal-launchpad__links">
         {quickLinks.map((item) => {
           const Icon = item.icon;
-          return (
-            <a href={item.url} target="_blank" rel="noreferrer" key={item.product}>
+          const content = <>
               <span aria-hidden="true"><Icon size={17} /></span>
               <div><strong>{item.name}</strong><small>{item.product}</small></div>
-              <ExternalLink size={13} aria-hidden="true" />
-            </a>
-          );
+              {item.external ? <ExternalLink size={13} aria-hidden="true" /> : <ArrowRight size={13} aria-hidden="true" />}
+            </>;
+          return item.external
+            ? <a href={item.url} target="_blank" rel="noreferrer" key={item.product}>{content}</a>
+            : <Link href={item.url} key={item.product}>{content}</Link>;
         })}
       </div>
     </section>

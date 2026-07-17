@@ -24,7 +24,7 @@ import { StatusPill } from "./status-pill";
 
 const portalIcons: Record<ServiceId, LucideIcon> = {
   "agent-runtime": Bot,
-  bifrost: BrainCircuit,
+  "llm-gateway": BrainCircuit,
   "open-connector": Network,
   silverbullet: NotebookTabs,
   postgres: Database,
@@ -141,7 +141,9 @@ export function ComponentPortal({ initialServices }: { initialServices: ServiceS
                     {entry.workspaceUrl ? (
                       <Link className="button button--secondary" href={entry.managePath}>{entry.manageLabel}</Link>
                     ) : null}
-                    <Link className="portal-card__settings" href={`/settings#service-${entry.id}`}>端点配置</Link>
+                    {entry.managePath.startsWith("/settings") ? null : (
+                      <Link className="portal-card__settings" href={`/settings#service-${entry.id}`}>端点配置</Link>
+                    )}
                   </div>
                 </article>
               );

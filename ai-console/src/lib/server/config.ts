@@ -170,12 +170,8 @@ export function applyConfigPatch(
 }
 
 export function getConfigPath() {
-  const configuredDirectory = process.env.AI_CONSOLE_DATA_DIR || ".data";
-  return path.resolve(
-    /* turbopackIgnore: true */ process.cwd(),
-    configuredDirectory,
-    CONFIG_FILE_NAME,
-  );
+  const directory = process.env.AI_CONSOLE_DATA_DIR || path.join(process.cwd(), ".data");
+  return path.join(directory, CONFIG_FILE_NAME);
 }
 
 async function writeConfigFile(config: ConsoleConfig) {
@@ -191,9 +187,28 @@ async function writeConfigFile(config: ConsoleConfig) {
   }
 }
 
+function migrateLegacyConfig(config: ConsoleConfig): ConsoleConfig {
+  const services = { ...config.services } as Record<string, ServiceConfig>;
+  const legacyBifrost = services.bifrost;
+  if (!services["llm-gateway"] && legacyBifrost) {
+    services["llm-gateway"] = legacyBifrost;
+  }
+  delete services.bifrost;
+
+  for (const service of serviceCatalog) {
+    services[service.id] ??= { enabled: true };
+  }
+  return { ...config, services } as ConsoleConfig;
+}
+
 export async function readConfig(): Promise<ConsoleConfig> {
   try {
-    return JSON.parse(await readFile(getConfigPath(), "utf8")) as ConsoleConfig;
+    const stored = JSON.parse(await readFile(getConfigPath(), "utf8")) as ConsoleConfig;
+    const migrated = migrateLegacyConfig(stored);
+    if (JSON.stringify(stored) !== JSON.stringify(migrated)) {
+      await writeConfigFile(migrated);
+    }
+    return migrated;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;

@@ -16,7 +16,7 @@ export default async function CapabilitiesPage() {
   const statusOf = (id: string): ServiceStatus => data.services.find((service) => service.id === id)?.status || "offline";
   const registeredTools = Array.from(new Set(data.runtime.agents.flatMap((agent) => agent.tools)));
   const capabilityCards = [
-    { id: "models", title: "模型路由", product: "Bifrost", icon: BrainCircuit, status: statusOf("bifrost"), metric: `${data.modelGateway.providerCount} 个供应商 · ${data.modelGateway.modelCount} 个模型`, detail: `${data.modelGateway.requestCount} 次真实模型请求。`, serviceId: "bifrost" },
+    { id: "models", title: "大模型网关", product: "Envoy AI Gateway", icon: BrainCircuit, status: statusOf("llm-gateway"), metric: `${data.modelGateway.channelCount} 个渠道 / ${data.modelGateway.modelCount} 个模型`, detail: "Console 管理上游渠道；网关只承担协议转换、模型路由和流式转发。", serviceId: "llm-gateway", managePath: "/model-channels" },
     { id: "tools", title: "内部工具", product: "Agent Runtime", icon: Blocks, status: statusOf("agent-runtime"), metric: `${registeredTools.length} 个唯一工具`, detail: `${data.runtime.agents.length} 个 Runtime Agent 的注册结果。`, serviceId: "agent-runtime" },
     { id: "connections", title: "外部系统连接", product: "Open Connector", icon: Network, status: statusOf("open-connector"), metric: `${data.connector.connectionCount} 个连接 · ${data.connector.authenticatedAppCount} 个需认证`, detail: `${formatNumber(data.connector.providerCount)} 个可用 Provider。`, serviceId: "open-connector" },
     { id: "knowledge", title: "知识能力", product: "SilverBullet + pgvector", icon: NotebookTabs, status: statusOf("silverbullet"), metric: `${data.knowledge.documentCount} 篇 Markdown · pgvector ${data.runtime.pgvector}`, detail: "Markdown 文件是真实知识源；尚未建立的切片不填充演示数量。", serviceId: "silverbullet" },
@@ -24,11 +24,14 @@ export default async function CapabilitiesPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="真实能力目录" title="能力管理" description="汇总 Bifrost、Agent Runtime、OpenConnector 与 SilverBullet 的实际配置和数据。" />
+      <PageHeader eyebrow="真实能力目录" title="能力管理" description="汇总 Envoy AI Gateway、Agent Runtime、OpenConnector 与 SilverBullet 的实际配置和数据。" />
       <section className="capability-grid" aria-label="能力目录">
         {capabilityCards.map((item) => {
           const Icon = item.icon;
-          return <article className="capability-card" id={item.id} key={item.id}><div className="capability-card__top"><span className="capability-icon"><Icon size={20} /></span><StatusPill status={item.status} compact /></div><div><span className="card-kicker">{item.product}</span><h2>{item.title}</h2></div><strong className="capability-metric">{item.metric}</strong><p>{item.detail}</p><Link href={`/settings#service-${item.serviceId}`}>管理配置 <ArrowRight size={14} /></Link></article>;
+          const manageHref = "managePath" in item && item.managePath
+            ? item.managePath
+            : `/settings#service-${item.serviceId}`;
+          return <article className="capability-card" id={item.id} key={item.id}><div className="capability-card__top"><span className="capability-icon"><Icon size={20} /></span><StatusPill status={item.status} compact /></div><div><span className="card-kicker">{item.product}</span><h2>{item.title}</h2></div><strong className="capability-metric">{item.metric}</strong><p>{item.detail}</p><Link href={manageHref}>管理配置 <ArrowRight size={14} /></Link></article>;
         })}
       </section>
       <div className="dashboard-grid dashboard-grid--wide">

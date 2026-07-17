@@ -4,6 +4,7 @@ import {
   Activity,
   Blocks,
   Bot,
+  BrainCircuit,
   ChevronDown,
   Database,
   FlaskConical,
@@ -33,6 +34,11 @@ const navigation: NavigationItem[] = [
   { href: "/data", label: "数据", icon: Database },
   { href: "/evaluations", label: "评测", icon: FlaskConical },
   { href: "/observability", label: "可观测", icon: Activity },
+];
+
+const settingsNavigation: NavigationItem[] = [
+  { href: "/model-channels", label: "模型配置", icon: BrainCircuit },
+  { href: "/settings", label: "系统设置", icon: Settings },
 ];
 
 function isActive(pathname: string, href: string) {
@@ -85,17 +91,27 @@ export function AppShell({ children, environment }: { children: ReactNode; envir
           })}
         </nav>
 
-        <div className="sidebar-spacer" />
+        <nav className="primary-nav nav-group" aria-label="设置">
+          <div className="nav-section-label">设置</div>
+          {settingsNavigation.map((item) => {
+            const Icon = item.icon;
+            const active = isActive(pathname, item.href);
 
-        <nav className="secondary-nav" aria-label="辅助导航">
-          <Link
-            className={`nav-link${pathname.startsWith("/settings") ? " is-active" : ""}`}
-            href="/settings"
-          >
-            <Settings size={18} aria-hidden="true" />
-            <span>设置</span>
-          </Link>
+            return (
+              <Link
+                className={`nav-link${active ? " is-active" : ""}`}
+                href={item.href}
+                key={item.href}
+                aria-current={active ? "page" : undefined}
+              >
+                <Icon size={18} aria-hidden="true" />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
         </nav>
+
+        <div className="sidebar-spacer" />
 
         <div className="operator-card">
           <div className="operator-avatar" aria-hidden="true">
