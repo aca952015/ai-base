@@ -1,0 +1,14 @@
+# Credential-gated optional profile. Replace these placeholders before enabling
+# with: docker compose --profile oidc up -d pomerium
+authenticate_service_url: https://authenticate.pomerium.app
+idp_provider: oidc
+idp_provider_url: https://your-idp.example.com
+idp_client_id: replace-me
+idp_client_secret: replace-me
+cookie_secret: replace-with-base64-32-byte-secret
+shared_secret: replace-with-base64-32-byte-secret
+
+routes:
+  - from: https://ai-console.localhost.pomerium.io
+    to: http://ai-console:3000
+    pass_identity_headers: true

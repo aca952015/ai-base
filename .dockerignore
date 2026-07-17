@@ -1,0 +1,14 @@
+.git
+.gitignore
+.omx
+.data
+node_modules
+**/node_modules
+**/.next
+**/coverage
+**/__pycache__
+**/.pytest_cache
+**/*.log
+.env
+.env.*
+!**/.env.example

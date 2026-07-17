@@ -1,0 +1,23 @@
+{
+  "name": "ai-base",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "ai-console"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace ai-console",
+    "build": "npm run build --workspace ai-console",
+    "start": "npm run start --workspace ai-console",
+    "lint": "npm run lint --workspace ai-console",
+    "typecheck": "npm run typecheck --workspace ai-console",
+    "test": "npm run test --workspace ai-console",
+    "check": "npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "overrides": {
+    "postcss": "8.5.19"
+  }
+}
