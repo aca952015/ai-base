@@ -35,7 +35,7 @@ export default async function CapabilitiesPage() {
         })}
       </section>
       <div className="dashboard-grid dashboard-grid--wide">
-        <SectionCard className="grid-span-2" title="OpenConnector 连接" description="列表来自 server-only Admin API；Token 不会发送到浏览器。" action={<a className="section-link" href="http://localhost:3100" target="_blank" rel="noreferrer">打开连接控制台 <ExternalLink size={14} /></a>}>
+        <SectionCard className="grid-span-2" title="OpenConnector 连接" description="列表来自 server-only Admin API；Token 不会发送到浏览器。" action={<a className="section-link" href="https://open-connector.localhost.pomerium.io:8443" target="_blank" rel="noreferrer">打开连接控制台 <ExternalLink size={14} /></a>}>
           {data.connector.connections.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Provider / 连接名</th><th>认证类型</th><th>配置状态</th><th>默认连接</th></tr></thead><tbody>{data.connector.connections.map((connection) => <tr key={connection.id}><td data-label="Provider / 连接名"><div className="service-identity"><strong>{connection.service}</strong><span className="cell-mono">{connection.connectionName}</span></div></td><td data-label="认证类型" className="cell-mono">{connection.authType}</td><td data-label="配置状态"><StatusPill status={connection.configured ? "healthy" : "unconfigured"} compact /></td><td data-label="默认连接">{connection.isDefault ? "是" : "否"}</td></tr>)}</tbody></table></div> : <div className="empty-data"><strong>暂无连接</strong><span>在 OpenConnector 中创建连接后会显示在这里。</span></div>}
         </SectionCard>
         <SectionCard title="Runtime 工具注册" description="工具名称直接来自 Agent Runtime `/v1/agents`。">

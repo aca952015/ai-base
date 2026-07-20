@@ -9,6 +9,7 @@ describe("service catalog", () => {
   });
 
   it("contains the external connector and knowledge workbench", () => {
+    expect(getServiceDefinition("global-gateway")?.product).toBe("Caddy");
     expect(getServiceDefinition("llm-gateway")?.product).toBe("Envoy AI Gateway");
     expect(getServiceDefinition("open-connector")?.product).toBe("Open Connector");
     expect(getServiceDefinition("silverbullet")?.product).toBe("SilverBullet");

@@ -31,9 +31,17 @@ export const portalCategories = [
 
 export const portalEntries: PortalEntry[] = [
   {
+    id: "global-gateway",
+    category: "build",
+    workspaceUrl: "http://localhost:8080",
+    workspaceLabel: "查看功能入口",
+    managePath: "/settings#service-global-gateway",
+    manageLabel: "管理统一入口",
+  },
+  {
     id: "agent-runtime",
     category: "build",
-    workspaceUrl: "http://localhost:18000/docs",
+    workspaceUrl: "http://runtime.localhost:8080/docs",
     workspaceLabel: "打开 API 工作台",
     managePath: "/agents",
     manageLabel: "管理 Agent",
@@ -47,7 +55,7 @@ export const portalEntries: PortalEntry[] = [
   {
     id: "open-connector",
     category: "build",
-    workspaceUrl: "http://localhost:3100",
+    workspaceUrl: "https://open-connector.localhost.pomerium.io:8443",
     workspaceLabel: "打开连接控制台",
     managePath: "/capabilities#connections",
     manageLabel: "管理连接能力",
@@ -55,7 +63,7 @@ export const portalEntries: PortalEntry[] = [
   {
     id: "silverbullet",
     category: "knowledge",
-    workspaceUrl: "http://localhost:3001",
+    workspaceUrl: "http://knowledge.localhost:8080",
     workspaceLabel: "打开知识工作台",
     managePath: "/data#knowledge",
     manageLabel: "管理知识空间",
@@ -75,7 +83,7 @@ export const portalEntries: PortalEntry[] = [
   {
     id: "jaeger",
     category: "governance",
-    workspaceUrl: "http://localhost:16686",
+    workspaceUrl: "http://jaeger.localhost:8080",
     workspaceLabel: "打开 Trace 工作台",
     managePath: "/observability",
     manageLabel: "管理可观测能力",

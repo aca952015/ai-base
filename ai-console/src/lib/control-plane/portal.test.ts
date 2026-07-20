@@ -20,6 +20,14 @@ describe("component portal", () => {
   });
 
   it("opens Open Connector through the local portal endpoint", () => {
-    expect(getPortalEntry("open-connector")?.workspaceUrl).toBe("http://localhost:3100");
+    expect(getPortalEntry("open-connector")?.workspaceUrl).toBe("https://open-connector.localhost.pomerium.io:8443");
+  });
+
+  it("routes every public workspace through the global gateway ports", () => {
+    for (const entry of portalEntries) {
+      if (!entry.workspaceUrl) continue;
+      const url = new URL(entry.workspaceUrl);
+      expect(["8080", "8443"]).toContain(url.port);
+    }
   });
 });

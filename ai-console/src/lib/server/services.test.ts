@@ -14,7 +14,7 @@ describe("service target resolution", () => {
       endpoint: "http://configured.internal",
     }, {})).toBe("http://configured.internal");
     expect(resolveHttpEndpoint(serviceById["llm-gateway"], { enabled: true }, {})).toBe(
-      "http://localhost:8080",
+      "http://localhost:8080/v1",
     );
   });
 

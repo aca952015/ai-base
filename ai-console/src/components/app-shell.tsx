@@ -38,6 +38,7 @@ const navigation: NavigationItem[] = [
 
 const settingsNavigation: NavigationItem[] = [
   { href: "/model-channels", label: "模型配置", icon: BrainCircuit },
+  { href: "/mcp", label: "MCP配置", icon: Blocks },
   { href: "/settings", label: "系统设置", icon: Settings },
 ];
 

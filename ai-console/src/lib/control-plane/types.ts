@@ -1,4 +1,5 @@
 export type ServiceId =
+  | "global-gateway"
   | "agent-runtime"
   | "llm-gateway"
   | "open-connector"
@@ -16,6 +17,7 @@ export type ServiceStatus =
   | "checking";
 
 export type ServiceGroup =
+  | "gateway"
   | "runtime"
   | "model"
   | "connection"

@@ -1,14 +1,23 @@
-# Credential-gated optional profile. Replace these placeholders before enabling
-# with: docker compose --profile oidc up -d pomerium
-authenticate_service_url: https://authenticate.pomerium.app
-idp_provider: oidc
-idp_provider_url: https://your-idp.example.com
-idp_client_id: replace-me
-idp_client_secret: replace-me
-cookie_secret: replace-with-base64-32-byte-secret
-shared_secret: replace-with-base64-32-byte-secret
+# The OIDC provider and client credentials are external to AI Base and are
+# supplied by compose environment variables.
+authenticate_service_url: https://authenticate.localhost.pomerium.io:8443
+idp_scopes: openid,profile,email
 
 routes:
-  - from: https://ai-console.localhost.pomerium.io
+  - from: https://ai-console.localhost.pomerium.io:8443
     to: http://ai-console:3000
     pass_identity_headers: true
+    policy:
+      - allow:
+          and:
+            - domain:
+                is: bluetron.cn
+
+  - from: https://open-connector.localhost.pomerium.io:8443
+    to: http://open-connector-admin-proxy:3000
+    pass_identity_headers: true
+    policy:
+      - allow:
+          and:
+            - domain:
+                is: bluetron.cn

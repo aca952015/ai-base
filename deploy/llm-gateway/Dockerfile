@@ -10,6 +10,7 @@ RUN apt-get update \
 
 COPY --from=upstream /app /app
 COPY --chmod=755 deploy/llm-gateway/entrypoint.sh /usr/local/bin/llm-gateway-entrypoint
+COPY deploy/llm-gateway/open-connector-mcp.json /etc/ai-base/open-connector-mcp.json
 
 ENV HOME=/home/gateway \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \

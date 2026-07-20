@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "open-connector": {
+      "type": "http",
+      "url": "http://global-gateway:8080/connector/mcp",
+      "headers": {
+        "Authorization": "Bearer ${OPEN_CONNECTOR_RUNTIME_TOKEN}"
+      }
+    }
+  }
+}

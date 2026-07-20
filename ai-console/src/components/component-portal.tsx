@@ -11,6 +11,7 @@ import {
   Network,
   NotebookTabs,
   RefreshCw,
+  Router,
   ShieldCheck,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -23,6 +24,7 @@ import type { ServiceId, ServiceSnapshot } from "@/lib/control-plane/types";
 import { StatusPill } from "./status-pill";
 
 const portalIcons: Record<ServiceId, LucideIcon> = {
+  "global-gateway": Router,
   "agent-runtime": Bot,
   "llm-gateway": BrainCircuit,
   "open-connector": Network,

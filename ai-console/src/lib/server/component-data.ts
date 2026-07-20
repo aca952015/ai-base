@@ -33,7 +33,7 @@ function bearer(token: string | undefined): HeadersInit | undefined {
 }
 
 async function collectRuntime() {
-  const base = process.env.AGENT_RUNTIME_URL || "http://localhost:18000";
+  const base = process.env.AGENT_RUNTIME_URL || "http://runtime.localhost:8080";
   const [ready, agents, events] = await Promise.all([
     fetchJson<{
       database?: string;
@@ -74,7 +74,7 @@ type ConnectorConnectionPayload = {
 };
 
 async function collectConnector() {
-  const base = process.env.OPEN_CONNECTOR_URL || "http://localhost:3100";
+  const base = process.env.OPEN_CONNECTOR_URL || "http://localhost:8080/connector";
   const runtimeHeaders = bearer(process.env.OPEN_CONNECTOR_RUNTIME_TOKEN);
   const adminHeaders = bearer(process.env.OPEN_CONNECTOR_ADMIN_TOKEN);
   const [providers, apps, authenticatedApps] = await Promise.all([
@@ -180,7 +180,7 @@ export function summarizeJaegerTrace(trace: JaegerTrace): TraceSnapshot | undefi
 }
 
 async function collectTracing() {
-  const base = process.env.JAEGER_URL || "http://localhost:16686";
+  const base = process.env.JAEGER_URL || "http://jaeger.localhost:8080";
   const serviceName = process.env.JAEGER_SERVICE_NAME || "ai-base-agent-runtime";
   const [services, tracesPayload] = await Promise.all([
     fetchJson<{ data?: string[]; total?: number }>(`${base}/api/services`),
@@ -203,7 +203,7 @@ async function collectTracing() {
 }
 
 async function collectEvaluation() {
-  const base = process.env.PROMPTFOO_URL || "http://localhost:3002";
+  const base = process.env.PROMPTFOO_URL || "http://promptfoo.localhost:8080";
   try {
     await fetchJson<unknown>(`${base}/health`);
     return { status: "running" as const, resultCount: 0, detail: "Promptfoo 容器已启动；尚未接入结果导出。" };

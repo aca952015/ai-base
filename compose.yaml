@@ -6,26 +6,30 @@ services:
       context: .
       dockerfile: ai-console/Dockerfile
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:3000:3000"
+    expose:
+      - "3000"
     environment:
       AI_CONSOLE_DATA_DIR: /data
-      AGENT_RUNTIME_URL: http://agent-runtime:8000
-      LLM_GATEWAY_URL: http://llm-gateway:1975
-      LLM_GATEWAY_ADMIN_URL: http://llm-gateway:1064
-      OPEN_CONNECTOR_URL: http://open-connector:3000
+      GLOBAL_GATEWAY_URL: http://global-gateway:8080
+      AGENT_RUNTIME_URL: http://global-gateway:8080/runtime
+      LLM_GATEWAY_URL: http://global-gateway:8080
+      LLM_GATEWAY_ADMIN_URL: http://global-gateway:8080/llm-admin
+      OPEN_CONNECTOR_URL: http://global-gateway:8080/connector
       OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
       OPEN_CONNECTOR_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:-local-admin-token-change-me}
-      SILVERBULLET_URL: http://silverbullet:3000
+      SILVERBULLET_URL: http://global-gateway:8080/knowledge
       SILVERBULLET_SPACE_DIR: /knowledge
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-      JAEGER_URL: http://jaeger:16686
-      PROMPTFOO_URL: http://promptfoo:3000
+      JAEGER_URL: http://global-gateway:8080/jaeger
+      PROMPTFOO_URL: http://global-gateway:8080/promptfoo
+      OIDC_ENABLED: "true"
     volumes:
       - console-data:/data
       - ./deploy/silverbullet/space:/knowledge:ro
     depends_on:
+      global-gateway:
+        condition: service_healthy
       agent-runtime:
         condition: service_healthy
       llm-gateway:
@@ -51,16 +55,18 @@ services:
     build:
       context: ./agent-runtime
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:18000:8000"
+    expose:
+      - "8000"
     environment:
       DATABASE_URL: postgresql://ai_base:${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}@postgres:5432/ai_base
-      LLM_GATEWAY_URL: http://llm-gateway:1975
-      OPEN_CONNECTOR_URL: http://open-connector:3000
+      LLM_GATEWAY_URL: http://global-gateway:8080
+      OPEN_CONNECTOR_URL: http://global-gateway:8080/connector
       OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
-      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://global-gateway:8080/otel/v1/traces
       OTEL_SERVICE_NAME: ai-base-agent-runtime
     depends_on:
+      global-gateway:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       jaeger:
@@ -79,8 +85,8 @@ services:
   postgres:
     image: pgvector/pgvector:0.8.5-pg17-bookworm
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:5432:5432"
+    expose:
+      - "5432"
     environment:
       POSTGRES_USER: ai_base
       POSTGRES_PASSWORD: ${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}
@@ -100,14 +106,16 @@ services:
       context: .
       dockerfile: deploy/llm-gateway/Dockerfile
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8080:1975"
+    expose:
+      - "1975"
+      - "1064"
     environment:
       AIGW_RUN_ID: "0"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-not-configured}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
       LLM_GATEWAY_CONFIG_PATH: /control/llm-gateway-config.yaml
       LLM_GATEWAY_REVISION_PATH: /control/llm-gateway-revision
     volumes:
@@ -119,13 +127,35 @@ services:
       retries: 10
       start_period: 30s
 
+  global-gateway:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - ./deploy/global-gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      llm-gateway:
+        condition: service_healthy
+      open-connector:
+        condition: service_started
+      jaeger:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   open-connector:
     image: ghcr.io/oomol-lab/open-connector:v1.2.0
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:3100:3000"
+    expose:
+      - "3000"
     environment:
-      OOMOL_CONNECT_ORIGIN: http://localhost:3100
+      OOMOL_CONNECT_ORIGIN: ${OOMOL_CONNECT_ORIGIN:-https://open-connector.localhost.pomerium.io:8443}
       OOMOL_CONNECT_DATA_DIR: /app/data
       OOMOL_CONNECT_ENCRYPTION_KEY: ${OOMOL_CONNECT_ENCRYPTION_KEY:-local-development-encryption-key-change-me}
       OOMOL_CONNECT_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:-local-admin-token-change-me}
@@ -135,11 +165,30 @@ services:
     volumes:
       - open-connector-data:/app/data
 
+  open-connector-admin-proxy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      OOMOL_CONNECT_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:-local-admin-token-change-me}
+    volumes:
+      - ./deploy/open-connector-admin-proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      open-connector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document", "/dev/null", "http://127.0.0.1:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   silverbullet:
     image: ghcr.io/silverbulletmd/silverbullet:2.9.0
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:3001:3000"
+    expose:
+      - "3000"
     environment:
       SB_SHELL_BACKEND: "off"
       SB_USER: ${SILVERBULLET_USER:-}
@@ -149,18 +198,18 @@ services:
   jaeger:
     image: jaegertracing/jaeger:2.19.0
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:16686:16686"
-      - "127.0.0.1:4317:4317"
-      - "127.0.0.1:4318:4318"
-      - "127.0.0.1:13133:13133"
+    expose:
+      - "16686"
+      - "4317"
+      - "4318"
+      - "13133"
 
   promptfoo:
     image: ghcr.io/promptfoo/promptfoo:0.121.19
     profiles: ["quality"]
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:3002:3000"
+    expose:
+      - "3000"
     volumes:
       - promptfoo-data:/home/promptfoo/.promptfoo
     healthcheck:
@@ -176,14 +225,22 @@ services:
 
   pomerium:
     image: pomerium/pomerium:v0.32.7
-    profiles: ["oidc"]
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8443:443"
+    expose:
+      - "443"
+    environment:
+      IDP_PROVIDER: oidc
+      IDP_PROVIDER_URL: ${POMERIUM_IDP_PROVIDER_URL:-https://ids.bluetron.cn/realms/master}
+      IDP_CLIENT_ID: ${POMERIUM_IDP_CLIENT_ID:-ai-base-pomerium}
+      IDP_CLIENT_SECRET: ${POMERIUM_IDP_CLIENT_SECRET:-replace-with-the-external-oidc-client-secret}
+      COOKIE_SECRET: ${POMERIUM_COOKIE_SECRET:-f3w8vZzhlwLw1DIXoCaILrswiMeDabDaRcyH6JBMwoc=}
+      SHARED_SECRET: ${POMERIUM_SHARED_SECRET:-tq+Rx6zdR8G7iv9SFdiCS1dBGVnug94N+WyOSx1QyCM=}
     volumes:
       - ./deploy/pomerium/config.example.yaml:/pomerium/config.yaml:ro
     depends_on:
       ai-console:
+        condition: service_healthy
+      open-connector-admin-proxy:
         condition: service_healthy
 
 volumes:

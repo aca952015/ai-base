@@ -25,7 +25,7 @@ export default async function DataPage() {
         <MetricCard label="pgvector" value={data.runtime.pgvector} detail={data.runtime.database} trend="扩展版本" icon={Database} tone={data.runtime.pgvector === "missing" ? "warning" : "positive"} />
         <MetricCard label="数据库大小" value={formatBytes(data.runtime.databaseSizeBytes)} detail="pg_database_size" trend="PostgreSQL" icon={Server} />
       </section>
-      <SectionCard title="SilverBullet 文档" description="仅展示路径、大小与更新时间，不默认读取知识正文。" action={<a className="section-link" href="http://localhost:3001" target="_blank" rel="noreferrer">打开 SilverBullet <ArrowRight size={14} /></a>}>
+      <SectionCard title="SilverBullet 文档" description="仅展示路径、大小与更新时间，不默认读取知识正文。" action={<a className="section-link" href="http://knowledge.localhost:8080" target="_blank" rel="noreferrer">打开 SilverBullet <ArrowRight size={14} /></a>}>
         {data.knowledge.documents.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>文档</th><th>相对路径</th><th>大小</th><th>最后修改</th><th>状态</th></tr></thead><tbody>{data.knowledge.documents.map((document) => <tr key={document.relativePath}><td data-label="文档"><strong>{document.name}</strong></td><td data-label="相对路径" className="cell-mono">{document.relativePath}</td><td data-label="大小" className="cell-mono">{formatBytes(document.sizeBytes)}</td><td data-label="最后修改">{formatDateTime(document.modifiedAt)}</td><td data-label="状态"><StatusPill status={knowledgeStatus} compact /></td></tr>)}</tbody></table></div> : <div className="empty-data"><strong>知识空间暂无 Markdown</strong><span>在 SilverBullet 新建文档后会显示在这里。</span></div>}
       </SectionCard>
       <div className="dashboard-grid dashboard-grid--equal">

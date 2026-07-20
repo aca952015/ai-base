@@ -6,17 +6,23 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { GatewayChannel, GatewayChannelDraft } from "../control-plane/gateway";
+import type { GatewayMcpServer, GatewayMcpServerDraft } from "../control-plane/mcp";
 import {
   generateGatewayConfig,
   getGatewayConfigPaths,
   readGatewayChannels,
+  readGatewayMcpServers,
   saveGatewayChannels,
+  saveGatewayMcpServers,
   testGatewayChannel,
+  testGatewayMcpServer,
   validateGatewayChannelsInput,
+  validateGatewayMcpServersInput,
 } from "./gateway-config";
 
 const temporaryDirectories: string[] = [];
 const originalDataDirectory = process.env.AI_CONSOLE_DATA_DIR;
+const originalOpenConnectorRuntimeToken = process.env.OPEN_CONNECTOR_RUNTIME_TOKEN;
 
 async function useTemporaryDataDirectory() {
   const directory = await mkdtemp(path.join(tmpdir(), "ai-console-gateway-"));
@@ -28,6 +34,8 @@ async function useTemporaryDataDirectory() {
 afterEach(async () => {
   if (originalDataDirectory === undefined) delete process.env.AI_CONSOLE_DATA_DIR;
   else process.env.AI_CONSOLE_DATA_DIR = originalDataDirectory;
+  if (originalOpenConnectorRuntimeToken === undefined) delete process.env.OPEN_CONNECTOR_RUNTIME_TOKEN;
+  else process.env.OPEN_CONNECTOR_RUNTIME_TOKEN = originalOpenConnectorRuntimeToken;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -40,6 +48,21 @@ function draft(overrides: Partial<GatewayChannelDraft> = {}): GatewayChannelDraf
     enabled: true,
     models: [{ publicName: "chat-fast", upstreamName: "gpt-4.1-mini" }],
     apiKey: "test-secret",
+    ...overrides,
+  };
+}
+
+function mcpDraft(overrides: Partial<GatewayMcpServerDraft> = {}): GatewayMcpServerDraft {
+  return {
+    id: "mcp-github",
+    name: "GitHub MCP",
+    namespace: "github",
+    url: "https://api.githubcopilot.com/mcp/readonly",
+    enabled: true,
+    authHeader: "Authorization",
+    toolIncludes: ["issue_read"],
+    toolExcludes: ["delete_repository"],
+    apiKey: "super-private-token",
     ...overrides,
   };
 }
@@ -90,6 +113,48 @@ describe("Envoy gateway config generation", () => {
     expect(config).not.toContain("test-secret");
     expect(config).not.toContain("kind: MCPRoute");
   });
+
+  it("adds MCPRoute backends, tool filters, and file-backed MCP secrets", () => {
+    const server: GatewayMcpServer = {
+      ...mcpDraft(),
+      managed: false,
+      keyConfigured: true,
+      createdAt: "2026-07-20T00:00:00.000Z",
+      updatedAt: "2026-07-20T00:00:00.000Z",
+    };
+    const config = generateGatewayConfig([], [server]);
+    expect(config).toContain("kind: MCPRoute");
+    expect(config).toContain('path: "/mcp"');
+    expect(config).toContain('hostname: "api.githubcopilot.com"');
+    expect(config).toContain('          - "issue_read"');
+    expect(config).toContain('          - "delete_repository"');
+    expect(config).toContain("substitution.aigw.run/file/apiKey");
+    expect(config).not.toContain("super-private-token");
+  });
+});
+
+describe("gateway MCP validation", () => {
+  it("normalizes MCP URLs and rejects duplicate tool namespaces", () => {
+    const validation = validateGatewayMcpServersInput({
+      servers: [
+        mcpDraft({ url: "https://example.com/mcp/" }),
+        mcpDraft({ id: "mcp-second", name: "Second" }),
+      ],
+    });
+    expect(validation.ok).toBe(false);
+    if (validation.ok) return;
+    expect(validation.errors).toContain("servers[1].namespace is duplicated");
+  });
+
+  it("reserves the Open Connector id and namespace for the system-managed service", () => {
+    const validation = validateGatewayMcpServersInput({
+      servers: [mcpDraft({ id: "mcp-open-connector", namespace: "open-connector" })],
+    });
+    expect(validation.ok).toBe(false);
+    if (validation.ok) return;
+    expect(validation.errors).toContain("servers[0].id is reserved for the system-managed Open Connector service");
+    expect(validation.errors).toContain("servers[0].namespace is reserved for the system-managed Open Connector service");
+  });
 });
 
 describe("gateway channel storage", () => {
@@ -105,13 +170,53 @@ describe("gateway channel storage", () => {
     expect((await readGatewayChannels()).channels[0].keyConfigured).toBe(true);
   });
 
-  it("removes generated config when all channels are removed", async () => {
+  it("keeps the system-managed Open Connector MCP route when all channels are removed", async () => {
     await useTemporaryDataDirectory();
+    process.env.OPEN_CONNECTOR_RUNTIME_TOKEN = "connector-runtime-token";
     await saveGatewayChannels([draft()]);
     const paths = getGatewayConfigPaths();
     await saveGatewayChannels([]);
-    await expect(access(paths.config)).rejects.toThrow();
+    const config = await readFile(paths.config, "utf8");
+    expect(config).not.toContain("kind: AIGatewayRoute");
+    expect(config).toContain("kind: MCPRoute");
+    expect(config).toContain("mcp-open-connector");
+    expect(await readFile(path.join(paths.mcpSecrets, "mcp-open-connector.key"), "utf8")).toBe("connector-runtime-token");
     await expect(access(path.join(paths.secrets, "channel-openai.key"))).rejects.toThrow();
+  });
+});
+
+describe("gateway MCP storage", () => {
+  it("persists MCP secrets separately and preserves model routes", async () => {
+    await useTemporaryDataDirectory();
+    await saveGatewayChannels([draft()]);
+    const saved = await saveGatewayMcpServers([mcpDraft()], new Date("2026-07-20T08:00:00.000Z"));
+    const savedCustomServer = saved.servers.find((server) => server.id === "mcp-github");
+    expect(saved.servers[0]).toMatchObject({ id: "mcp-open-connector", managed: true, enabled: true });
+    expect(savedCustomServer?.keyConfigured).toBe(true);
+    expect(savedCustomServer).not.toHaveProperty("apiKey");
+
+    const paths = getGatewayConfigPaths();
+    expect(await readFile(path.join(paths.mcpSecrets, "mcp-github.key"), "utf8")).toBe("super-private-token");
+    const config = await readFile(paths.config, "utf8");
+    expect(config).toContain("kind: AIGatewayRoute");
+    expect(config).toContain("kind: MCPRoute");
+    expect(config).not.toContain("super-private-token");
+    expect((await readGatewayMcpServers()).servers.find((server) => server.id === "mcp-github")?.keyConfigured).toBe(true);
+    expect(JSON.parse(await readFile(paths.mcpServers, "utf8")).servers).toHaveLength(1);
+  });
+
+  it("removes MCP resources without removing model resources", async () => {
+    await useTemporaryDataDirectory();
+    await saveGatewayChannels([draft()]);
+    await saveGatewayMcpServers([mcpDraft()]);
+    await saveGatewayMcpServers([]);
+    const paths = getGatewayConfigPaths();
+    const config = await readFile(paths.config, "utf8");
+    expect(config).toContain("kind: AIGatewayRoute");
+    expect(config).toContain("kind: MCPRoute");
+    expect(config).toContain("mcp-open-connector");
+    expect(config).not.toContain("mcp-github");
+    await expect(access(path.join(paths.mcpSecrets, "mcp-github.key"))).rejects.toThrow();
   });
 });
 
@@ -130,6 +235,54 @@ describe("gateway channel connectivity test", () => {
       const result = await testGatewayChannel(draft({ baseUrl: `http://127.0.0.1:${address.port}/v1` }));
       expect(result).toMatchObject({ ok: true, discoveredModels: ["model-a"] });
       expect(authorization).toBe("Bearer test-secret");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+});
+
+describe("gateway MCP connectivity test", () => {
+  it("initializes an MCP session and reads the real tool list", async () => {
+    const methods: string[] = [];
+    let authorization = "";
+    let toolsSession = "";
+    const server = createServer(async (request, response) => {
+      let raw = "";
+      for await (const chunk of request) raw += chunk.toString();
+      const payload = JSON.parse(raw) as { id?: number; method: string; params?: { cursor?: string } };
+      methods.push(payload.method);
+      authorization = request.headers.authorization || authorization;
+      if (payload.method === "initialize") {
+        response.setHeader("content-type", "application/json");
+        response.setHeader("mcp-session-id", "session-1");
+        response.end(JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "test", version: "1" } } }));
+      } else if (payload.method === "notifications/initialized") {
+        response.statusCode = 202;
+        response.end();
+      } else {
+        toolsSession = String(request.headers["mcp-session-id"] || "");
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(payload.params?.cursor === "page-2"
+          ? { jsonrpc: "2.0", id: payload.id, result: { tools: [{ name: "read", description: "Read a document" }] } }
+          : { jsonrpc: "2.0", id: payload.id, result: { tools: [{ name: "search", description: "Search documents" }], nextCursor: "page-2" } }));
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("missing test server address");
+    try {
+      const result = await testGatewayMcpServer(mcpDraft({ url: `http://127.0.0.1:${address.port}/mcp` }));
+      expect(result).toMatchObject({
+        ok: true,
+        discoveredTools: ["search", "read"],
+        tools: [
+          { name: "search", description: "Search documents" },
+          { name: "read", description: "Read a document" },
+        ],
+      });
+      expect(methods).toEqual(["initialize", "notifications/initialized", "tools/list", "tools/list"]);
+      expect(authorization).toBe("Bearer super-private-token");
+      expect(toolsSession).toBe("session-1");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
