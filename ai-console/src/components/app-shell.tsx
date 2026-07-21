@@ -10,6 +10,7 @@ import {
   FlaskConical,
   Gauge,
   LayoutGrid,
+  PlugZap,
   Settings,
   Sparkles,
 } from "lucide-react";
@@ -17,8 +18,6 @@ import type { LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-
-import type { ConsoleConfig } from "@/lib/control-plane/types";
 
 type NavigationItem = {
   href: string;
@@ -39,6 +38,7 @@ const navigation: NavigationItem[] = [
 const settingsNavigation: NavigationItem[] = [
   { href: "/model-channels", label: "模型配置", icon: BrainCircuit },
   { href: "/mcp", label: "MCP配置", icon: Blocks },
+  { href: "/connectors", label: "连接器配置", icon: PlugZap },
   { href: "/settings", label: "系统设置", icon: Settings },
 ];
 
@@ -46,13 +46,7 @@ function isActive(pathname: string, href: string) {
   return href === "/" ? pathname === href : pathname.startsWith(href);
 }
 
-const environmentLabels: Record<ConsoleConfig["environment"], string> = {
-  development: "开发环境",
-  staging: "预发环境",
-  production: "生产环境",
-};
-
-export function AppShell({ children, environment }: { children: ReactNode; environment: ConsoleConfig["environment"] }) {
+export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
 
   return (
@@ -127,25 +121,6 @@ export function AppShell({ children, environment }: { children: ReactNode; envir
       </aside>
 
       <div className="shell-column">
-        <header className="topbar">
-          <div className="topbar-product">
-            <span className="mobile-brand-mark" aria-hidden="true">
-              <Sparkles size={16} />
-            </span>
-            <span>Agent 基础设施门户</span>
-          </div>
-          <div className="topbar-actions">
-            <Link className="command-link" href="/agents">
-              <span>搜索 Agent、组件或 Trace</span>
-              <kbd>⌘ K</kbd>
-            </Link>
-            <div className="environment-badge">
-              <span className="status-dot status-dot--healthy" aria-hidden="true" />
-              {environmentLabels[environment]}
-            </div>
-          </div>
-        </header>
-
         <main className="main-content" id="main-content">
           {children}
         </main>

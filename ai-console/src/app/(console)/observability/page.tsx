@@ -16,7 +16,7 @@ export default async function ObservabilityPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="OpenTelemetry · Jaeger" title="可观测性" description="近期 Trace、Span、延迟与状态直接来自 Jaeger 查询适配层。" actions={<a className="button button--secondary" href="http://jaeger.localhost:8080" target="_blank" rel="noreferrer">打开 Jaeger <ExternalLink size={15} /></a>} />
+      <PageHeader title="可观测性" description="近期 Trace、Span、延迟与状态直接来自 Jaeger 查询适配层。" actions={<a className="button button--secondary" href="http://jaeger.localhost:8080" target="_blank" rel="noreferrer">打开 Jaeger <ExternalLink size={15} /></a>} />
       <section className="metric-grid" aria-label="可观测指标">
         <MetricCard label="最近 Trace" value={formatNumber(tracing.recentTraceCount)} detail="查询上限 100" trend="Jaeger" icon={Activity} />
         <MetricCard label="Span 数" value={formatNumber(tracing.spanCount)} detail="当前查询结果" trend="OpenTelemetry" icon={Box} />

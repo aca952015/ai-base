@@ -18,7 +18,7 @@ export default async function DataPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="Markdown source of truth" title="数据与知识" description="SilverBullet 文件元数据来自只读 Space，数据库指标来自 Agent Runtime 与 PostgreSQL。" />
+      <PageHeader title="数据与知识" description="SilverBullet 文件元数据来自只读 Space，数据库指标来自 Agent Runtime 与 PostgreSQL。" />
       <section className="metric-grid" aria-label="知识与数据指标">
         <MetricCard label="知识文档" value={formatNumber(data.knowledge.documentCount)} detail="实际 Markdown 文件" trend="SilverBullet" icon={FileText} />
         <MetricCard label="知识体积" value={formatBytes(data.knowledge.totalBytes)} detail="不读取正文到浏览器" trend="只读挂载" icon={HardDrive} />

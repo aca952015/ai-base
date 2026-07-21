@@ -22,7 +22,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
   return (
     <div className="page-stack">
       <Link className="back-link" href="/agents"><ArrowLeft size={15} /> 返回 Agent 列表</Link>
-      <PageHeader eyebrow={`Runtime · ${agent.id}`} title={agent.name} description="展示 Agent Runtime 注册配置和 PostgreSQL 中的实际运行事件。" actions={<StatusPill status={agent.status === "ready" ? "healthy" : "idle"} />} />
+      <PageHeader title={agent.name} description="展示 Agent Runtime 注册配置和 PostgreSQL 中的实际运行事件。" actions={<StatusPill status={agent.status === "ready" ? "healthy" : "idle"} />} />
       <section className="metric-grid" aria-label={`${agent.name}指标`}>
         <MetricCard label="运行事件" value={formatNumber(agent.runCount)} detail="全部已记录事件" trend="PostgreSQL" icon={GitBranch} />
         <MetricCard label="最后运行" value={agent.latestRunAt ? formatDateTime(agent.latestRunAt) : "暂无"} detail="runtime_events" trend="真实时间" icon={Clock3} />

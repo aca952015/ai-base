@@ -70,6 +70,7 @@ type ConnectorConnectionPayload = {
   connectionName?: string;
   authType?: string;
   configured?: boolean;
+  virtual?: boolean;
   default?: boolean;
 };
 
@@ -102,7 +103,7 @@ async function collectConnector() {
     providerCount: providers.data?.length ?? 0,
     appCount: apps.data?.length ?? 0,
     authenticatedAppCount: authenticatedApps.data?.length ?? 0,
-    connectionCount: connections.length || apps.data?.length || 0,
+    connectionCount: connectionsPayload.filter((item) => !item.virtual).length,
     recentRunCount: runsPayload.items?.length ?? 0,
     connections,
   };

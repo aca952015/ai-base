@@ -3,21 +3,21 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-07-20
-- Primary product surfaces: AI 基础设施总览、组件门户、Agent 管理、模型配置、MCP配置、能力管理、数据与知识、评测、可观测、系统设置
+- Last refreshed: 2026-07-21
+- Primary product surfaces: AI 基础设施总览、组件门户、Agent 管理、模型配置、MCP配置、连接器配置、能力管理、数据与知识、评测、可观测、系统设置
 - Evidence reviewed: `/Users/aca/dev/ai-fde/.omx/plans/sme-agent-infrastructure-v0.1.md`、`ai-console/src/app/(console)`、`ai-console/src/components`、`ai-console/src/lib/server/component-data.ts`、Envoy AI Gateway 1.0 standalone 配置契约、用户确认的 Next.js 技术栈与工具链边界
 
 ## Brand
 
-- Personality: 可靠、克制、清晰，像一间友好的工业控制室
+- Personality: 精确、安静、可信，像一套为企业 AI 基础设施延伸设计的 macOS 系统设置
 - Trust signals: 明确的健康状态、更新时间、影响范围、版本、环境和审计记录
-- Avoid: 赛博霓虹、紫色渐变、大面积玻璃拟态、只依赖颜色表达状态、无决策价值的仪表盘堆叠
+- Avoid: 赛博霓虹、暖色营销渐变、高亮玻璃拟态、密集无层级的仪表盘堆叠、只依赖颜色表达状态；使用 macOS 式材质与控件精度，但不复制 Apple 标志、系统图标或消费级设置内容
 
 ## Product goals
 
 - Goals: 让平台管理员在一分钟内判断系统健康；通过一个 Portal 找到、打开和配置整套组件；让 Agent 开发者管理模型、工具、连接和知识；让业务负责人看到质量、成本和影响
-- Non-goals: 首版不提供通用 Docker/Kubernetes 生命周期编排；不在浏览器回显密钥；Envoy AI 管理覆盖模型渠道和 MCP 上游路由，不扩展为成本分析、流量分析或评测产品；不复制 Jaeger、Promptfoo、SilverBullet 和 Open Connector 的专业管理能力
-- Success signals: 关键组件状态可见；全局能力网关的功能入口状态可见；每个组件都能从 Portal 进入工作台或对应的内部管理页；模型渠道与 MCP 服务可以保存、测试并自动应用到 Envoy AI；异常能定位到受影响 Agent；所有高风险动作有明确确认和审计语义
+- Non-goals: 首版不提供通用 Docker/Kubernetes 生命周期编排；不在浏览器回显密钥；Envoy AI 管理覆盖模型渠道和 MCP 上游路由，不扩展为成本分析、流量分析或评测产品；AI Console 只承接 Open Connector 的高频连接生命周期，不复制其 Action 调试、Runtime Token、策略和运行日志能力；不复制 Jaeger、Promptfoo 与 SilverBullet 的专业管理能力
+- Success signals: 关键组件状态可见；全局能力网关的功能入口状态可见；每个组件都能从 Portal 进入工作台或对应的内部管理页；模型渠道与 MCP 服务可以保存、测试并自动应用到 Envoy AI；Open Connector Provider 可搜索、连接凭据可按上游 Schema 动态配置、OAuth 可完成授权；异常能定位到受影响 Agent；所有高风险动作有明确确认和审计语义
 
 ## Personas and jobs
 
@@ -27,8 +27,8 @@
 
 ## Information architecture
 
-- Primary navigation: “工作台”组包含总览、组件门户、Agent、能力、数据、评测、可观测；与其同级的“设置”组包含模型配置、MCP配置和系统设置
-- Core routes/screens: `/`、`/components`、`/agents`、`/capabilities`、`/data`、`/evaluations`、`/observability`、`/model-channels`、`/mcp`、`/settings`
+- Primary navigation: “工作台”组包含总览、组件门户、Agent、能力、数据、评测、可观测；与其同级的“设置”组包含模型配置、MCP配置、连接器配置和系统设置
+- Core routes/screens: `/`、`/components`、`/agents`、`/capabilities`、`/data`、`/evaluations`、`/observability`、`/model-channels`、`/mcp`、`/connectors`、`/settings`
 - Content hierarchy: 待处理事项 > 常用组件入口 > 核心运行指标 > Agent 运行矩阵 > 依赖与服务状态 > 近期变化 > 快捷操作
 
 ## Design principles
@@ -42,17 +42,17 @@
 
 ## Visual language
 
-- Color: 深墨蓝侧栏、暖灰画布、青绿正常、琥珀关注、朱红故障；状态同时使用图标和文字
+- Color: 冷中性炭黑窗口、半透明深灰侧栏、石墨色分组表面；系统蓝表示选择和主要操作，绿色表示正常，黄色表示关注，红色表示故障，状态同时使用图标和文字；深色卡片中的模型标签使用高亮浅蓝文字、低饱和深蓝底和细蓝灰边框，避免同色相前景与背景造成识别困难
 - Typography: 系统中文无衬线字体；数字、版本、Trace ID 和模型名使用等宽字体
 - Spacing/layout rhythm: 4px 基础网格；页面间距 24–32px；表格行保持紧凑但可点击
-- Shape/radius/elevation: 10–18px 圆角；细边框和轻阴影；不使用浮夸悬浮层
+- Shape/radius/elevation: 参考 macOS 系统设置的 10–20px 连续圆角、0.5–1px 冷灰高光边、柔和低扩散阴影与轻微背景模糊；分组卡片保持贴合窗口，不使用明显上浮动效
 - Motion: 160–240ms 状态和抽屉过渡；遵守 `prefers-reduced-motion`
-- Imagery/iconography: 使用线性图标和简化运行脉络，不使用装饰性插画
+- Imagery/iconography: Lucide 线性图标放入带色彩编码的圆角底座，形成类似系统设置的快速识别能力；不复制 Apple 系统图标和装饰性插画
 
 ## Components
 
 - Existing components to reuse: AppShell、PageHeader、SectionCard、StatusPill、ServiceTable、Button 和全局语义 token
-- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager；ComponentPortal 将 Caddy 全局能力网关作为功能入口组件展示，但不将其误作 UI 网关；AppShell 使用“工作台/设置”分组导航；模型和 MCP 配置分别使用独立页面、实时摘要卡片、紧凑管理区和右侧编辑抽屉；Open Connector MCP 使用带“系统内置”标识的只读卡片；总览和管理页面读取真实数据快照；空状态明确标注未配置项
+- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager、ConnectorManager；ComponentPortal 的资源卡片是全局唯一卡片视觉基准，分组容器、摘要/指标、资源列表、可操作设置和抽屉内工具卡片统一复用其石墨渐变卡面、细冷灰边框、14px 圆角、轻微内高光与克制阴影 token，仅按信息密度调整尺寸和内边距；模型、MCP 和连接器管理区沿用组件门户的“分组标题 + 直接卡片网格”结构，不再用 SectionCard 包裹整个资源列表；侧栏使用系统蓝整行选中态和彩色图标底座，不添加无操作意义的窗口控制装饰；资源状态使用小型状态圆点和文字；ComponentPortal 将 Caddy 全局能力网关作为功能入口组件展示，但不将其误作 UI 网关；AppShell 使用“工作台/设置”分组导航和无顶部栏的全局内容布局，所有控制台路由均从窗口内容区顶部开始，不为产品名、搜索或环境状态预留空白横条；所有模块的 PageHeader 直接以页面标题为第一层可见内容，不显示产品名、数据时间或技术栈 eyebrow 小标签；模型、MCP 和连接器配置分别使用独立页面、实时摘要卡片、卡片管理区和占满视口高度的右侧编辑抽屉，抽屉头部和底部固定、中间内容独立滚动；连接器抽屉先选择 Open Connector Provider，再从其 `auth` Schema 选择认证类型并动态生成凭据或 OAuth 表单；Provider 在编辑时固定，认证类型可切换；Open Connector MCP 使用带“系统内置”标识的只读卡片；总览和管理页面读取真实数据快照；空状态明确标注未配置项
 - Variants and states: default/hover/focus/disabled；healthy/degraded/offline/unconfigured/running
 - Token/component ownership: 全局 CSS 自定义属性定义基础 token；组件使用语义 class，不增加独立设计系统依赖
 
@@ -75,7 +75,7 @@
 - Loading: 保留布局骨架并显示具体动作文本
 - Empty: 区分尚未创建、筛选无结果、权限不足和服务未接入
 - Error: 展示原因、影响和恢复动作，不只显示错误码
-- Success: 使用页面内 `aria-live` 消息确认保存、连通性测试和网关重载状态，并在页面中反映最新配置；新增模型渠道或 MCP 服务在保存成功前保持为抽屉内草稿，不进入卡片列表或摘要统计；模型同步从当前渠道配置读取可用模型并只回填抽屉草稿，不自动保存或发布
+- Success: 使用页面内 `aria-live` 消息确认保存、连通性测试、OAuth 授权和网关重载状态，并在页面中反映最新配置；新增或编辑模型渠道、MCP 服务时由抽屉保存动作直接写入并应用 Envoy AI，成功前保持为抽屉内草稿，不进入卡片列表或摘要统计；卡片上的启停直接应用，删除经确认后直接应用，不设置页面级二次保存按钮；Open Connector 连接在上游成功前保持为抽屉内草稿；模型同步从当前渠道配置读取可用模型并只回填抽屉草稿，不自动保存或发布
 - Disabled: 解释为什么不可操作；系统托管的 Open Connector MCP 不提供启停、编辑和删除控件，仅保留连接测试
 - Offline/slow network, if applicable: 健康检查超时后保留最后成功时间并标记“状态未知”
 
@@ -88,10 +88,10 @@
 ## Implementation constraints
 
 - Framework/styling system: Next.js 16 App Router、React 19、TypeScript、原生 CSS、Lucide 图标
-- Design-token constraints: token 集中在 `globals.css`；不引入 Tailwind 或重量级 UI 套件
+- Design-token constraints: token 集中在 `globals.css`；卡片必须使用 `--card-*` 语义 token，不在页面组件中复制阴影、边框或圆角值；不引入 Tailwind 或重量级 UI 套件
 - Performance constraints: 首屏不加载大型图表库；默认 Server Component，仅交互区域使用 Client Component
 - Compatibility constraints: Node.js 22；现代 Chrome、Edge、Firefox、Safari；Envoy AI Gateway 模型与 MCP 配置使用 v1beta1 原生资源并通过只读共享卷注入
-- Test/screenshot expectations: ESLint、TypeScript、Vitest、Next production build；桌面浏览器为主验证；`/model-channels` 与 `/mcp` 的卡片布局、新增草稿、右侧抽屉、密钥不回显、连接测试和保存应用完成交互 smoke test
+- Test/screenshot expectations: ESLint、TypeScript、Vitest、Next production build；桌面浏览器为主验证；`/model-channels`、`/mcp` 与 `/connectors` 的卡片布局、新增草稿、右侧抽屉、密钥不回显、动态字段、OAuth 授权和保存后再展示完成交互 smoke test
 
 ## Open questions
 

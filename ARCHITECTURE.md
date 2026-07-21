@@ -85,6 +85,7 @@ SilverBullet 提供浏览器内 Markdown 编辑、Wiki Link、双向链接和插
 - 为每个组件提供实时状态、工作台入口、内部管理入口和端点配置入口；
 - 通过独立卡片页面管理大模型渠道、Provider/Base URL、服务端 Key、模型别名和启停状态，并原子生成 Envoy AI Gateway 原生资源；
 - 默认将 Open Connector `/mcp` 以系统托管、只读配置接入 Envoy AI，并通过与模型配置并列的 MCP 配置页面管理其他 Streamable HTTP 上游、工具命名空间、允许/排除列表和可选密钥；
+- 通过连接器配置页面管理 OpenConnector 的连接生命周期；Connector 搜索、认证方式和动态字段读取真实 Provider Schema，凭证只经服务端 Admin API 写入且不回显，OAuth 授权成功后才创建卡片；
 - 通过单独修订文件触发网关进程重载，Key 以文件替换方式注入生成过程，不写入路由 YAML 或浏览器响应；
 - 服务端聚合全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、SilverBullet、Jaeger 与 Promptfoo 的真实运行摘要；
 - JSON 配置读取、字段白名单校验和原子写入；
@@ -94,7 +95,7 @@ SilverBullet 提供浏览器内 Markdown 编辑、Wiki Link、双向链接和插
 
 聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token、大模型渠道 Key 与 MCP 上游 Key 仅存在于服务端环境；SilverBullet Space 以只读目录挂载，默认只读取文件元数据；网关请求/响应、知识正文、外部凭证与 Jaeger Span 日志均不进入浏览器响应。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
 
-Portal 负责发现、导航和治理，专业组件负责深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
+Portal 负责发现、导航和常用配置治理，专业组件负责 Action 调试、运行策略等深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 
 默认 Compose 启动 AI Console、Caddy 全局网关、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、SilverBullet、PostgreSQL/pgvector、Jaeger 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium 使用环境变量连接外部 OIDC。只有全局网关映射 loopback 宿主机端口。
 

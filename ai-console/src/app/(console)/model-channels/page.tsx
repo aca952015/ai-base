@@ -18,7 +18,6 @@ export default async function ModelChannelsPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="大模型网关"
         title="大模型渠道"
         description="集中管理上游服务、服务端密钥和模型别名；Agent 只使用一个兼容 OpenAI 的访问入口。"
         actions={<StatusPill status={status} />}

@@ -16,7 +16,7 @@ export default async function EvaluationsPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="Promptfoo · Docker profile / CI" title="质量评测" description="只展示已经取得的 Promptfoo 运行状态和结果；没有结果时保持真实空状态。" actions={<QuickActions />} />
+      <PageHeader title="质量评测" description="只展示已经取得的 Promptfoo 运行状态和结果；没有结果时保持真实空状态。" actions={<QuickActions />} />
       <section className="metric-grid" aria-label="评测指标">
         <MetricCard label="运行状态" value={running ? "运行中" : "按需"} detail={evaluation.detail} trend="Promptfoo" icon={FlaskConical} />
         <MetricCard label="已接入结果" value={String(evaluation.resultCount)} detail="尚未配置结果导出" trend="真实计数" icon={Target} />

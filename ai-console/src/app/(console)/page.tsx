@@ -22,7 +22,6 @@ export default async function DashboardPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow={`真实组件数据 · ${formatDateTime(data.generatedAt)}`}
         title="控制台总览"
         description="直接汇总全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、SilverBullet、PostgreSQL 与 Jaeger 的实际数据。"
         actions={<QuickActions />}

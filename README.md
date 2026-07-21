@@ -32,7 +32,7 @@ docker compose down
 
 `docker compose down` 会保留命名卷。只有明确希望删除本地数据时才使用 `docker compose down -v`。
 
-AI Console 的 `/components` 是统一组件门户，提供组件状态、运行端点和管理入口；OpenConnector、SilverBullet 和 Jaeger 的深度操作仍在各自界面完成。
+AI Console 的 `/components` 是统一组件门户，提供组件状态、运行端点和管理入口。常用的 OpenConnector 连接生命周期直接在 Console 管理；Action 调试、运行令牌和策略等深度操作仍在 OpenConnector 自身界面完成。
 
 ### 外部 OIDC 单点登录
 
@@ -100,6 +100,19 @@ Agent 只需连接 `http://localhost:8080/mcp`，即可使用 Open Connector 的
 
 `/mcp` 是 Streamable HTTP 协议端点，不是管理页面。浏览器直接打开时，网关会返回端点说明；MCP 客户端发出的初始化、会话和工具请求仍会原样转发。管理页面位于 `https://ai-console.localhost.pomerium.io:8443/mcp`。
 
+### 连接器配置
+
+打开 [连接器配置页面](https://ai-console.localhost.pomerium.io:8443/connectors)，可以通过卡片和右侧抽屉管理 OpenConnector 连接：
+
+- 添加时搜索并选择 Connector，编辑时保持 Connector 类型不变；
+- API Key、OAuth、Custom Credential 和免认证等认证方式由上游 Provider 定义；
+- 表单字段、必填规则、输入类型和 OAuth Scope 直接读取 OpenConnector 的动态认证 Schema；
+- API Key 与 Client Secret 只提交到 Console 服务端，不在读取接口和编辑表单中回显；
+- OAuth 在独立窗口完成，Console 确认 OpenConnector 已生成连接后才展示新卡片；
+- OpenConnector 自带的免认证连接以只读系统卡片展示。
+
+新增或编辑只有在 OpenConnector 校验并保存成功后才会更新卡片列表。Action 调试、运行令牌和策略仍在 OpenConnector 专业管理界面完成。
+
 ## Console 数据接口
 
 - `GET /api/overview`：获取组件状态和运行摘要；本机排障时可使用 `?refresh=1` 跳过 10 秒缓存。
@@ -107,6 +120,9 @@ Agent 只需连接 `http://localhost:8080/mcp`，即可使用 Open Connector 的
 - `POST /api/llm-gateway/channels`：测试渠道连接并发现可用模型。
 - `GET/PUT /api/llm-gateway/mcp-servers`：读取或保存 Envoy AI MCP 服务配置。
 - `POST /api/llm-gateway/mcp-servers`：执行 MCP 初始化并读取真实工具列表。
+- `GET /api/open-connector/providers`、`GET /api/open-connector/providers/:service`：搜索 Connector 并读取动态认证 Schema。
+- `GET/PUT/DELETE /api/open-connector/connections`：读取安全摘要，并在服务端创建、更新或删除真实连接。
+- `GET/PUT /api/open-connector/oauth-configs/:service`、`POST /api/open-connector/oauth-authorizations`：管理 OAuth Client 配置并启动授权。
 
 OpenConnector Token、模型渠道 Key 与 MCP 上游 Key 保存在服务端，知识目录以只读方式挂载。
 

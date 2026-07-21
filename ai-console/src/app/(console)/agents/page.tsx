@@ -18,7 +18,7 @@ export default async function AgentsPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow={`${runtime.agents.length} 个 Runtime Agent`} title="Agent 管理" description="Agent 注册信息来自 Runtime，运行次数和最近活动来自 PostgreSQL 实际事件。" />
+      <PageHeader title="Agent 管理" description="Agent 注册信息来自 Runtime，运行次数和最近活动来自 PostgreSQL 实际事件。" />
       <section className="metric-grid" aria-label="Agent 状态摘要">
         <MetricCard label="已注册" value={formatNumber(readyAgents)} detail="Runtime 配置" trend="实时读取" icon={CircleCheck} tone="positive" />
         <MetricCard label="有运行记录" value={formatNumber(activeAgents)} detail="runtime_events" trend={`${runtime.eventCount} 条事件`} icon={Activity} />

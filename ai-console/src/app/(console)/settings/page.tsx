@@ -28,7 +28,7 @@ export default async function SettingsPage() {
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="本地控制面配置" title="系统设置" description="管理运行环境和服务端点；组件状态来自实际配置与 API，不回显任何密钥。" />
+      <PageHeader title="系统设置" description="管理运行环境和服务端点；组件状态来自实际配置与 API，不回显任何密钥。" />
       <div className="settings-notice" role="note"><ServerCog size={19} aria-hidden="true" /><div><strong>配置与生产发布分离</strong><p>此页面验证并保存 Console 本地配置。正式环境建议由 SOPS + age 管理敏感变量，再通过受控发布流程注入。</p></div></div>
       <SectionCard title="基础设置与服务端点" description="停用能力后，健康检查会标记为“尚未配置”，而不是误报服务故障。"><SettingsForm /></SectionCard>
       <div className="dashboard-grid dashboard-grid--equal">

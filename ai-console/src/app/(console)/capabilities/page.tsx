@@ -1,4 +1,4 @@
-import { ArrowRight, Blocks, BrainCircuit, ExternalLink, KeyRound, Network, NotebookTabs, ShieldCheck } from "lucide-react";
+import { ArrowRight, Blocks, BrainCircuit, KeyRound, Network, NotebookTabs, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/page-header";
@@ -18,13 +18,13 @@ export default async function CapabilitiesPage() {
   const capabilityCards = [
     { id: "models", title: "大模型网关", product: "Envoy AI Gateway", icon: BrainCircuit, status: statusOf("llm-gateway"), metric: `${data.modelGateway.channelCount} 个渠道 / ${data.modelGateway.modelCount} 个模型`, detail: "Console 管理上游渠道；网关只承担协议转换、模型路由和流式转发。", serviceId: "llm-gateway", managePath: "/model-channels" },
     { id: "tools", title: "内部工具", product: "Agent Runtime", icon: Blocks, status: statusOf("agent-runtime"), metric: `${registeredTools.length} 个唯一工具`, detail: `${data.runtime.agents.length} 个 Runtime Agent 的注册结果。`, serviceId: "agent-runtime" },
-    { id: "connections", title: "外部系统连接", product: "Open Connector", icon: Network, status: statusOf("open-connector"), metric: `${data.connector.connectionCount} 个连接 · ${data.connector.authenticatedAppCount} 个需认证`, detail: `${formatNumber(data.connector.providerCount)} 个可用 Provider。`, serviceId: "open-connector" },
+    { id: "connections", title: "外部系统连接", product: "Open Connector", icon: Network, status: statusOf("open-connector"), metric: `${data.connector.connectionCount} 个连接 · ${data.connector.authenticatedAppCount} 个需认证`, detail: `${formatNumber(data.connector.providerCount)} 个可用 Provider。`, serviceId: "open-connector", managePath: "/connectors" },
     { id: "knowledge", title: "知识能力", product: "SilverBullet + pgvector", icon: NotebookTabs, status: statusOf("silverbullet"), metric: `${data.knowledge.documentCount} 篇 Markdown · pgvector ${data.runtime.pgvector}`, detail: "Markdown 文件是真实知识源；尚未建立的切片不填充演示数量。", serviceId: "silverbullet" },
   ];
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="真实能力目录" title="能力管理" description="汇总 Envoy AI Gateway、Agent Runtime、OpenConnector 与 SilverBullet 的实际配置和数据。" />
+      <PageHeader title="能力管理" description="汇总 Envoy AI Gateway、Agent Runtime、OpenConnector 与 SilverBullet 的实际配置和数据。" />
       <section className="capability-grid" aria-label="能力目录">
         {capabilityCards.map((item) => {
           const Icon = item.icon;
@@ -35,7 +35,7 @@ export default async function CapabilitiesPage() {
         })}
       </section>
       <div className="dashboard-grid dashboard-grid--wide">
-        <SectionCard className="grid-span-2" title="OpenConnector 连接" description="列表来自 server-only Admin API；Token 不会发送到浏览器。" action={<a className="section-link" href="https://open-connector.localhost.pomerium.io:8443" target="_blank" rel="noreferrer">打开连接控制台 <ExternalLink size={14} /></a>}>
+        <SectionCard className="grid-span-2" title="OpenConnector 连接" description="列表来自 server-only Admin API；Token 不会发送到浏览器。" action={<Link className="section-link" href="/connectors">管理连接 <ArrowRight size={14} /></Link>}>
           {data.connector.connections.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Provider / 连接名</th><th>认证类型</th><th>配置状态</th><th>默认连接</th></tr></thead><tbody>{data.connector.connections.map((connection) => <tr key={connection.id}><td data-label="Provider / 连接名"><div className="service-identity"><strong>{connection.service}</strong><span className="cell-mono">{connection.connectionName}</span></div></td><td data-label="认证类型" className="cell-mono">{connection.authType}</td><td data-label="配置状态"><StatusPill status={connection.configured ? "healthy" : "unconfigured"} compact /></td><td data-label="默认连接">{connection.isDefault ? "是" : "否"}</td></tr>)}</tbody></table></div> : <div className="empty-data"><strong>暂无连接</strong><span>在 OpenConnector 中创建连接后会显示在这里。</span></div>}
         </SectionCard>
         <SectionCard title="Runtime 工具注册" description="工具名称直接来自 Agent Runtime `/v1/agents`。">

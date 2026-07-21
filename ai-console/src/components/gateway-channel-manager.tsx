@@ -15,8 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
-import { SectionCard } from "@/components/section-card";
+import { createPortal } from "react-dom";
 
 import {
   gatewayProviderOptions,
@@ -220,39 +219,47 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
     setMessage("");
   }
 
-  function removeChannel(id: string) {
-    setChannels((current) => current.filter((channel) => channel.id !== id));
-    if (editingId === id) closeEditor();
-    setState("idle");
-    setMessage("渠道已从草稿移除；保存后网关配置才会更新。 ");
-  }
-
-  async function saveChannels() {
+  async function persistChannels(nextChannels: EditableChannel[], closeEditorOnSuccess = false) {
     setState("saving");
     setMessage("正在验证渠道并生成 Envoy 配置…");
     try {
       const response = await fetch("/api/llm-gateway/channels", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          channels: (editingChannel
-            ? isCreatingChannel
-              ? [...channels, editingChannel]
-              : channels.map((channel) => channel.id === editingChannel.id ? editingChannel : channel)
-            : channels).map(toDraft),
-        }),
+        body: JSON.stringify({ channels: nextChannels.map(toDraft) }),
       });
       const payload = await response.json() as GatewayChannelsSnapshot & { message?: string; error?: string; details?: string[] };
       if (!response.ok) throw new Error(payload.details?.join("；") || payload.error || "保存渠道失败");
       setChannels(payload.channels.map(toEditable));
-      setEditingChannel(undefined);
-      setIsCreatingChannel(false);
+      if (closeEditorOnSuccess) {
+        setEditingChannel(undefined);
+        setIsCreatingChannel(false);
+      }
       setState("saved");
       setMessage(payload.message || "渠道已保存，网关正在自动重载。 ");
     } catch (error) {
       setState("error");
       setMessage(error instanceof Error ? error.message : "保存渠道失败");
     }
+  }
+
+  async function saveChannels() {
+    const nextChannels = editingChannel
+      ? isCreatingChannel
+        ? [...channels, editingChannel]
+        : channels.map((channel) => channel.id === editingChannel.id ? editingChannel : channel)
+      : channels;
+    await persistChannels(nextChannels, true);
+  }
+
+  async function setChannelEnabled(id: string, enabled: boolean) {
+    await persistChannels(channels.map((channel) => channel.id === id ? { ...channel, enabled } : channel));
+  }
+
+  async function removeChannel(id: string) {
+    const channel = channels.find((item) => item.id === id);
+    if (!channel || !window.confirm(`确认删除渠道“${channel.name}”？删除后将立即应用到 Envoy。`)) return;
+    await persistChannels(channels.filter((channel) => channel.id !== id));
   }
 
   async function requestChannelProbe(channel: EditableChannel) {
@@ -331,20 +338,24 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
         </article>
       </section>
 
-      <SectionCard
-        title="渠道管理"
-        action={(
-          <button className="button button--secondary" type="button" onClick={addChannel} disabled={state === "saving"}>
-            <Plus size={15} aria-hidden="true" />添加渠道
-          </button>
-        )}
-      >
-        <div className="gateway-channel-manager">
-          {message ? (
-            <p className={`gateway-channel-message${state === "error" ? " is-error" : ""}`} aria-live="polite">
-              {state === "saved" ? <CheckCircle2 size={15} aria-hidden="true" /> : null}{message}
-            </p>
-          ) : null}
+      <section className="portal-group gateway-resource-section" aria-labelledby="gateway-channel-management-title">
+        <header className="portal-group__header">
+          <div>
+            <h2 id="gateway-channel-management-title">渠道管理</h2>
+            <p>配置上游服务、发布模型和路由状态。</p>
+          </div>
+          <div className="gateway-resource-actions">
+            <button className="button button--secondary" type="button" onClick={addChannel} disabled={state === "saving"}>
+              <Plus size={15} aria-hidden="true" />添加渠道
+            </button>
+          </div>
+        </header>
+
+        {message ? (
+          <p className={`gateway-channel-message${state === "error" ? " is-error" : ""}`} aria-live="polite">
+            {state === "saved" ? <CheckCircle2 size={15} aria-hidden="true" /> : null}{message}
+          </p>
+        ) : null}
 
       <div className="gateway-channel-grid">
         {channels.map((channel) => {
@@ -376,7 +387,7 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
 
               <div className="gateway-channel-tile__actions">
                 <label className="switch-control">
-                  <input type="checkbox" checked={channel.enabled} onChange={(event) => updateChannel(channel.id, { enabled: event.target.checked })} />
+                  <input type="checkbox" checked={channel.enabled} onChange={(event) => void setChannelEnabled(channel.id, event.target.checked)} disabled={state === "saving"} />
                   <span aria-hidden="true" />
                   <span className="sr-only">启用{channel.name}</span>
                 </label>
@@ -385,7 +396,7 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
                   {testingId === channel.id ? "测试中" : "测试"}
                 </button>
                 <button className="button button--secondary" type="button" onClick={() => { setEditingChannel({ ...channel }); setIsCreatingChannel(false); }}><Pencil size={14} />编辑</button>
-                <button className="gateway-remove-button" type="button" onClick={() => removeChannel(channel.id)} aria-label={`移除${channel.name}`}><Trash2 size={15} /></button>
+                <button className="gateway-remove-button" type="button" onClick={() => void removeChannel(channel.id)} disabled={state === "saving"} aria-label={`移除${channel.name}`}><Trash2 size={15} /></button>
               </div>
             </article>
           );
@@ -398,7 +409,7 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
         </button>
       </div>
 
-      {editingChannel ? (
+      {editingChannel ? createPortal(
         <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeEditor(); }}>
           <aside className="gateway-channel-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="gateway-channel-editor-title">
             <div className="gateway-channel-editor__header">
@@ -453,16 +464,11 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
               </button>
             </div>
           </aside>
-        </div>
+        </div>,
+        document.body,
       ) : null}
 
-      <div className="settings-footer gateway-channel-savebar">
-        <button className="button button--primary" type="button" onClick={saveChannels} disabled={state === "saving"}>
-          <Save size={15} aria-hidden="true" />{state === "saving" ? "保存并应用中" : "保存并应用渠道"}
-        </button>
-      </div>
-        </div>
-      </SectionCard>
+      </section>
     </>
   );
 }

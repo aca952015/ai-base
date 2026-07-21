@@ -16,8 +16,8 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
-import { SectionCard } from "@/components/section-card";
 import type {
   GatewayMcpServer,
   GatewayMcpServerDraft,
@@ -195,14 +195,6 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
     setMessage("");
   }
 
-  function removeServer(id: string) {
-    if (servers.some((server) => server.id === id && server.managed)) return;
-    setServers((current) => current.filter((server) => server.id !== id));
-    if (editingId === id) closeEditor();
-    setState("idle");
-    setMessage("MCP 服务已从草稿移除；保存后 Envoy AI 配置才会更新。");
-  }
-
   function currentServers() {
     if (!editingServer) return servers;
     return isCreatingServer
@@ -210,26 +202,42 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
       : servers.map((server) => server.id === editingServer.id ? editingServer : server);
   }
 
-  async function saveServers() {
+  async function persistServers(nextServers: EditableMcpServer[], closeEditorOnSuccess = false) {
     setState("saving");
     setMessage("正在验证 MCP 服务并生成 Envoy AI 配置…");
     try {
       const response = await fetch("/api/llm-gateway/mcp-servers", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ servers: currentServers().filter((server) => !server.managed).map(toDraft) }),
+        body: JSON.stringify({ servers: nextServers.filter((server) => !server.managed).map(toDraft) }),
       });
       const payload = await response.json() as GatewayMcpServersSnapshot & { message?: string; error?: string; details?: string[] };
       if (!response.ok) throw new Error(payload.details?.join("；") || payload.error || "保存 MCP 配置失败");
       setServers(payload.servers.map(toEditable));
-      setEditingServer(undefined);
-      setIsCreatingServer(false);
+      if (closeEditorOnSuccess) {
+        setEditingServer(undefined);
+        setIsCreatingServer(false);
+      }
       setState("saved");
       setMessage(payload.message || "MCP 配置已保存，Envoy AI 正在自动重载。");
     } catch (error) {
       setState("error");
       setMessage(error instanceof Error ? error.message : "保存 MCP 配置失败");
     }
+  }
+
+  async function saveServers() {
+    await persistServers(currentServers(), true);
+  }
+
+  async function setServerEnabled(id: string, enabled: boolean) {
+    await persistServers(servers.map((server) => server.id === id ? { ...server, enabled } : server));
+  }
+
+  async function removeServer(id: string) {
+    const server = servers.find((item) => item.id === id);
+    if (!server || server.managed || !window.confirm(`确认删除 MCP 服务“${server.name}”？删除后将立即应用到 Envoy。`)) return;
+    await persistServers(servers.filter((server) => server.id !== id));
   }
 
   async function testServer(server: EditableMcpServer) {
@@ -309,20 +317,24 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
         </article>
       </section>
 
-      <SectionCard
-        title="MCP 服务管理"
-        action={(
-          <button className="button button--secondary" type="button" onClick={addServer} disabled={state === "saving"}>
-            <Plus size={15} aria-hidden="true" />添加 MCP 服务
-          </button>
-        )}
-      >
-        <div className="gateway-channel-manager">
-          {message ? (
-            <p className={`gateway-channel-message${state === "error" ? " is-error" : ""}`} aria-live="polite">
-              {state === "saved" ? <CheckCircle2 size={15} aria-hidden="true" /> : null}{message}
-            </p>
-          ) : null}
+      <section className="portal-group gateway-resource-section" aria-labelledby="gateway-mcp-management-title">
+        <header className="portal-group__header">
+          <div>
+            <h2 id="gateway-mcp-management-title">MCP 服务管理</h2>
+            <p>管理 MCP 服务、工具范围和聚合状态。</p>
+          </div>
+          <div className="gateway-resource-actions">
+            <button className="button button--secondary" type="button" onClick={addServer} disabled={state === "saving"}>
+              <Plus size={15} aria-hidden="true" />添加 MCP 服务
+            </button>
+          </div>
+        </header>
+
+        {message ? (
+          <p className={`gateway-channel-message${state === "error" ? " is-error" : ""}`} aria-live="polite">
+            {state === "saved" ? <CheckCircle2 size={15} aria-hidden="true" /> : null}{message}
+          </p>
+        ) : null}
 
           <div className="gateway-channel-grid">
             {servers.map((server) => {
@@ -359,7 +371,7 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
                   <div className="gateway-channel-tile__actions">
                     {server.managed ? <span className="gateway-managed-lock"><LockKeyhole size={13} />只读配置</span> : (
                       <label className="switch-control">
-                        <input type="checkbox" checked={server.enabled} onChange={(event) => updateServer(server.id, { enabled: event.target.checked })} />
+                        <input type="checkbox" checked={server.enabled} onChange={(event) => void setServerEnabled(server.id, event.target.checked)} disabled={state === "saving"} />
                         <span aria-hidden="true" />
                         <span className="sr-only">启用{server.name}</span>
                       </label>
@@ -373,7 +385,7 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
                       {testingId === server.id ? "测试中" : "测试"}
                     </button>
                     {!server.managed ? <button className="button button--secondary" type="button" onClick={() => { setEditingServer({ ...server }); setIsCreatingServer(false); }}><Pencil size={14} />编辑</button> : null}
-                    {!server.managed ? <button className="gateway-remove-button" type="button" onClick={() => removeServer(server.id)} aria-label={`移除${server.name}`}><Trash2 size={15} /></button> : null}
+                    {!server.managed ? <button className="gateway-remove-button" type="button" onClick={() => void removeServer(server.id)} disabled={state === "saving"} aria-label={`移除${server.name}`}><Trash2 size={15} /></button> : null}
                   </div>
                 </article>
               );
@@ -386,7 +398,7 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
             </button>
           </div>
 
-          {toolsServer ? (
+          {toolsServer ? createPortal(
             <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeTools(); }}>
               <aside className="gateway-channel-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="gateway-mcp-tools-title">
                 <div className="gateway-channel-editor__header">
@@ -430,10 +442,11 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
                   <button className="button button--primary" type="button" onClick={closeTools}>关闭</button>
                 </div>
               </aside>
-            </div>
+            </div>,
+            document.body,
           ) : null}
 
-          {editingServer ? (
+          {editingServer ? createPortal(
             <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeEditor(); }}>
               <aside className="gateway-channel-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="gateway-mcp-editor-title">
                 <div className="gateway-channel-editor__header">
@@ -471,16 +484,11 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
                   </button>
                 </div>
               </aside>
-            </div>
+            </div>,
+            document.body,
           ) : null}
 
-          <div className="settings-footer gateway-channel-savebar">
-            <button className="button button--primary" type="button" onClick={saveServers} disabled={state === "saving"}>
-              <Save size={15} aria-hidden="true" />{state === "saving" ? "保存并应用中" : "保存并应用 MCP 配置"}
-            </button>
-          </div>
-        </div>
-      </SectionCard>
+      </section>
     </>
   );
 }
