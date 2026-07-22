@@ -35,6 +35,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | --- | --- | --- | --- |
 | 控制台与组件 Portal | Next.js 16 + React 19 | 统一打开专业工作台、管理端点、查看状态、触发安全占位动作、汇总运行证据 | 不直接控制 Docker/Kubernetes，不复制专业组件界面 |
 | 全局网关 | Caddy 2.11 | 统一代理模型、MCP、RAG、Runtime、Connector、知识库、可观测与 SSO 管理入口 | 不承载业务逻辑、密钥管理或数据存储 |
+| 出口 DNS | AdGuard dnsproxy | 为 Envoy AI Gateway 与 Open Connector 提供分流解析；公网域名走 DoH，企业内网域名走本机 DNS | 不映射宿主机端口，不通过关闭 SSRF 校验兼容 Fake-IP |
 | Agent Runtime | FastAPI + `pydantic-ai-slim` | Agent 运行、结构化输出、身份上下文、业务策略 | 不保存外部 SaaS 密钥 |
 | 持久工作流 | DBOS | 审批、队列、定时和恢复 | 复用 PostgreSQL，不加消息队列 |
 | AI 网关 | Envoy AI Gateway standalone | OpenAI 兼容模型入口；MCP 服务聚合、工具路由与过滤 | 网关本身无 UI/数据库；Console 生成 `AIGatewayRoute` 与 `MCPRoute` 原生资源 |
@@ -57,6 +58,12 @@ Agent Runtime 通过 HTTP `/v1/actions/*` 调用 Open Connector。HTTP 路径支
 - Agent 日志、Prompt 和 Trace 不记录 OAuth access/refresh token。
 - 写操作由 Agent Runtime 做身份、审批、风险和审计判断，Open Connector 只负责凭证与调用。
 - 自托管运行时不应视为完整多租户 IAM；默认每个客户组织或高隔离域部署独立实例、数据卷和加密键。
+
+## 出口 DNS 与 SSRF
+
+宿主机代理启用 Fake-IP 时，Docker 默认 DNS 可能把公网域名解析到 `198.18.0.0/15` 或 ULA。Open Connector 会按 SSRF 策略拒绝这些保留地址，因此 Envoy AI Gateway 与 Open Connector 共用内部 `egress-dns`：公网查询通过 DNS-over-HTTPS 获取真实地址，`AI_BASE_INTERNAL_DNS_ZONE` 指定的企业内网域名则分流到 Docker 继承的本机 DNS，默认值为 `bluetron.cn`。
+
+`OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK` 保持为 `false`，不得用全局放开私网访问来规避 Fake-IP；新增企业内网域名时，应先确认调用方确实需要访问，再为 `egress-dns` 增加明确的域名分流规则。
 
 ## 全局能力网关边界
 

@@ -106,6 +106,8 @@ services:
       context: .
       dockerfile: deploy/llm-gateway/Dockerfile
     restart: unless-stopped
+    dns:
+      - 172.30.54.53
     expose:
       - "1975"
       - "1064"
@@ -120,6 +122,12 @@ services:
       LLM_GATEWAY_REVISION_PATH: /control/llm-gateway-revision
     volumes:
       - console-data:/control:ro
+    depends_on:
+      egress-dns:
+        condition: service_healthy
+    networks:
+      - default
+      - egress-dns
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:1064/health"]
       interval: 15s
@@ -149,9 +157,38 @@ services:
       retries: 10
       start_period: 10s
 
+  egress-dns:
+    image: adguard/dnsproxy:v0.83.0
+    restart: unless-stopped
+    command:
+      - --listen=0.0.0.0
+      - --port=53
+      - --upstream=https://1.1.1.1/dns-query
+      - --upstream=[/${AI_BASE_INTERNAL_DNS_ZONE:-bluetron.cn}/]127.0.0.11:53
+      - --fallback=https://1.0.0.1/dns-query
+      - --cache
+      - --cache-size=4194304
+      - --pending-requests-enabled
+      - --refuse-any
+      - --timeout=10s
+    expose:
+      - "53/udp"
+      - "53/tcp"
+    networks:
+      egress-dns:
+        ipv4_address: 172.30.54.53
+    healthcheck:
+      test: ["CMD", "nslookup", "linux.do", "127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   open-connector:
     image: ghcr.io/oomol-lab/open-connector:v1.2.0
     restart: unless-stopped
+    dns:
+      - 172.30.54.53
     expose:
       - "3000"
     environment:
@@ -164,6 +201,12 @@ services:
       OOMOL_CONNECT_ALLOW_PRIVATE_NETWORK: "false"
     volumes:
       - open-connector-data:/app/data
+    depends_on:
+      egress-dns:
+        condition: service_healthy
+    networks:
+      - default
+      - egress-dns
 
   open-connector-admin-proxy:
     image: caddy:2.11.4-alpine
@@ -252,3 +295,9 @@ volumes:
 networks:
   default:
     name: ai-base
+  egress-dns:
+    name: ai-base-egress-dns
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.54.0/24
