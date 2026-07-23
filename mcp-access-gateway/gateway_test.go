@@ -39,6 +39,7 @@ func testConfig(t *testing.T, upstream string) config {
 		requiredScopes:  []string{"ai-base:mcp"},
 		signingKey:      []byte("test-session-signing-key-at-least-32-bytes"),
 		sessionLifetime: time.Hour,
+		adminToken:      "test-mcp-admin-token",
 	}
 }
 
@@ -95,7 +96,13 @@ func TestProxyStripsTokenAndBindsSession(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	alice := identity{issuer: "https://id.example", subject: "alice", clientID: "workbuddy"}
+	alice := identity{
+		issuer:      "https://id.example",
+		subject:     "alice",
+		clientID:    "workbuddy",
+		displayName: "Alice",
+		email:       "alice@example.com",
+	}
 	bob := identity{issuer: "https://id.example", subject: "bob", clientID: "workbuddy"}
 	cfg := testConfig(t, upstream.URL+"/mcp")
 	gateway := newMCPGateway(cfg, fakeVerifier{identities: map[string]identity{
@@ -149,5 +156,53 @@ func TestProxyStripsTokenAndBindsSession(t *testing.T) {
 	}
 	if body["error"] != "invalid_mcp_session" {
 		t.Fatalf("unexpected error response: %#v", body)
+	}
+
+	request, _ = http.NewRequest(
+		http.MethodGet,
+		server.URL+"/internal/v1/authentication/mcp-clients",
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer "+cfg.adminToken)
+	response, err = http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected authenticated client list, got %d", response.StatusCode)
+	}
+	var clients authenticatedClientsSnapshot
+	if err := json.NewDecoder(response.Body).Decode(&clients); err != nil {
+		t.Fatal(err)
+	}
+	if len(clients.Clients) != 1 {
+		t.Fatalf("expected one accepted authenticated identity, got %#v", clients.Clients)
+	}
+	client := clients.Clients[0]
+	if client.DisplayName != "Alice" || client.Email != "alice@example.com" {
+		t.Fatalf("expected employee claims, got %#v", client)
+	}
+	if client.RequestCount != 2 || !client.Active {
+		t.Fatalf("expected two accepted requests and active status, got %#v", client)
+	}
+	if client.SubjectFingerprint == "alice" || client.SubjectFingerprint == "" {
+		t.Fatalf("raw subject must not be exposed: %#v", client)
+	}
+}
+
+func TestAuthenticatedClientListRequiresAdminToken(t *testing.T) {
+	cfg := testConfig(t, "http://127.0.0.1:1/mcp")
+	gateway := newMCPGateway(cfg, fakeVerifier{})
+	server := httptest.NewServer(gateway.routes())
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/internal/v1/authentication/mcp-clients")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without administration token, got %d", response.StatusCode)
 	}
 }

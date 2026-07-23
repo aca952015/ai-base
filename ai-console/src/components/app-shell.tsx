@@ -10,8 +10,10 @@ import {
   FlaskConical,
   Gauge,
   LayoutGrid,
+  Link2,
   PlugZap,
   Settings,
+  ShieldCheck,
   Sparkles,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -33,11 +35,13 @@ const navigation: NavigationItem[] = [
   { href: "/data", label: "数据", icon: Database },
   { href: "/evaluations", label: "评测", icon: FlaskConical },
   { href: "/observability", label: "可观测", icon: Activity },
+  { href: "/authentication", label: "认证", icon: ShieldCheck },
 ];
 
 const settingsNavigation: NavigationItem[] = [
   { href: "/model-channels", label: "模型配置", icon: BrainCircuit },
   { href: "/mcp", label: "MCP配置", icon: Blocks },
+  { href: "/integrations", label: "集成管理", icon: Link2 },
   { href: "/connectors", label: "连接器配置", icon: PlugZap },
   { href: "/settings", label: "系统设置", icon: Settings },
 ];

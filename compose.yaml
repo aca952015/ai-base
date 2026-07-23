@@ -10,8 +10,11 @@ services:
       - "3000"
     environment:
       AI_CONSOLE_DATA_DIR: /data
+      DATABASE_URL: postgresql://ai_base:${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}@postgres:5432/ai_base
+      AI_CONSOLE_SECRET_ENCRYPTION_KEY: ${AI_CONSOLE_SECRET_ENCRYPTION_KEY:-local-ai-console-secret-encryption-key-change-me}
       GLOBAL_GATEWAY_URL: http://global-gateway:8080
       MCP_ACCESS_GATEWAY_URL: http://mcp-access-gateway:8081
+      MCP_ADMIN_TOKEN: ${MCP_ADMIN_TOKEN:-local-mcp-admin-token-change-me}
       MCP_PUBLIC_RESOURCE_URL: ${MCP_PUBLIC_RESOURCE_URL:-http://127.0.0.1:8080/mcp}
       AGENT_RUNTIME_URL: http://global-gateway:8080/runtime
       LLM_GATEWAY_URL: http://global-gateway:8080
@@ -38,6 +41,8 @@ services:
         condition: service_healthy
       open-connector:
         condition: service_started
+      postgres:
+        condition: service_healthy
       silverbullet:
         condition: service_started
       jaeger:
@@ -160,6 +165,7 @@ services:
       MCP_OAUTH_ALLOWED_REDIRECT_URIS: ${MCP_OAUTH_ALLOWED_REDIRECT_URIS:-workbuddy://workbuddy/mcp/custom-mcp%3Aai-base/oauth/callback}
       MCP_SESSION_SIGNING_KEY: ${MCP_SESSION_SIGNING_KEY:-local-mcp-session-signing-key-change-me}
       MCP_SESSION_LIFETIME: ${MCP_SESSION_LIFETIME:-8h}
+      MCP_ADMIN_TOKEN: ${MCP_ADMIN_TOKEN:-local-mcp-admin-token-change-me}
     volumes:
       - mcp-auth-data:/data
     depends_on:

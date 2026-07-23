@@ -128,6 +128,21 @@ export type TraceSnapshot = {
   status: "healthy" | "degraded";
 };
 
+export type MCPAuthenticatedClientSnapshot = {
+  id: string;
+  clientId: string;
+  subjectFingerprint: string;
+  displayName?: string;
+  email?: string;
+  issuer: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  requestCount: number;
+  lastMethod: string;
+  lastPath: string;
+  active: boolean;
+};
+
 export type ComponentDataSnapshot = {
   generatedAt: string;
   services: ServiceSnapshot[];
@@ -165,6 +180,15 @@ export type ComponentDataSnapshot = {
     spanCount: number;
     errorTraceCount: number;
     traces: TraceSnapshot[];
+  };
+  authentication: {
+    identityCount: number;
+    activeIdentityCount: number;
+    oauthClientCount: number;
+    requestCount: number;
+    retentionSeconds: number;
+    activeWindowSeconds: number;
+    clients: MCPAuthenticatedClientSnapshot[];
   };
   evaluation: {
     status: "running" | "idle";

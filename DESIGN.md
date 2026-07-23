@@ -4,7 +4,7 @@
 
 - Status: Active
 - Last refreshed: 2026-07-21
-- Primary product surfaces: AI 基础设施总览、组件门户、Agent 管理、模型配置、MCP配置、连接器配置、能力管理、数据与知识、评测、可观测、系统设置
+- Primary product surfaces: AI 基础设施总览、组件门户、Agent 管理、模型配置、MCP配置、集成管理、连接器配置、能力管理、数据与知识、评测、可观测、认证管理、系统设置
 - Evidence reviewed: `/Users/aca/dev/ai-fde/.omx/plans/sme-agent-infrastructure-v0.1.md`、`ai-console/src/app/(console)`、`ai-console/src/components`、`ai-console/src/lib/server/component-data.ts`、Envoy AI Gateway 1.0 standalone 配置契约、用户确认的 Next.js 技术栈与工具链边界
 
 ## Brand
@@ -27,8 +27,8 @@
 
 ## Information architecture
 
-- Primary navigation: “工作台”组包含总览、组件门户、Agent、能力、数据、评测、可观测；与其同级的“设置”组包含模型配置、MCP配置、连接器配置和系统设置
-- Core routes/screens: `/`、`/components`、`/agents`、`/capabilities`、`/data`、`/evaluations`、`/observability`、`/model-channels`、`/mcp`、`/connectors`、`/settings`
+- Primary navigation: “工作台”组包含总览、组件门户、Agent、能力、数据、评测、可观测、认证；与其同级的“设置”组包含模型配置、MCP配置、集成管理、连接器配置和系统设置
+- Core routes/screens: `/`、`/components`、`/agents`、`/capabilities`、`/data`、`/evaluations`、`/observability`、`/authentication`、`/model-channels`、`/mcp`、`/integrations`、`/connectors`、`/settings`
 - Content hierarchy: 待处理事项 > 常用组件入口 > 核心运行指标 > Agent 运行矩阵 > 依赖与服务状态 > 近期变化 > 快捷操作
 
 ## Design principles
@@ -52,7 +52,7 @@
 ## Components
 
 - Existing components to reuse: AppShell、PageHeader、SectionCard、StatusPill、ServiceTable、Button 和全局语义 token
-- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager、ConnectorManager；ComponentPortal 的资源卡片是全局唯一卡片视觉基准，分组容器、摘要/指标、资源列表、可操作设置和抽屉内工具卡片统一复用其石墨渐变卡面、细冷灰边框、14px 圆角、轻微内高光与克制阴影 token，仅按信息密度调整尺寸和内边距；模型、MCP 和连接器管理区沿用组件门户的“分组标题 + 直接卡片网格”结构，不再用 SectionCard 包裹整个资源列表；侧栏使用系统蓝整行选中态和彩色图标底座，不添加无操作意义的窗口控制装饰；资源状态使用小型状态圆点和文字；ComponentPortal 将 Caddy 全局能力网关作为功能入口组件展示，但不将其误作 UI 网关；AppShell 使用“工作台/设置”分组导航和无顶部栏的全局内容布局，所有控制台路由均从窗口内容区顶部开始，不为产品名、搜索或环境状态预留空白横条；所有模块的 PageHeader 直接以页面标题为第一层可见内容，不显示产品名、数据时间或技术栈 eyebrow 小标签；模型、MCP 和连接器配置分别使用独立页面、实时摘要卡片、卡片管理区和占满视口高度的右侧编辑抽屉，抽屉头部和底部固定、中间内容独立滚动；连接器抽屉先选择 Open Connector Provider，再从其 `auth` Schema 选择认证类型并动态生成凭据或 OAuth 表单；Provider 在编辑时固定，认证类型可切换；Open Connector MCP 使用带“系统内置”标识的只读卡片；总览和管理页面读取真实数据快照；空状态明确标注未配置项
+- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager、IntegrationManager、ConnectorManager；ComponentPortal 的资源卡片是全局唯一卡片视觉基准，分组容器、摘要/指标、资源列表、可操作设置和抽屉内工具卡片统一复用其石墨渐变卡面、细冷灰边框、14px 圆角、轻微内高光与克制阴影 token，仅按信息密度调整尺寸和内边距；模型、MCP、集成和连接器管理区沿用组件门户的“分组标题 + 直接卡片网格”结构，不再用 SectionCard 包裹整个资源列表；集成管理固定显示飞书、企微、钉钉三个分组，分组标题使用与应用卡片一致的平台彩色图标底座增强识别，每组直接添加多个企业应用；应用配置包含应用名称、App ID、App Secret 和可选备注，紧凑资源卡片展示应用名称、App ID、最多两行备注，并在底部弱化显示密钥状态和更新时间；点击卡片进入编辑，不展示存储实现或重复操作控件；侧栏使用系统蓝整行选中态和彩色图标底座，不添加无操作意义的窗口控制装饰；资源状态使用小型状态圆点和文字；ComponentPortal 将 Caddy 全局能力网关作为功能入口组件展示，但不将其误作 UI 网关；AppShell 使用“工作台/设置”分组导航和无顶部栏的全局内容布局，所有控制台路由均从窗口内容区顶部开始，不为产品名、搜索或环境状态预留空白横条；所有模块的 PageHeader 直接以页面标题为第一层可见内容，不显示产品名、数据时间或技术栈 eyebrow 小标签；模型、MCP、集成和连接器配置分别使用独立页面、卡片管理区和占满视口高度的右侧编辑抽屉，抽屉头部和底部固定、中间内容独立滚动；连接器抽屉先选择 Open Connector Provider，再从其 `auth` Schema 选择认证类型并动态生成凭据或 OAuth 表单；Provider 在编辑时固定，认证类型可切换；Open Connector MCP 使用带“系统内置”标识的只读卡片；总览和管理页面读取真实数据快照；空状态明确标注未配置项
 - Variants and states: default/hover/focus/disabled；healthy/degraded/offline/unconfigured/running
 - Token/component ownership: 全局 CSS 自定义属性定义基础 token；组件使用语义 class，不增加独立设计系统依赖
 
@@ -91,7 +91,7 @@
 - Design-token constraints: token 集中在 `globals.css`；卡片必须使用 `--card-*` 语义 token，不在页面组件中复制阴影、边框或圆角值；不引入 Tailwind 或重量级 UI 套件
 - Performance constraints: 首屏不加载大型图表库；默认 Server Component，仅交互区域使用 Client Component
 - Compatibility constraints: Node.js 22；现代 Chrome、Edge、Firefox、Safari；Envoy AI Gateway 模型与 MCP 配置使用 v1beta1 原生资源并通过只读共享卷注入
-- Test/screenshot expectations: ESLint、TypeScript、Vitest、Next production build；桌面浏览器为主验证；`/model-channels`、`/mcp` 与 `/connectors` 的卡片布局、新增草稿、右侧抽屉、密钥不回显、动态字段、OAuth 授权和保存后再展示完成交互 smoke test
+- Test/screenshot expectations: ESLint、TypeScript、Vitest、Next production build；桌面浏览器为主验证；`/model-channels`、`/mcp`、`/integrations` 与 `/connectors` 的卡片布局、新增草稿、右侧抽屉、密钥不回显、动态字段、OAuth 授权和保存后再展示完成交互 smoke test
 
 ## Open questions
 

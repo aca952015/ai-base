@@ -67,6 +67,7 @@ MCP_LOGIN_OIDC_CLIENT_ID=ai-base-mcp-broker
 MCP_LOGIN_OIDC_REDIRECT_URL=http://127.0.0.1:8080/oauth/callback
 MCP_OAUTH_ALLOWED_REDIRECT_URIS=workbuddy://workbuddy/mcp/custom-mcp%3Aai-base/oauth/callback
 MCP_SESSION_SIGNING_KEY=replace-with-at-least-32-random-bytes
+MCP_ADMIN_TOKEN=replace-with-a-random-admin-token
 ```
 
 WorkBuddy 只需配置 MCP URL：
@@ -139,6 +140,16 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 
 `/mcp` 是受 OIDC 保护的 Streamable HTTP 协议端点，不是管理页面。未认证请求返回 `401` 和标准 `WWW-Authenticate` 发现信息。网关把外部 MCP Session 签名并绑定到 `issuer + subject + client_id`，不同员工不能复用彼此会话。管理页面位于 `https://ai-console.localhost.pomerium.io:8443/mcp`。
 
+### 认证管理
+
+打开 [认证管理页面](https://ai-console.localhost.pomerium.io:8443/authentication)，可以查看最近 24 小时内通过 MCP Access Gateway 完成员工身份校验的客户端：
+
+- 员工名称与邮箱、不可逆的 Subject 摘要；
+- OAuth `client_id`、Issuer、首次与最近访问时间；
+- 已认证请求次数和最近 15 分钟活跃状态。
+
+该页面为只读运行视图，不记录或展示 Access Token、Refresh Token 与原始 Subject。Console 使用 `MCP_ADMIN_TOKEN` 读取仅 Compose 内网可访问的管理端点；全局网关不代理该端点。
+
 ### 连接器配置
 
 打开 [连接器配置页面](https://ai-console.localhost.pomerium.io:8443/connectors)，可以通过卡片和右侧抽屉管理 OpenConnector 连接：
@@ -152,6 +163,12 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 
 新增或编辑只有在 OpenConnector 校验并保存成功后才会更新卡片列表。Action 调试、运行令牌和策略仍在 OpenConnector 专业管理界面完成。
 
+### 集成管理
+
+[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 固定提供飞书、企微和钉钉三个分组。每个分组可以登记多个企业应用，当前只管理 `App ID` 与 `App Secret`，不发起 OAuth、不创建 OpenConnector 连接，也不绑定员工身份。
+
+应用配置独立保存在 PostgreSQL 的 `integration_applications` 表中。`App Secret` 使用 `AI_CONSOLE_SECRET_ENCRYPTION_KEY` 在服务端执行 AES-256-GCM 加密，读取接口和编辑表单均不回显明文。
+
 ## Console 数据接口
 
 - `GET /api/overview`：获取组件状态和运行摘要；本机排障时可使用 `?refresh=1` 跳过 10 秒缓存。
@@ -162,8 +179,9 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `GET /api/open-connector/providers`、`GET /api/open-connector/providers/:service`：搜索 Connector 并读取动态认证 Schema。
 - `GET/PUT/DELETE /api/open-connector/connections`：读取安全摘要，并在服务端创建、更新或删除真实连接。
 - `GET/PUT /api/open-connector/oauth-configs/:service`、`POST /api/open-connector/oauth-authorizations`：管理 OAuth Client 配置并启动授权。
+- `GET/POST /api/integrations`、`PUT/DELETE /api/integrations/:id`：读取并管理飞书、企微和钉钉应用凭据。
 
-OpenConnector Token、模型渠道 Key 与 MCP 上游 Key 保存在服务端，知识目录以只读方式挂载。
+OpenConnector Token、模型渠道 Key、MCP 上游 Key 与企业应用 Secret 保存在服务端，知识目录以只读方式挂载。
 
 ## 可选运行面
 
@@ -177,7 +195,7 @@ docker compose --profile quality up -d promptfoo
 
 ## 本机验证与生产边界
 
-Compose 内置的数据库密码、OpenConnector token、Pomerium Client Secret 和加密键只用于 loopback 本机验证。共享主机或正式环境必须从 [`.env.example`](./.env.example) 创建 `.env` 并替换全部值；OpenConnector 的加密键必须稳定备份，丢失后无法恢复已经加密的连接凭证。
+Compose 内置的数据库密码、OpenConnector token、Pomerium Client Secret 和加密键只用于 loopback 本机验证。共享主机或正式环境必须从 [`.env.example`](./.env.example) 创建 `.env` 并替换全部值；OpenConnector 与 AI Console 的加密键都必须稳定备份，丢失后无法恢复已经加密的凭据。
 
 - OpenConnector 默认禁止通用 provider proxy，避免 Agent 绕过审阅过的 Action。
 - Promptfoo 和 Jaeger UI 没有内建企业认证；正式环境应放在 Pomerium 或等价身份边界后。

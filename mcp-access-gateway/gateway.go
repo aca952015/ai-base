@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -26,6 +27,7 @@ type mcpGateway struct {
 	cfg      config
 	verifier tokenVerifier
 	sessions *sessionSigner
+	clients  *authenticatedClientRegistry
 	proxy    *httputil.ReverseProxy
 }
 
@@ -34,6 +36,7 @@ func newMCPGateway(cfg config, verifier tokenVerifier) *mcpGateway {
 		cfg:      cfg,
 		verifier: verifier,
 		sessions: newSessionSigner(cfg.signingKey, cfg.sessionLifetime),
+		clients:  newAuthenticatedClientRegistry(),
 	}
 	gateway.proxy = gateway.newReverseProxy(cfg.upstreamURL)
 	return gateway
@@ -50,6 +53,7 @@ func (g *mcpGateway) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ready", g.ready)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource", g.protectedResourceMetadata)
 	mux.HandleFunc("GET /.well-known/oauth-protected-resource/mcp", g.protectedResourceMetadata)
+	mux.HandleFunc("GET /internal/v1/authentication/mcp-clients", g.authenticatedClients)
 	mux.Handle("/mcp", g.authenticate(http.HandlerFunc(g.proxyMCP)))
 	mux.Handle("/mcp/", g.authenticate(http.HandlerFunc(g.proxyMCP)))
 }
@@ -77,6 +81,19 @@ func (g *mcpGateway) protectedResourceMetadata(w http.ResponseWriter, _ *http.Re
 		"scopes_supported":         g.cfg.requiredScopes,
 		"resource_name":            "AI Base MCP",
 	})
+}
+
+func (g *mcpGateway) authenticatedClients(w http.ResponseWriter, r *http.Request) {
+	token, err := bearerToken(r.Header.Get("Authorization"))
+	if err != nil ||
+		subtle.ConstantTimeCompare([]byte(token), []byte(g.cfg.adminToken)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error":             "unauthorized",
+			"error_description": "A valid MCP administration token is required",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, g.clients.snapshot())
 }
 
 func (g *mcpGateway) authenticate(next http.Handler) http.Handler {
@@ -120,6 +137,7 @@ func (g *mcpGateway) authenticate(next http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, externalSessionContextKey, externalSession)
 		}
 
+		g.clients.record(caller, r)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -6,6 +6,7 @@ import type {
   ConnectorConnectionSnapshot,
   ConsoleConfig,
   KnowledgeDocumentSnapshot,
+  MCPAuthenticatedClientSnapshot,
   RuntimeAgentSnapshot,
   RuntimeEventSnapshot,
   TraceSnapshot,
@@ -203,6 +204,28 @@ async function collectTracing() {
   };
 }
 
+async function collectAuthentication(): Promise<ComponentDataSnapshot["authentication"]> {
+  const base = process.env.MCP_ACCESS_GATEWAY_URL || "http://mcp-access-gateway:8081";
+  const response = await fetchJson<{
+    retentionSeconds?: number;
+    activeWindowSeconds?: number;
+    clients?: MCPAuthenticatedClientSnapshot[];
+  }>(`${base}/internal/v1/authentication/mcp-clients`, {
+    headers: bearer(process.env.MCP_ADMIN_TOKEN),
+  });
+  const clients = response.clients || [];
+
+  return {
+    identityCount: clients.length,
+    activeIdentityCount: clients.filter((client) => client.active).length,
+    oauthClientCount: new Set(clients.map((client) => client.clientId)).size,
+    requestCount: clients.reduce((sum, client) => sum + client.requestCount, 0),
+    retentionSeconds: response.retentionSeconds || 0,
+    activeWindowSeconds: response.activeWindowSeconds || 0,
+    clients,
+  };
+}
+
 async function collectEvaluation() {
   const base = process.env.PROMPTFOO_URL || "http://promptfoo.localhost:8080";
   try {
@@ -229,13 +252,22 @@ export async function getComponentData(
     }
   }
 
-  const [services, runtime, modelGateway, connector, knowledge, tracing, evaluation] = await Promise.all([
+  const [services, runtime, modelGateway, connector, knowledge, tracing, authentication, evaluation] = await Promise.all([
     checkServices(config),
     safe("runtime", collectRuntime, { database: "unknown", pgvector: "missing", databaseSizeBytes: 0, eventCount: 0, eventTypes: {}, agents: [], recentEvents: [] }),
     safe("llmGateway", collectLlmGateway, { channelCount: 0, modelCount: 0, models: [] }),
     safe("openConnector", collectConnector, { providerCount: 0, appCount: 0, authenticatedAppCount: 0, connectionCount: 0, recentRunCount: 0, connections: [] }),
     safe("knowledge", collectKnowledge, { documentCount: 0, totalBytes: 0, latestModifiedAt: undefined, documents: [] }),
     safe("jaeger", collectTracing, { serviceCount: 0, recentTraceCount: 0, spanCount: 0, errorTraceCount: 0, traces: [] }),
+    safe("mcpAuthentication", collectAuthentication, {
+      identityCount: 0,
+      activeIdentityCount: 0,
+      oauthClientCount: 0,
+      requestCount: 0,
+      retentionSeconds: 0,
+      activeWindowSeconds: 0,
+      clients: [],
+    }),
     collectEvaluation(),
   ]);
   const value: ComponentDataSnapshot = {
@@ -246,6 +278,7 @@ export async function getComponentData(
     connector,
     knowledge,
     tracing,
+    authentication,
     evaluation,
     errors,
   };

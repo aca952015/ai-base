@@ -19,9 +19,11 @@ var (
 )
 
 type identity struct {
-	issuer   string
-	subject  string
-	clientID string
+	issuer      string
+	subject     string
+	clientID    string
+	displayName string
+	email       string
 }
 
 type tokenVerifier interface {
@@ -63,6 +65,8 @@ func (v *oidcTokenVerifier) verify(ctx context.Context, rawToken string) (identi
 	var claims struct {
 		AuthorizedParty string      `json:"azp"`
 		ClientID        string      `json:"client_id"`
+		Email           string      `json:"email"`
+		Name            string      `json:"name"`
 		Scope           interface{} `json:"scope"`
 		Scopes          interface{} `json:"scp"`
 	}
@@ -86,9 +90,11 @@ func (v *oidcTokenVerifier) verify(ctx context.Context, rawToken string) (identi
 	}
 
 	return identity{
-		issuer:   token.Issuer,
-		subject:  token.Subject,
-		clientID: clientID,
+		issuer:      token.Issuer,
+		subject:     token.Subject,
+		clientID:    clientID,
+		displayName: claims.Name,
+		email:       claims.Email,
 	}, nil
 }
 

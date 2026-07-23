@@ -70,6 +70,7 @@ Envoy AI Gateway 是内部外部 MCP 注册中心。Console 管理 `MCPRoute`、
 
 - OAuth Broker 面向 WorkBuddy 提供 RFC 8414 发现、动态客户端注册、Authorization Code + S256 PKCE、Token 与 JWKS；
 - Broker 通过独立 OIDC Client 将员工登录委托给 Dex/企业 IdP，并校验 state、nonce 与上游 PKCE；
+- 网关在内存中保留最近 24 小时的成功鉴权客户端摘要，按员工 Subject、Issuer 与 OAuth Client 绑定聚合；Console 通过独立管理令牌读取，外部能力网关不暴露该管理端点；
 - 每个 MCP 请求都验证 Broker JWT Access Token 的 issuer、audience、有效期和必需 scope；
 - 发布 RFC 9728 Protected Resource Metadata，并在 `401` 响应中返回 `WWW-Authenticate` 发现地址；
 - 员工 Access Token 在进入 Envoy 前移除，禁止 Token passthrough；
@@ -113,6 +114,7 @@ SilverBullet 提供浏览器内 Markdown 编辑、Wiki Link、双向链接和插
 - 通过独立卡片页面管理大模型渠道、Provider/Base URL、服务端 Key、模型别名和启停状态，并原子生成 Envoy AI Gateway 原生资源；
 - 默认将 Open Connector `/mcp` 以系统托管、只读配置接入 Envoy AI，并通过与模型配置并列的 MCP 配置页面管理其他 Streamable HTTP 上游、工具命名空间、允许/排除列表和可选密钥；
 - 通过连接器配置页面管理 OpenConnector 的连接生命周期；Connector 搜索、认证方式和动态字段读取真实 Provider Schema，凭证只经服务端 Admin API 写入且不回显，OAuth 授权成功后才创建卡片；
+- 通过独立集成管理页面维护飞书、企微和钉钉的多个企业应用；本阶段只保存 App ID 与经 AES-256-GCM 加密的 App Secret，数据落 PostgreSQL，不触发 OAuth、OpenConnector 连接或员工身份绑定；
 - 通过单独修订文件触发网关进程重载，Key 以文件替换方式注入生成过程，不写入路由 YAML 或浏览器响应；
 - 服务端聚合全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、SilverBullet、Jaeger 与 Promptfoo 的真实运行摘要；
 - JSON 配置读取、字段白名单校验和原子写入；
@@ -120,7 +122,7 @@ SilverBullet 提供浏览器内 Markdown 编辑、Wiki Link、双向链接和插
 - 知识同步、评测等动作采用安全占位实现，不执行外部命令；
 - 未接入或无结果的能力显示“未配置”或真实空状态，不以演示数据补齐。
 
-聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token、大模型渠道 Key 与 MCP 上游 Key 仅存在于服务端环境；SilverBullet Space 以只读目录挂载，默认只读取文件元数据；网关请求/响应、知识正文、外部凭证与 Jaeger Span 日志均不进入浏览器响应。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
+聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token、大模型渠道 Key、MCP 上游 Key 与企业应用 Secret 仅存在于服务端环境；集成管理 API 只返回应用 ID、平台、App ID 和时间戳。SilverBullet Space 以只读目录挂载，默认只读取文件元数据；网关请求/响应、知识正文、外部凭证与 Jaeger Span 日志均不进入浏览器响应。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
 
 Portal 负责发现、导航和常用配置治理，专业组件负责 Action 调试、运行策略等深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 

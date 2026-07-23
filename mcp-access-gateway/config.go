@@ -19,6 +19,7 @@ type config struct {
 	requiredScopes            []string
 	signingKey                []byte
 	sessionLifetime           time.Duration
+	adminToken                string
 	loginIssuer               string
 	loginClientID             string
 	loginRedirectURL          string
@@ -67,6 +68,14 @@ func loadConfig() (config, error) {
 		return config{}, errors.New("MCP_SESSION_LIFETIME must be a positive Go duration")
 	}
 
+	adminToken := strings.TrimSpace(envOrDefault(
+		"MCP_ADMIN_TOKEN",
+		"local-mcp-admin-token-change-me",
+	))
+	if adminToken == "" {
+		return config{}, errors.New("MCP_ADMIN_TOKEN must not be empty")
+	}
+
 	loginIssuer := strings.TrimRight(envOrDefault("MCP_LOGIN_OIDC_ISSUER", "http://dex.localtest.me:5556/dex"), "/")
 	if err := validateIssuerURL("MCP_LOGIN_OIDC_ISSUER", loginIssuer); err != nil {
 		return config{}, err
@@ -110,6 +119,7 @@ func loadConfig() (config, error) {
 		requiredScopes:            splitFields(envOrDefault("MCP_OIDC_REQUIRED_SCOPES", "ai-base:mcp")),
 		signingKey:                signingKey,
 		sessionLifetime:           sessionLifetime,
+		adminToken:                adminToken,
 		loginIssuer:               loginIssuer,
 		loginClientID:             loginClientID,
 		loginRedirectURL:          loginRedirectURL,
