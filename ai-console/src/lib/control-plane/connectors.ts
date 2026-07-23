@@ -43,8 +43,26 @@ export type ConnectorProviderSummary = {
   actionCount: number;
 };
 
+export type ConnectorActionDefinition = {
+  id: string;
+  name: string;
+  description?: string;
+  requiredScopes: string[];
+  providerPermissions: string[];
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  execution?: {
+    locallyExecutable: boolean;
+    catalogOnly: boolean;
+    requiredAuthTypes: ConnectorAuthType[];
+    noAuthRunnable: boolean;
+    needsCredential: boolean;
+  };
+};
+
 export type ConnectorProviderDetail = ConnectorProviderSummary & {
   auth: ConnectorAuthDefinition[];
+  actions: ConnectorActionDefinition[];
 };
 
 export type ConnectorProvidersPage = {

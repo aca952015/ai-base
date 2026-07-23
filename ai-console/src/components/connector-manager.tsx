@@ -50,6 +50,13 @@ type EditorState = {
   loadingProvider: boolean;
 };
 
+type ConnectorDetailsState = {
+  connection: ConnectorConnection;
+  provider?: ConnectorProviderDetail;
+  loading: boolean;
+  error?: string;
+};
+
 function errorMessage(payload: unknown, fallback: string) {
   if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
     return payload.error;
@@ -110,6 +117,57 @@ function ProviderIcon({ provider }: { provider?: ConnectorProviderSummary }) {
   return <PlugZap size={18} />;
 }
 
+function ConnectorCard({
+  connection,
+  provider,
+  deleting,
+  onView,
+  onEdit,
+  onDisconnect,
+}: {
+  connection: ConnectorConnection;
+  provider?: ConnectorProviderSummary;
+  deleting: boolean;
+  onView: (connection: ConnectorConnection) => void;
+  onEdit: (connection: ConnectorConnection) => void;
+  onDisconnect: (connection: ConnectorConnection) => void;
+}) {
+  return (
+    <article
+      className={`gateway-channel-tile is-clickable is-enabled${connection.virtual ? " is-system-managed" : ""}`}
+      tabIndex={0}
+      aria-label={`查看${provider?.displayName || connection.service}详情`}
+      onClick={() => onView(connection)}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        onView(connection);
+      }}
+    >
+      <div className="gateway-channel-tile__top">
+        <span className="gateway-channel-tile__icon connector-provider-icon" aria-hidden="true"><ProviderIcon provider={provider} /></span>
+        <div><strong>{provider?.displayName || connection.service}</strong><small>{connection.connectionName}</small></div>
+        <span className={`gateway-channel-state is-enabled${connection.virtual ? " is-managed" : ""}`}>{connection.virtual ? "系统可用" : "已连接"}</span>
+      </div>
+      <p className="gateway-channel-endpoint" title={connection.profile.accountId}>{connection.profile.displayName}</p>
+      <div className="gateway-channel-metrics">
+        <span><LockKeyhole size={13} />{connectorAuthLabels[connection.authType]}</span>
+        <span>{connection.default ? "默认连接" : "命名连接"}</span>
+      </div>
+      <div className="gateway-model-tags" aria-label="授权范围">
+        {connection.profile.grantedScopes.slice(0, 3).map((scope) => <span key={scope}>{scope}</span>)}
+        {connection.profile.grantedScopes.length > 3 ? <span>+{connection.profile.grantedScopes.length - 3}</span> : null}
+        {connection.profile.grantedScopes.length === 0 ? <em>{provider?.actionCount || 0} 个可用 Action</em> : null}
+      </div>
+      <div className="gateway-channel-tile__actions" onClick={(event) => event.stopPropagation()}>
+        {connection.virtual ? <span className="gateway-managed-lock"><ShieldCheck size={14} />无需配置</span> : <span className="gateway-managed-lock"><CheckCircle2 size={14} />凭据已保存</span>}
+        {!connection.virtual ? <button className="button button--secondary" type="button" onClick={() => onEdit(connection)}><Pencil size={14} />编辑</button> : null}
+        {!connection.virtual ? <button className="gateway-remove-button" type="button" onClick={() => onDisconnect(connection)} disabled={deleting} aria-label={`断开${connection.connectionName}`}><Trash2 size={15} /></button> : null}
+      </div>
+    </article>
+  );
+}
+
 export function ConnectorManager({
   initialConnections,
   initialProviders,
@@ -132,6 +190,7 @@ export function ConnectorManager({
   const [providerAuthType, setProviderAuthType] = useState("");
   const [providerLoading, setProviderLoading] = useState(false);
   const [editor, setEditor] = useState<EditorState>();
+  const [details, setDetails] = useState<ConnectorDetailsState>();
   const [state, setState] = useState<RequestState>(initialError ? "error" : "idle");
   const [message, setMessage] = useState(initialError || "");
   const [deletingId, setDeletingId] = useState<string>();
@@ -142,14 +201,24 @@ export function ConnectorManager({
     () => new Map(knownProviders.map((provider) => [provider.service, provider])),
     [knownProviders],
   );
+  const credentialConnections = useMemo(
+    () => connections.filter((connection) => connection.authType !== "no_auth"),
+    [connections],
+  );
+  const noAuthConnections = useMemo(
+    () => connections.filter((connection) => connection.authType === "no_auth"),
+    [connections],
+  );
   const managedConnections = useMemo(() => connections.filter((connection) => !connection.virtual), [connections]);
   const authenticatedConnections = useMemo(
     () => managedConnections.filter((connection) => connection.authType !== "no_auth"),
     [managedConnections],
   );
   const selectingProvider = Boolean(editor && !editor.provider && !editor.loadingProvider);
-  const editorOpen = Boolean(editor);
-  const editorFocusKey = editor ? editor.original?.id || editor.provider?.service || "new" : undefined;
+  const drawerOpen = Boolean(editor || details);
+  const drawerFocusKey = editor
+    ? `editor:${editor.original?.id || editor.provider?.service || "new"}`
+    : details ? `details:${details.connection.id}` : undefined;
 
   const closeEditor = useCallback(() => {
     setEditor(undefined);
@@ -158,12 +227,18 @@ export function ConnectorManager({
     setProviderAuthType("");
   }, []);
 
+  const closeDetails = useCallback(() => setDetails(undefined), []);
+  const closeActiveDrawer = useCallback(() => {
+    closeEditor();
+    closeDetails();
+  }, [closeDetails, closeEditor]);
+
   useEffect(() => () => {
     if (oauthWatcherRef.current) clearInterval(oauthWatcherRef.current);
   }, []);
 
   useEffect(() => {
-    if (!editorOpen) return;
+    if (!drawerOpen) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -172,7 +247,7 @@ export function ConnectorManager({
     });
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        closeEditor();
+        closeActiveDrawer();
         return;
       }
       if (event.key !== "Tab" || !drawerRef.current) return;
@@ -197,7 +272,7 @@ export function ConnectorManager({
       document.body.style.overflow = previousOverflow;
       previouslyFocused?.focus();
     };
-  }, [closeEditor, editorFocusKey, editorOpen]);
+  }, [closeActiveDrawer, drawerFocusKey, drawerOpen]);
 
   useEffect(() => {
     if (!selectingProvider) return;
@@ -239,6 +314,7 @@ export function ConnectorManager({
   }
 
   function addConnector() {
+    closeDetails();
     setEditor({
       mode: "create",
       connectionName: "default",
@@ -289,6 +365,7 @@ export function ConnectorManager({
   }
 
   async function editConnector(connection: ConnectorConnection) {
+    closeDetails();
     setEditor({
       mode: "edit",
       original: connection,
@@ -498,6 +575,25 @@ export function ConnectorManager({
     }
   }
 
+  async function viewConnector(connection: ConnectorConnection) {
+    setDetails({ connection, loading: true });
+    try {
+      const provider = await fetchJson<ConnectorProviderDetail>(`/api/open-connector/providers/${encodeURIComponent(connection.service)}`);
+      setKnownProviders((current) => {
+        const map = new Map(current.map((item) => [item.service, item]));
+        map.set(provider.service, providerSummary(provider));
+        return Array.from(map.values());
+      });
+      setDetails((current) => current?.connection.id === connection.id ? { connection, provider, loading: false } : current);
+    } catch (error) {
+      setDetails((current) => current?.connection.id === connection.id ? {
+        connection,
+        loading: false,
+        error: error instanceof Error ? error.message : "读取 Connector 详情失败",
+      } : current);
+    }
+  }
+
   const selectedAuth = authDefinition(editor?.provider, editor?.authType);
   const selectedFields = connectionFields(selectedAuth);
   const oauthFields = selectedAuth?.type === "oauth2" ? selectedAuth.clientConfigFields : [];
@@ -522,31 +618,18 @@ export function ConnectorManager({
         </header>
         {message ? <p className={`gateway-channel-message${state === "error" ? " is-error" : ""}`} aria-live="polite">{state === "saved" ? <CheckCircle2 size={15} /> : null}{message}</p> : null}
         <div className="gateway-channel-grid connector-card-grid">
-          {connections.map((connection) => {
+          {credentialConnections.map((connection) => {
             const provider = providerByService.get(connection.service);
             return (
-              <article className={`gateway-channel-tile is-enabled${connection.virtual ? " is-system-managed" : ""}`} key={connection.id}>
-                <div className="gateway-channel-tile__top">
-                  <span className="gateway-channel-tile__icon connector-provider-icon" aria-hidden="true"><ProviderIcon provider={provider} /></span>
-                  <div><strong>{provider?.displayName || connection.service}</strong><small>{connection.connectionName}</small></div>
-                  <span className={`gateway-channel-state is-enabled${connection.virtual ? " is-managed" : ""}`}>{connection.virtual ? "系统可用" : "已连接"}</span>
-                </div>
-                <p className="gateway-channel-endpoint" title={connection.profile.accountId}>{connection.profile.displayName}</p>
-                <div className="gateway-channel-metrics">
-                  <span><LockKeyhole size={13} />{connectorAuthLabels[connection.authType]}</span>
-                  <span>{connection.default ? "默认连接" : "命名连接"}</span>
-                </div>
-                <div className="gateway-model-tags" aria-label="授权范围">
-                  {connection.profile.grantedScopes.slice(0, 3).map((scope) => <span key={scope}>{scope}</span>)}
-                  {connection.profile.grantedScopes.length > 3 ? <span>+{connection.profile.grantedScopes.length - 3}</span> : null}
-                  {connection.profile.grantedScopes.length === 0 ? <em>{provider?.actionCount || 0} 个可用 Action</em> : null}
-                </div>
-                <div className="gateway-channel-tile__actions">
-                  {connection.virtual ? <span className="gateway-managed-lock"><ShieldCheck size={14} />无需配置</span> : <span className="gateway-managed-lock"><CheckCircle2 size={14} />凭据已保存</span>}
-                  {!connection.virtual ? <button className="button button--secondary" type="button" onClick={() => editConnector(connection)}><Pencil size={14} />编辑</button> : null}
-                  {!connection.virtual ? <button className="gateway-remove-button" type="button" onClick={() => disconnect(connection)} disabled={deletingId === connection.id} aria-label={`断开${connection.connectionName}`}><Trash2 size={15} /></button> : null}
-                </div>
-              </article>
+              <ConnectorCard
+                connection={connection}
+                provider={provider}
+                deleting={deletingId === connection.id}
+                onView={viewConnector}
+                onEdit={editConnector}
+                onDisconnect={disconnect}
+                key={connection.id}
+              />
             );
           })}
           <button className="gateway-channel-add-card" type="button" onClick={addConnector} disabled={state === "saving"}>
@@ -554,6 +637,100 @@ export function ConnectorManager({
           </button>
         </div>
       </section>
+
+      <section className="portal-group gateway-resource-section" aria-labelledby="connector-no-auth-title">
+        <header className="portal-group__header">
+          <div>
+            <h2 id="connector-no-auth-title">无需认证</h2>
+            <p>无需账号授权或凭据，OpenConnector 可直接调用。</p>
+          </div>
+          <span className="gateway-channel-state is-managed">{noAuthConnections.length} 个 Connector</span>
+        </header>
+        <div className="gateway-channel-grid connector-card-grid">
+          {noAuthConnections.map((connection) => (
+            <ConnectorCard
+              connection={connection}
+              provider={providerByService.get(connection.service)}
+              deleting={deletingId === connection.id}
+              onView={viewConnector}
+              onEdit={editConnector}
+              onDisconnect={disconnect}
+              key={connection.id}
+            />
+          ))}
+          {noAuthConnections.length === 0 ? (
+            <div className="connector-empty-group">
+              <ShieldCheck size={20} />
+              <strong>暂无无需认证的 Connector</strong>
+              <span>OpenConnector 提供后会自动显示在这里。</span>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {details ? createPortal(
+        <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDetails(); }}>
+          <aside className="gateway-channel-drawer connector-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="connector-details-title">
+            <div className="gateway-channel-editor__header">
+              <div><span className="card-kicker">Connector 详情</span><h3 id="connector-details-title">{details.provider?.displayName || providerByService.get(details.connection.service)?.displayName || details.connection.service}</h3><p>只读展示连接配置、授权信息和该 Connector 提供的全部 Action。</p></div>
+              <button type="button" data-drawer-autofocus onClick={closeDetails} aria-label="关闭 Connector 详情"><X size={17} /></button>
+            </div>
+
+            <div className="gateway-channel-drawer__body resource-detail-body">
+              <section className="resource-detail-section">
+                <div className="resource-detail-section__header"><strong>连接信息</strong><span className={`gateway-channel-state is-enabled${details.connection.virtual ? " is-managed" : ""}`}>{details.connection.virtual ? "系统可用" : details.connection.configured ? "已连接" : "未配置"}</span></div>
+                <dl className="resource-detail-grid">
+                  <div><dt>Service ID</dt><dd className="is-mono">{details.connection.service}</dd></div>
+                  <div><dt>连接名称</dt><dd className="is-mono">{details.connection.connectionName}</dd></div>
+                  <div><dt>认证方式</dt><dd>{connectorAuthLabels[details.connection.authType]}</dd></div>
+                  <div><dt>连接类型</dt><dd>{details.connection.default ? "默认连接" : "命名连接"}</dd></div>
+                  <div><dt>账号名称</dt><dd>{details.connection.profile.displayName}</dd></div>
+                  <div><dt>凭据状态</dt><dd>{details.connection.virtual ? "无需凭据" : details.connection.configured ? "服务端已保存" : "未配置"}</dd></div>
+                  <div className="is-wide"><dt>账号 ID</dt><dd className="is-mono">{details.connection.profile.accountId}</dd></div>
+                </dl>
+                {details.provider?.description ? <p className="resource-detail-description">{details.provider.description}</p> : null}
+                <div className="resource-detail-filter-groups">
+                  <div><span>分类</span><p>{details.provider?.categories.join("、") || "未分类"}</p></div>
+                  <div><span>授权范围</span><p>{details.connection.profile.grantedScopes.join("、") || "无需授权范围"}</p></div>
+                </div>
+              </section>
+
+              <section className="resource-detail-section">
+                <div className="resource-detail-section__header"><strong>Actions</strong><span>{details.provider?.actions.length ?? "—"} 个</span></div>
+                {details.loading ? (
+                  <div className="gateway-mcp-tools-state"><RefreshCw className="is-spinning" size={18} /><strong>正在读取 Actions</strong><p>正在从 OpenConnector 获取完整 Action 定义…</p></div>
+                ) : details.error ? (
+                  <div className="gateway-mcp-tools-state is-error"><PlugZap size={18} /><strong>Action 读取失败</strong><p>{details.error}</p></div>
+                ) : details.provider?.actions.length ? (
+                  <div className="gateway-mcp-tool-list connector-action-list">
+                    {details.provider.actions.map((action, index) => (
+                      <article key={action.id}>
+                        <span>{String(index + 1).padStart(2, "0")}</span>
+                        <div>
+                          <strong>{action.id}</strong>
+                          <p>{action.description || "暂无 Action 说明"}</p>
+                          <div className="connector-action-meta">
+                            <span>{action.execution?.needsCredential ? "需要凭据" : "无需凭据"}</span>
+                            <span>{action.requiredScopes.length ? `${action.requiredScopes.length} 个 Scope` : "无额外 Scope"}</span>
+                          </div>
+                          <details className="resource-schema-details">
+                            <summary>查看输入 / 输出 Schema</summary>
+                            <div><strong>Input</strong><pre>{JSON.stringify(action.inputSchema || {}, null, 2)}</pre></div>
+                            <div><strong>Output</strong><pre>{JSON.stringify(action.outputSchema || {}, null, 2)}</pre></div>
+                          </details>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : <div className="resource-detail-empty">该 Connector 当前没有公开 Action。</div>}
+              </section>
+            </div>
+
+            <div className="gateway-channel-editor__footer"><button className="button button--primary" type="button" onClick={closeDetails}>关闭</button></div>
+          </aside>
+        </div>,
+        document.body,
+      ) : null}
 
       {editor ? createPortal(
         <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && state !== "saving") closeEditor(); }}>

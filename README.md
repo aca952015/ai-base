@@ -16,9 +16,10 @@ docker compose ps
 | AI Console | https://ai-console.localhost.pomerium.io:8443 | 经 Pomerium 与外部 OIDC 认证的一站式 Portal |
 | SilverBullet | http://knowledge.localhost:8080 | 类 Obsidian 的 Markdown 知识库 |
 | OpenConnector | https://open-connector.localhost.pomerium.io:8443 | 经 Pomerium 单点登录的外部连接管理入口 |
-| 外部 OIDC | https://ids.bluetron.cn/ | 独立部署的认证中心，不属于 AI Base Stack |
+| 本地 OIDC | http://dex.localtest.me:5556/dex | 独立部署的 Dex 认证中心，不属于 AI Base Stack |
 | 全局网关 | http://localhost:8080 | 模型、MCP、RAG、Runtime、Connector、知识库与可观测统一入口 |
-| Envoy AI Gateway | 仅容器内访问 | 模型路由，以及 `/mcp` 上的 MCP 服务聚合与工具路由 |
+| MCP Access Gateway | http://127.0.0.1:8080/mcp | Go 实现的 OAuth 保护 MCP 接口 |
+| Envoy AI Gateway | 仅容器内访问 | 模型路由，以及内部 `/mcp` 上的外部 MCP 注册、聚合与工具路由 |
 | Agent Runtime | http://runtime.localhost:8080/docs | FastAPI、PydanticAI、MCP 与 DBOS 运行边界 |
 | Jaeger | http://jaeger.localhost:8080 | OpenTelemetry Trace |
 | PostgreSQL | 仅容器内访问 | 控制面、审计与 pgvector |
@@ -34,19 +35,55 @@ docker compose down
 
 AI Console 的 `/components` 是统一组件门户，提供组件状态、运行端点和管理入口。常用的 OpenConnector 连接生命周期直接在 Console 管理；Action 调试、运行令牌和策略等深度操作仍在 OpenConnector 自身界面完成。
 
-### 外部 OIDC 单点登录
+### 独立 OIDC 单点登录
 
-AI Base 只运行 Pomerium，不内置认证中心。OIDC Issuer、Client ID 与 Client Secret 由独立身份系统提供：
+AI Base Stack 不内置认证中心。本机开发使用相邻目录中的轻量 Dex，单独启动：
+
+```bash
+docker compose -f ../local-oidc/compose.yaml up -d
+```
+
+Pomerium 使用 Dex 保护 Console 与 OpenConnector 管理页面：
 
 ```dotenv
-POMERIUM_IDP_PROVIDER_URL=https://ids.bluetron.cn/realms/master
+POMERIUM_IDP_PROVIDER_URL=http://dex.localtest.me:5556/dex
 POMERIUM_IDP_CLIENT_ID=ai-base-pomerium
 POMERIUM_IDP_CLIENT_SECRET=replace-with-the-real-client-secret
 ```
 
-外部认证中心需要为 `ai-base-pomerium` 注册回调地址 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback`。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域；更换企业域名时同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml)。Pomerium 本机入口使用开发证书，未修改系统信任库；正式部署必须配置受信任证书和正式域名。
+Dex 中的 `ai-base-pomerium` 客户端回调地址是 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback`。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域；更换企业域名时同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml)。Pomerium 本机入口使用开发证书；正式部署必须配置受信任证书、正式域名和企业 OIDC。
 
 OpenConnector 的管理请求由独立内部代理注入 Admin Token，Token 不进入浏览器。OpenConnector 不再映射宿主机端口；管理入口经 Pomerium，Agent 功能流量经全局网关 `/connector`，分别使用 Admin Token 与 Runtime Token。
+
+MCP Access Gateway 内置轻量 OAuth Broker，面向 WorkBuddy 提供标准发现、动态客户端注册、Authorization Code + S256 PKCE 和令牌端点；Dex 只作为员工登录上游，不要求 Dex 支持动态客户端注册：
+
+```dotenv
+MCP_PUBLIC_RESOURCE_URL=http://127.0.0.1:8080/mcp
+MCP_OIDC_ISSUER=http://127.0.0.1:8080/oauth
+MCP_OIDC_AUDIENCE=http://127.0.0.1:8080/mcp
+MCP_OIDC_REQUIRED_SCOPES=ai-base:mcp
+MCP_LOGIN_OIDC_ISSUER=http://dex.localtest.me:5556/dex
+MCP_LOGIN_OIDC_CLIENT_ID=ai-base-mcp-broker
+MCP_LOGIN_OIDC_REDIRECT_URL=http://127.0.0.1:8080/oauth/callback
+MCP_OAUTH_ALLOWED_REDIRECT_URIS=workbuddy://workbuddy/mcp/custom-mcp%3Aai-base/oauth/callback
+MCP_SESSION_SIGNING_KEY=replace-with-at-least-32-random-bytes
+```
+
+WorkBuddy 只需配置 MCP URL：
+
+```json
+{
+  "mcpServers": {
+    "ai-base": {
+      "url": "http://127.0.0.1:8080/mcp"
+    }
+  }
+}
+```
+
+点击“连接”后，WorkBuddy 从 `/.well-known/oauth-protected-resource/mcp` 发现 AI Base OAuth Broker，完成客户端注册后跳转 Dex 登录。Broker 使用 Dex 的稳定用户 ID 派生内部员工 ID，签发 audience 为 MCP Resource、包含 `ai-base:mcp` scope 的短期 JWT；员工令牌进入 Envoy 前会被移除。刷新令牌为服务内存中的一次性轮换凭据，Broker 重启后客户端需要重新登录。
+
+`http://127.0.0.1:8080` 只用于本机验证。共享环境必须改用同一个正式 HTTPS 主机，并同步更新 MCP Resource、OAuth Issuer、Dex 回调地址和允许的客户端回调白名单。
 
 ### 全局工具入口
 
@@ -55,7 +92,9 @@ OpenConnector 的管理请求由独立内部代理注入 Admin Token，Token 不
 | 路径 | 上游能力 | 路径处理 |
 | --- | --- | --- |
 | `/v1`、`/v1/*` | Envoy AI Gateway 模型 API | 保留路径，支持流式响应 |
-| `/mcp`、`/mcp/*` | Envoy AI Gateway MCP API | 保留路径，支持 Streamable HTTP |
+| `/mcp`、`/mcp/*` | MCP Access Gateway | OIDC 验证后转发到内部 Envoy MCP，支持 Streamable HTTP |
+| `/.well-known/oauth-protected-resource/mcp` | MCP Access Gateway | OAuth Protected Resource Metadata |
+| `/oauth/*`、OAuth well-known 路径 | MCP Access Gateway | WorkBuddy OAuth、DCR、PKCE、Token 与 JWKS |
 | `/rag/*` | Agent Runtime RAG API | 保留路径；当前 `/rag/health` 返回数据库与 pgvector 的真实就绪状态 |
 | `/runtime/*` | Agent Runtime API | 移除 `/runtime` 前缀 |
 | `/llm-admin/*` | Envoy AI Gateway 管理 API | 移除 `/llm-admin` 前缀，仅供控制台内部使用 |
@@ -96,9 +135,9 @@ OPENAI_API_KEY=...
 - 工具允许/排除列表、启停和真实 `tools/list` 连接测试；
 - 保存后生成原生 `MCPRoute`、`Backend`、TLS 和 Secret 资源，并触发网关自动重载。
 
-Agent 只需连接 `http://localhost:8080/mcp`，即可使用 Open Connector 的连接能力和其他已配置的 Streamable HTTP MCP 服务。Open Connector 的 OAuth、Runtime Token 与 Action 执行仍由其自身管理。
+Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 Envoy 注册的 Open Connector 和其他 Streamable HTTP MCP 服务。员工 Access Token 只在 MCP Access Gateway 验证，不会透传给 Envoy 或外部 MCP；Envoy 使用各上游自身的服务凭据。
 
-`/mcp` 是 Streamable HTTP 协议端点，不是管理页面。浏览器直接打开时，网关会返回端点说明；MCP 客户端发出的初始化、会话和工具请求仍会原样转发。管理页面位于 `https://ai-console.localhost.pomerium.io:8443/mcp`。
+`/mcp` 是受 OIDC 保护的 Streamable HTTP 协议端点，不是管理页面。未认证请求返回 `401` 和标准 `WWW-Authenticate` 发现信息。网关把外部 MCP Session 签名并绑定到 `issuer + subject + client_id`，不同员工不能复用彼此会话。管理页面位于 `https://ai-console.localhost.pomerium.io:8443/mcp`。
 
 ### 连接器配置
 

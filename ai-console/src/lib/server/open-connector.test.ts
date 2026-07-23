@@ -69,7 +69,15 @@ describe("OpenConnector provider adapter", () => {
       displayName: "Example",
       categories: ["Developer Tools"],
       authTypes: ["api_key", "custom_credential", "oauth2"],
-      actions: [{ id: "example.read" }],
+      actions: [{
+        id: "example.read",
+        name: "read",
+        description: "Read an example",
+        requiredScopes: ["read"],
+        inputSchema: { type: "object", properties: { id: { type: "string" } } },
+        outputSchema: { type: "object" },
+        execution: { locallyExecutable: true, requiredAuthTypes: ["api_key"], needsCredential: true },
+      }],
       auth: [
         { type: "api_key", label: "Token", extraFields: [{ key: "tenant", label: "Tenant", inputType: "text", required: true, secret: false }] },
         { type: "custom_credential", fields: [{ key: "json", label: "JSON", inputType: "json", required: true, secret: true }] },
@@ -84,6 +92,15 @@ describe("OpenConnector provider adapter", () => {
       expect.objectContaining({ type: "api_key", label: "Token", extraFields: [expect.objectContaining({ key: "tenant" })] }),
       expect.objectContaining({ type: "custom_credential", fields: [expect.objectContaining({ inputType: "json" })] }),
       expect.objectContaining({ type: "oauth2", scopes: ["read"], clientConfigFields: [expect.objectContaining({ location: "extra" })] }),
+    ]);
+    expect(provider.actions).toEqual([
+      expect.objectContaining({
+        id: "example.read",
+        name: "read",
+        requiredScopes: ["read"],
+        inputSchema: expect.objectContaining({ type: "object" }),
+        execution: expect.objectContaining({ locallyExecutable: true, requiredAuthTypes: ["api_key"], needsCredential: true }),
+      }),
     ]);
   });
 });

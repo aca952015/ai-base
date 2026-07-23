@@ -81,6 +81,7 @@ function providerOption(provider: GatewayProvider) {
 export function GatewayChannelManager({ initialChannels }: { initialChannels: GatewayChannel[] }) {
   const [channels, setChannels] = useState<EditableChannel[]>(() => initialChannels.map(toEditable));
   const [editingChannel, setEditingChannel] = useState<EditableChannel>();
+  const [viewingChannelId, setViewingChannelId] = useState<string>();
   const [isCreatingChannel, setIsCreatingChannel] = useState(false);
   const [state, setState] = useState<RequestState>("idle");
   const [message, setMessage] = useState("");
@@ -96,6 +97,8 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
       .reduce((count, channel) => count + parseModels(channel.modelsText).length, 0),
   }), [channels]);
   const editingId = editingChannel?.id;
+  const viewingChannel = channels.find((channel) => channel.id === viewingChannelId);
+  const activeDrawerId = editingId ? `editor:${editingId}` : viewingChannel ? `details:${viewingChannel.id}` : undefined;
 
   const closeEditor = useCallback(() => {
     if (editingId) {
@@ -108,6 +111,12 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
     setEditingChannel(undefined);
     setIsCreatingChannel(false);
   }, [editingId]);
+
+  const closeDetails = useCallback(() => setViewingChannelId(undefined), []);
+  const closeActiveDrawer = useCallback(() => {
+    closeEditor();
+    closeDetails();
+  }, [closeDetails, closeEditor]);
 
   useEffect(() => {
     let ignore = false;
@@ -133,7 +142,7 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
   }, []);
 
   useEffect(() => {
-    if (!editingId) return;
+    if (!activeDrawerId) return;
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -143,7 +152,7 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        closeEditor();
+        closeActiveDrawer();
         return;
       }
       if (event.key !== "Tab" || !drawerRef.current) return;
@@ -169,7 +178,7 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
       document.body.style.overflow = previousOverflow;
       previouslyFocused?.focus();
     };
-  }, [closeEditor, editingId]);
+  }, [activeDrawerId, closeActiveDrawer]);
 
   function updateChannel(id: string, patch: Partial<EditableChannel>) {
     if (editingChannel?.id === id) {
@@ -215,6 +224,7 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
       updatedAt: now,
     });
     setIsCreatingChannel(true);
+    closeDetails();
     setState("idle");
     setMessage("");
   }
@@ -363,7 +373,18 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
           const models = parseModels(channel.modelsText);
           const testResult = testResults[channel.id];
           return (
-            <article className={`gateway-channel-tile${channel.enabled ? " is-enabled" : ""}`} key={channel.id}>
+            <article
+              className={`gateway-channel-tile is-clickable${channel.enabled ? " is-enabled" : ""}`}
+              key={channel.id}
+              tabIndex={0}
+              aria-label={`查看${channel.name || "未命名渠道"}详情`}
+              onClick={() => setViewingChannelId(channel.id)}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                event.preventDefault();
+                setViewingChannelId(channel.id);
+              }}
+            >
               <div className="gateway-channel-tile__top">
                 <span className="gateway-channel-tile__icon" aria-hidden="true"><Globe2 size={18} /></span>
                 <div><strong>{channel.name || "未命名渠道"}</strong><small>{option.label}</small></div>
@@ -385,7 +406,7 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
 
               {testResult ? <p className={`gateway-test-result${testResult.ok ? " is-success" : " is-error"}`} role="status">{testResult.message}{testResult.latencyMs ? ` · ${testResult.latencyMs} ms` : ""}</p> : null}
 
-              <div className="gateway-channel-tile__actions">
+              <div className="gateway-channel-tile__actions" onClick={(event) => event.stopPropagation()}>
                 <label className="switch-control">
                   <input type="checkbox" checked={channel.enabled} onChange={(event) => void setChannelEnabled(channel.id, event.target.checked)} disabled={state === "saving"} />
                   <span aria-hidden="true" />
@@ -395,7 +416,7 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
                   {testingId === channel.id ? <RefreshCw className="is-spinning" size={14} /> : <FlaskConical size={14} />}
                   {testingId === channel.id ? "测试中" : "测试"}
                 </button>
-                <button className="button button--secondary" type="button" onClick={() => { setEditingChannel({ ...channel }); setIsCreatingChannel(false); }}><Pencil size={14} />编辑</button>
+                <button className="button button--secondary" type="button" onClick={() => { closeDetails(); setEditingChannel({ ...channel }); setIsCreatingChannel(false); }}><Pencil size={14} />编辑</button>
                 <button className="gateway-remove-button" type="button" onClick={() => void removeChannel(channel.id)} disabled={state === "saving"} aria-label={`移除${channel.name}`}><Trash2 size={15} /></button>
               </div>
             </article>
@@ -408,6 +429,50 @@ export function GatewayChannelManager({ initialChannels }: { initialChannels: Ga
           <small>接入 OpenAI、Anthropic 或兼容服务</small>
         </button>
       </div>
+
+      {viewingChannel ? createPortal(
+        <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDetails(); }}>
+          <aside className="gateway-channel-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="gateway-channel-details-title">
+            <div className="gateway-channel-editor__header">
+              <div><span className="card-kicker">模型渠道详情</span><h3 id="gateway-channel-details-title">{viewingChannel.name || "未命名渠道"}</h3><p>只读展示当前已经应用到大模型网关的完整配置。</p></div>
+              <button type="button" data-drawer-autofocus onClick={closeDetails} aria-label="关闭渠道详情"><X size={17} /></button>
+            </div>
+
+            <div className="gateway-channel-drawer__body resource-detail-body">
+              <section className="resource-detail-section">
+                <div className="resource-detail-section__header"><strong>渠道配置</strong><span className={`gateway-channel-state${viewingChannel.enabled ? " is-enabled" : ""}`}>{viewingChannel.enabled ? "参与路由" : "已停用"}</span></div>
+                <dl className="resource-detail-grid">
+                  <div><dt>渠道 ID</dt><dd className="is-mono">{viewingChannel.id}</dd></div>
+                  <div><dt>协议类型</dt><dd>{providerOption(viewingChannel.provider).label}</dd></div>
+                  <div className="is-wide"><dt>上游 Base URL</dt><dd className="is-mono">{viewingChannel.baseUrl}</dd></div>
+                  <div><dt>API Key</dt><dd>{viewingChannel.keyConfigured && !viewingChannel.removeApiKey ? "服务端已保存" : "未配置"}</dd></div>
+                  <div><dt>模型数量</dt><dd>{parseModels(viewingChannel.modelsText).length}</dd></div>
+                  <div><dt>创建时间</dt><dd>{new Date(viewingChannel.createdAt).toLocaleString("zh-CN")}</dd></div>
+                  <div><dt>更新时间</dt><dd>{new Date(viewingChannel.updatedAt).toLocaleString("zh-CN")}</dd></div>
+                </dl>
+                <p className="resource-detail-description">{providerOption(viewingChannel.provider).description}</p>
+              </section>
+
+              <section className="resource-detail-section">
+                <div className="resource-detail-section__header"><strong>发布模型</strong><span>{parseModels(viewingChannel.modelsText).length} 个</span></div>
+                {parseModels(viewingChannel.modelsText).length ? (
+                  <div className="resource-detail-route-list">
+                    {parseModels(viewingChannel.modelsText).map((model, index) => (
+                      <article key={`${model.publicName}-${model.upstreamName}`}>
+                        <span>{String(index + 1).padStart(2, "0")}</span>
+                        <div><strong>{model.publicName}</strong><small>上游模型</small><code>{model.upstreamName}</code></div>
+                      </article>
+                    ))}
+                  </div>
+                ) : <div className="resource-detail-empty">尚未声明模型</div>}
+              </section>
+            </div>
+
+            <div className="gateway-channel-editor__footer"><button className="button button--primary" type="button" onClick={closeDetails}>关闭</button></div>
+          </aside>
+        </div>,
+        document.body,
+      ) : null}
 
       {editingChannel ? createPortal(
         <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeEditor(); }}>

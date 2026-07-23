@@ -1,5 +1,6 @@
 export type ServiceId =
   | "global-gateway"
+  | "mcp-access-gateway"
   | "agent-runtime"
   | "llm-gateway"
   | "open-connector"

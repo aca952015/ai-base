@@ -342,7 +342,18 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
               const excludes = parseLines(server.toolExcludesText);
               const testResult = testResults[server.id];
               return (
-                <article className={`gateway-channel-tile${server.enabled ? " is-enabled" : ""}${server.managed ? " is-system-managed" : ""}`} key={server.id}>
+                <article
+                  className={`gateway-channel-tile is-clickable${server.enabled ? " is-enabled" : ""}${server.managed ? " is-system-managed" : ""}`}
+                  key={server.id}
+                  tabIndex={0}
+                  aria-label={`查看${server.name || "未命名 MCP 服务"}详情`}
+                  onClick={() => openTools(server)}
+                  onKeyDown={(event) => {
+                    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                    event.preventDefault();
+                    void openTools(server);
+                  }}
+                >
                   <div className="gateway-channel-tile__top">
                     <span className="gateway-channel-tile__icon" aria-hidden="true"><Blocks size={18} /></span>
                     <div><strong>{server.name || "未命名 MCP 服务"}</strong><small>{server.namespace}__*</small></div>
@@ -368,7 +379,7 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
 
                   {testResult ? <p className={`gateway-test-result${testResult.ok ? " is-success" : " is-error"}`} role="status">{testResult.message}{testResult.latencyMs ? ` · ${testResult.latencyMs} ms` : ""}</p> : null}
 
-                  <div className="gateway-channel-tile__actions">
+                  <div className="gateway-channel-tile__actions" onClick={(event) => event.stopPropagation()}>
                     {server.managed ? <span className="gateway-managed-lock"><LockKeyhole size={13} />只读配置</span> : (
                       <label className="switch-control">
                         <input type="checkbox" checked={server.enabled} onChange={(event) => void setServerEnabled(server.id, event.target.checked)} disabled={state === "saving"} />
@@ -384,7 +395,7 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
                       {testingId === server.id ? <RefreshCw className="is-spinning" size={14} /> : <FlaskConical size={14} />}
                       {testingId === server.id ? "测试中" : "测试"}
                     </button>
-                    {!server.managed ? <button className="button button--secondary" type="button" onClick={() => { setEditingServer({ ...server }); setIsCreatingServer(false); }}><Pencil size={14} />编辑</button> : null}
+                    {!server.managed ? <button className="button button--secondary" type="button" onClick={() => { closeTools(); setEditingServer({ ...server }); setIsCreatingServer(false); }}><Pencil size={14} />编辑</button> : null}
                     {!server.managed ? <button className="gateway-remove-button" type="button" onClick={() => void removeServer(server.id)} disabled={state === "saving"} aria-label={`移除${server.name}`}><Trash2 size={15} /></button> : null}
                   </div>
                 </article>
@@ -403,14 +414,35 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
               <aside className="gateway-channel-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="gateway-mcp-tools-title">
                 <div className="gateway-channel-editor__header">
                   <div>
-                    <span className="card-kicker">MCP 工具</span>
+                    <span className="card-kicker">MCP 服务详情</span>
                     <h3 id="gateway-mcp-tools-title">{toolsServer.name || "未命名 MCP 服务"}</h3>
-                    <p>从上游实时读取，只读展示当前服务公开的全部工具。</p>
+                    <p>只读展示完整服务配置，并从上游实时读取全部工具。</p>
                   </div>
                   <button type="button" data-drawer-autofocus onClick={closeTools} aria-label="关闭工具列表"><X size={17} /></button>
                 </div>
 
                 <div className="gateway-channel-drawer__body gateway-mcp-tools-drawer">
+                  <section className="resource-detail-section">
+                    <div className="resource-detail-section__header"><strong>服务配置</strong><span className={`gateway-channel-state${toolsServer.managed ? " is-managed" : toolsServer.enabled ? " is-enabled" : ""}`}>{toolsServer.managed ? "系统内置" : toolsServer.enabled ? "参与聚合" : "已停用"}</span></div>
+                    <dl className="resource-detail-grid">
+                      <div><dt>服务 ID</dt><dd className="is-mono">{toolsServer.id}</dd></div>
+                      <div><dt>工具命名空间</dt><dd className="is-mono">{toolsServer.namespace}__*</dd></div>
+                      <div className="is-wide"><dt>上游 MCP URL</dt><dd className="is-mono">{toolsServer.url}</dd></div>
+                      <div><dt>配置来源</dt><dd>{toolsServer.managed ? "AI Base 系统托管" : "用户配置"}</dd></div>
+                      <div><dt>密钥请求头</dt><dd className="is-mono">{toolsServer.authHeader || "—"}</dd></div>
+                      <div><dt>凭据状态</dt><dd>{toolsServer.keyConfigured && !toolsServer.removeApiKey ? "服务端已保存" : "无固定密钥"}</dd></div>
+                      <div><dt>工具范围</dt><dd>{parseLines(toolsServer.toolIncludesText).length ? `允许 ${parseLines(toolsServer.toolIncludesText).length} 个` : "全部工具"}</dd></div>
+                      <div><dt>创建时间</dt><dd>{new Date(toolsServer.createdAt).toLocaleString("zh-CN")}</dd></div>
+                      <div><dt>更新时间</dt><dd>{new Date(toolsServer.updatedAt).toLocaleString("zh-CN")}</dd></div>
+                    </dl>
+                    {parseLines(toolsServer.toolIncludesText).length || parseLines(toolsServer.toolExcludesText).length ? (
+                      <div className="resource-detail-filter-groups">
+                        <div><span>允许工具</span><p>{parseLines(toolsServer.toolIncludesText).join("、") || "全部"}</p></div>
+                        <div><span>排除工具</span><p>{parseLines(toolsServer.toolExcludesText).join("、") || "无"}</p></div>
+                      </div>
+                    ) : null}
+                  </section>
+
                   <div className="gateway-mcp-tools-summary">
                     <span><Wrench size={15} />工具列表</span>
                     <strong>{toolsResult?.ok ? toolsResult.tools.length : "—"}</strong>

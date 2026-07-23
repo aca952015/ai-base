@@ -11,6 +11,8 @@ services:
     environment:
       AI_CONSOLE_DATA_DIR: /data
       GLOBAL_GATEWAY_URL: http://global-gateway:8080
+      MCP_ACCESS_GATEWAY_URL: http://mcp-access-gateway:8081
+      MCP_PUBLIC_RESOURCE_URL: ${MCP_PUBLIC_RESOURCE_URL:-http://127.0.0.1:8080/mcp}
       AGENT_RUNTIME_URL: http://global-gateway:8080/runtime
       LLM_GATEWAY_URL: http://global-gateway:8080
       LLM_GATEWAY_ADMIN_URL: http://global-gateway:8080/llm-admin
@@ -135,6 +137,41 @@ services:
       retries: 10
       start_period: 30s
 
+  mcp-access-gateway:
+    build:
+      context: ./mcp-access-gateway
+    restart: unless-stopped
+    expose:
+      - "8081"
+    environment:
+      MCP_LISTEN_ADDRESS: ":8081"
+      MCP_UPSTREAM_URL: http://llm-gateway:1975/mcp
+      MCP_PUBLIC_RESOURCE_URL: ${MCP_PUBLIC_RESOURCE_URL:-http://127.0.0.1:8080/mcp}
+      MCP_OIDC_ISSUER: ${MCP_OIDC_ISSUER:-http://127.0.0.1:8080/oauth}
+      MCP_OIDC_JWKS_URL: http://127.0.0.1:8081/oauth/jwks
+      MCP_OIDC_AUDIENCE: ${MCP_OIDC_AUDIENCE:-http://127.0.0.1:8080/mcp}
+      MCP_OIDC_REQUIRED_SCOPES: ${MCP_OIDC_REQUIRED_SCOPES:-ai-base:mcp}
+      MCP_LOGIN_OIDC_ISSUER: ${MCP_LOGIN_OIDC_ISSUER:-http://dex.localtest.me:5556/dex}
+      MCP_LOGIN_OIDC_CLIENT_ID: ${MCP_LOGIN_OIDC_CLIENT_ID:-ai-base-mcp-broker}
+      MCP_LOGIN_OIDC_REDIRECT_URL: ${MCP_LOGIN_OIDC_REDIRECT_URL:-http://127.0.0.1:8080/oauth/callback}
+      MCP_OAUTH_SIGNING_KEY_PATH: /data/oauth-signing-key.pem
+      MCP_OAUTH_ACCESS_TOKEN_LIFETIME: ${MCP_OAUTH_ACCESS_TOKEN_LIFETIME:-1h}
+      MCP_OAUTH_REFRESH_TOKEN_LIFETIME: ${MCP_OAUTH_REFRESH_TOKEN_LIFETIME:-8h}
+      MCP_OAUTH_ALLOWED_REDIRECT_URIS: ${MCP_OAUTH_ALLOWED_REDIRECT_URIS:-workbuddy://workbuddy/mcp/custom-mcp%3Aai-base/oauth/callback}
+      MCP_SESSION_SIGNING_KEY: ${MCP_SESSION_SIGNING_KEY:-local-mcp-session-signing-key-change-me}
+      MCP_SESSION_LIFETIME: ${MCP_SESSION_LIFETIME:-8h}
+    volumes:
+      - mcp-auth-data:/data
+    depends_on:
+      llm-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document", "/dev/null", "http://127.0.0.1:8081/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   global-gateway:
     image: caddy:2.11.4-alpine
     restart: unless-stopped
@@ -145,6 +182,8 @@ services:
       - ./deploy/global-gateway/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
       llm-gateway:
+        condition: service_healthy
+      mcp-access-gateway:
         condition: service_healthy
       open-connector:
         condition: service_started
@@ -273,7 +312,7 @@ services:
       - "443"
     environment:
       IDP_PROVIDER: oidc
-      IDP_PROVIDER_URL: ${POMERIUM_IDP_PROVIDER_URL:-https://ids.bluetron.cn/realms/master}
+      IDP_PROVIDER_URL: ${POMERIUM_IDP_PROVIDER_URL:-http://dex.localtest.me:5556/dex}
       IDP_CLIENT_ID: ${POMERIUM_IDP_CLIENT_ID:-ai-base-pomerium}
       IDP_CLIENT_SECRET: ${POMERIUM_IDP_CLIENT_SECRET:-replace-with-the-external-oidc-client-secret}
       COOKIE_SECRET: ${POMERIUM_COOKIE_SECRET:-f3w8vZzhlwLw1DIXoCaILrswiMeDabDaRcyH6JBMwoc=}
@@ -288,6 +327,7 @@ services:
 
 volumes:
   console-data:
+  mcp-auth-data:
   open-connector-data:
   postgres-data:
   promptfoo-data:

@@ -23,20 +23,19 @@ http://:8080 {
 			}
 		}
 
-		@mcpBrowser {
-			method GET
-			path /mcp /mcp/
-			header Accept *text/html*
+		@mcpMetadata path /.well-known/oauth-protected-resource /.well-known/oauth-protected-resource/mcp
+		handle @mcpMetadata {
+			reverse_proxy mcp-access-gateway:8081
 		}
-		handle @mcpBrowser {
-			header Content-Type application/json
-			header Cache-Control no-store
-			respond `{"service":"ai-base-mcp-gateway","transport":"streamable-http","status":"ready","message":"This is an MCP protocol endpoint. Connect with an MCP client; browser navigation does not create a session.","manageUrl":"https://ai-console.localhost.pomerium.io:8443/mcp"}`
+
+		@mcpOAuth path /.well-known/oauth-authorization-server/oauth /.well-known/openid-configuration/oauth /oauth /oauth/*
+		handle @mcpOAuth {
+			reverse_proxy mcp-access-gateway:8081
 		}
 
 		@mcp path /mcp /mcp/*
 		handle @mcp {
-			reverse_proxy llm-gateway:1975 {
+			reverse_proxy mcp-access-gateway:8081 {
 				flush_interval -1
 			}
 		}
@@ -105,7 +104,7 @@ http://:8080 {
 
 		handle / {
 			header Content-Type application/json
-			respond `{"service":"ai-base-global-gateway","routes":{"models":"/v1","mcp":"/mcp","rag":"/rag","runtime":"/runtime","connector":"/connector","knowledge":"/knowledge","jaeger":"/jaeger","promptfoo":"/promptfoo","otelHttp":"/otel/v1/traces"}}`
+			respond `{"service":"ai-base-global-gateway","routes":{"models":"/v1","mcp":"/mcp","mcpOAuth":"/oauth","rag":"/rag","runtime":"/runtime","connector":"/connector","knowledge":"/knowledge","jaeger":"/jaeger","promptfoo":"/promptfoo","otelHttp":"/otel/v1/traces"}}`
 		}
 
 		handle {

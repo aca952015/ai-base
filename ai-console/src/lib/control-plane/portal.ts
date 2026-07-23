@@ -47,6 +47,12 @@ export const portalEntries: PortalEntry[] = [
     manageLabel: "管理 Agent",
   },
   {
+    id: "mcp-access-gateway",
+    category: "build",
+    managePath: "/mcp",
+    manageLabel: "管理 MCP 注册",
+  },
+  {
     id: "llm-gateway",
     category: "build",
     managePath: "/model-channels",

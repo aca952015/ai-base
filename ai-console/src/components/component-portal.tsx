@@ -25,6 +25,7 @@ import { StatusPill } from "./status-pill";
 
 const portalIcons: Record<ServiceId, LucideIcon> = {
   "global-gateway": Router,
+  "mcp-access-gateway": ShieldCheck,
   "agent-runtime": Bot,
   "llm-gateway": BrainCircuit,
   "open-connector": Network,

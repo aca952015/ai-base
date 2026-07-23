@@ -9,19 +9,21 @@
 ## 推荐拓扑
 
 ```text
-独立企业 OIDC
-   │
+独立企业 OIDC / 本地 Dex
+   │                    │ 员工登录
+   │                    ▼
 Pomerium ── AI Console / Component Portal (Next.js)
    │              │ 配置、健康检查、运行摘要
    │              ▼
    │      全局能力网关 (Caddy :8080)
-   │       │ /v1,/mcp  │ /rag,/runtime │ /connector │ /otel
-   │       ▼           ▼               ▼            ▼
-   │  Envoy AI GW  Agent Runtime   Open Connector  Jaeger
-   │       │       (FastAPI +          │
-   │       │        PydanticAI)        │
-   │       ▼           │               ▼
-   │   外部大模型       │            外部 SaaS
+   │       │ /v1       │ /mcp,/oauth        │ /rag,/runtime │ /connector
+   │       ▼           ▼                    ▼               ▼
+   │  Envoy AI GW  MCP Access GW        Agent Runtime   Open Connector
+   │       │        (Go + OAuth Broker)  (FastAPI +          │
+   │       │             │                PydanticAI)        │
+   │       │◀────────────┘                                   │
+   │       ▼           │                    ▼
+   │   外部大模型       │                 外部 SaaS
    │                   ▼
    └──────────── SilverBullet ── PostgreSQL + pgvector
                     Markdown          全文/向量
@@ -37,8 +39,9 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 全局网关 | Caddy 2.11 | 统一代理模型、MCP、RAG、Runtime、Connector、知识库、可观测与 SSO 管理入口 | 不承载业务逻辑、密钥管理或数据存储 |
 | 出口 DNS | AdGuard dnsproxy | 为 Envoy AI Gateway 与 Open Connector 提供分流解析；公网域名走 DoH，企业内网域名走本机 DNS | 不映射宿主机端口，不通过关闭 SSRF 校验兼容 Fake-IP |
 | Agent Runtime | FastAPI + `pydantic-ai-slim` | Agent 运行、结构化输出、身份上下文、业务策略 | 不保存外部 SaaS 密钥 |
+| MCP 访问网关 | Go + `net/http` + OAuth/OIDC | 面向 WorkBuddy 提供 OAuth 发现、DCR、PKCE、员工登录、MCP 鉴权、身份绑定会话和访问策略 | Dex 仅作登录上游；不注册 MCP 上游、不向 Envoy 透传员工 Token、不执行 Agent |
 | 持久工作流 | DBOS | 审批、队列、定时和恢复 | 复用 PostgreSQL，不加消息队列 |
-| AI 网关 | Envoy AI Gateway standalone | OpenAI 兼容模型入口；MCP 服务聚合、工具路由与过滤 | 网关本身无 UI/数据库；Console 生成 `AIGatewayRoute` 与 `MCPRoute` 原生资源 |
+| AI 网关 | Envoy AI Gateway standalone | OpenAI 兼容模型入口；内部 MCP 注册、聚合、工具路由与过滤 | MCP API 不直接暴露；Console 生成 `AIGatewayRoute` 与 `MCPRoute` 原生资源 |
 | 内部工具 | 官方 MCP SDK + 薄注册层 | JSON Schema、版本、作用域、风险等级、幂等和审计 | MCP 是协议，不当作安全沙箱 |
 | 外部系统 | Open Connector | OAuth、连接凭证、Action 目录和执行 | HTTP 为主接入，MCP 为兼容入口 |
 | 知识工作台 | SilverBullet | 类 Obsidian 的 Markdown、双向链接和人工审阅 | Markdown 是知识源，不将向量库当主数据 |
@@ -59,6 +62,23 @@ Agent Runtime 通过 HTTP `/v1/actions/*` 调用 Open Connector。HTTP 路径支
 - 写操作由 Agent Runtime 做身份、审批、风险和审计判断，Open Connector 只负责凭证与调用。
 - 自托管运行时不应视为完整多租户 IAM；默认每个客户组织或高隔离域部署独立实例、数据卷和加密键。
 
+## MCP 身份边界
+
+Envoy AI Gateway 是内部外部 MCP 注册中心。Console 管理 `MCPRoute`、Backend、上游密钥和工具过滤；Envoy 的 MCP 监听端口只在 Compose 网络中开放。
+
+公共 `/mcp` 与 `/oauth` 由独立 Go 服务 MCP Access Gateway 接管：
+
+- OAuth Broker 面向 WorkBuddy 提供 RFC 8414 发现、动态客户端注册、Authorization Code + S256 PKCE、Token 与 JWKS；
+- Broker 通过独立 OIDC Client 将员工登录委托给 Dex/企业 IdP，并校验 state、nonce 与上游 PKCE；
+- 每个 MCP 请求都验证 Broker JWT Access Token 的 issuer、audience、有效期和必需 scope；
+- 发布 RFC 9728 Protected Resource Metadata，并在 `401` 响应中返回 `WWW-Authenticate` 发现地址；
+- 员工 Access Token 在进入 Envoy 前移除，禁止 Token passthrough；
+- Envoy Session ID 经 HMAC 签名并绑定 `issuer + subject + client_id`，避免跨员工会话复用；
+- WorkBuddy 回调地址使用明确白名单，Refresh Token 一次性轮换；服务重启后安全失效并要求重新登录；
+- Go 网关只做身份与协议边界，Agent 运行仍由 Agent Runtime 承担。
+
+后续个人 Connector 绑定在该网关解析身份后完成：客户端不得提交 OpenConnector `connectionName`，服务端根据稳定的 `issuer + subject` 选择个人连接，且不得回退到共享 `default`。
+
 ## 出口 DNS 与 SSRF
 
 宿主机代理启用 Fake-IP 时，Docker 默认 DNS 可能把公网域名解析到 `198.18.0.0/15` 或 ULA。Open Connector 会按 SSRF 策略拒绝这些保留地址，因此 Envoy AI Gateway 与 Open Connector 共用内部 `egress-dns`：公网查询通过 DNS-over-HTTPS 获取真实地址，`AI_BASE_INTERNAL_DNS_ZONE` 指定的企业内网域名则分流到 Docker 继承的本机 DNS，默认值为 `bluetron.cn`。
@@ -67,7 +87,7 @@ Agent Runtime 通过 HTTP `/v1/actions/*` 调用 Open Connector。HTTP 路径支
 
 ## 全局能力网关边界
 
-全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 与 `/mcp` 保持 Envoy AI 原始路径，`/rag` 保留给 Agent Runtime，`/runtime`、`/connector`、`/knowledge`、`/jaeger`、`/promptfoo` 与 `/otel` 在转发前移除能力前缀；工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。
+全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 转发 Envoy 模型接口，`/mcp` 转发 MCP Access Gateway，`/rag` 保留给 Agent Runtime，`/runtime`、`/connector`、`/knowledge`、`/jaeger`、`/promptfoo` 与 `/otel` 在转发前移除能力前缀；工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。
 
 Envoy AI Gateway、AI Console、Agent Runtime、Open Connector、SilverBullet、Jaeger、Promptfoo、PostgreSQL 和 Pomerium 均不直接暴露宿主机端口。PostgreSQL 只允许 Compose 内部访问；Open Connector 与 AI Console 管理入口经过 Pomerium，其余 HTTP 工具均由全局网关反向代理。
 
@@ -104,7 +124,7 @@ SilverBullet 提供浏览器内 Markdown 编辑、Wiki Link、双向链接和插
 
 Portal 负责发现、导航和常用配置治理，专业组件负责 Action 调试、运行策略等深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 
-默认 Compose 启动 AI Console、Caddy 全局网关、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、SilverBullet、PostgreSQL/pgvector、Jaeger 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium 使用环境变量连接外部 OIDC。只有全局网关映射 loopback 宿主机端口。
+默认 Compose 启动 AI Console、Caddy 全局网关、Go MCP Access Gateway、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、SilverBullet、PostgreSQL/pgvector、Jaeger 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium 与 MCP Access Gateway 使用环境变量连接外部 OIDC。只有全局网关映射 loopback 宿主机端口。
 
 下一阶段可补充 Promptfoo 结果导出、SilverBullet 分块/Embedding 索引、发布审批与审计表；不在当前浏览器控制台中添加容器管理权限。
 
@@ -122,7 +142,7 @@ Portal 负责发现、导航和常用配置治理，专业组件负责 Action �
 - [PydanticAI](https://github.com/pydantic/pydantic-ai)
 - [Envoy AI Gateway](https://github.com/envoyproxy/ai-gateway)
 - [Caddy](https://github.com/caddyserver/caddy)
-- [Model Context Protocol Python SDK](https://github.com/modelcontextprotocol/python-sdk)
+- [Model Context Protocol Go SDK](https://github.com/modelcontextprotocol/go-sdk)
 - [pgvector](https://github.com/pgvector/pgvector)
 - [OpenTelemetry Python](https://github.com/open-telemetry/opentelemetry-python)
 - [Jaeger](https://github.com/jaegertracing/jaeger)

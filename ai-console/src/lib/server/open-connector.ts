@@ -1,4 +1,5 @@
 import type {
+  ConnectorActionDefinition,
   ConnectorAuthDefinition,
   ConnectorAuthType,
   ConnectorConnection,
@@ -179,6 +180,32 @@ function normalizeProviderSummary(value: unknown): ConnectorProviderSummary | un
   };
 }
 
+function normalizeActionDefinition(value: unknown): ConnectorActionDefinition | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = optionalString(value.id);
+  const name = optionalString(value.name) || id?.split(".").at(-1);
+  if (!id || !name) return undefined;
+  const execution = isRecord(value.execution) ? value.execution : undefined;
+  return {
+    id,
+    name,
+    description: optionalString(value.description),
+    requiredScopes: stringArray(value.requiredScopes),
+    providerPermissions: stringArray(value.providerPermissions),
+    inputSchema: isRecord(value.inputSchema) ? value.inputSchema : undefined,
+    outputSchema: isRecord(value.outputSchema) ? value.outputSchema : undefined,
+    execution: execution ? {
+      locallyExecutable: execution.locallyExecutable === true,
+      catalogOnly: execution.catalogOnly === true,
+      requiredAuthTypes: stringArray(execution.requiredAuthTypes)
+        .map(normalizeAuthType)
+        .filter((type): type is ConnectorAuthType => Boolean(type)),
+      noAuthRunnable: execution.noAuthRunnable === true,
+      needsCredential: execution.needsCredential === true,
+    } : undefined,
+  };
+}
+
 function normalizeProviderDetail(value: unknown): ConnectorProviderDetail {
   const summary = normalizeProviderSummary(value);
   if (!summary || !isRecord(value)) throw new OpenConnectorError("OpenConnector 返回了无效的 Connector 定义");
@@ -186,6 +213,9 @@ function normalizeProviderDetail(value: unknown): ConnectorProviderDetail {
     ...summary,
     auth: Array.isArray(value.auth)
       ? value.auth.map(normalizeAuthDefinition).filter((auth): auth is ConnectorAuthDefinition => Boolean(auth))
+      : [],
+    actions: Array.isArray(value.actions)
+      ? value.actions.map(normalizeActionDefinition).filter((action): action is ConnectorActionDefinition => Boolean(action))
       : [],
   };
 }
