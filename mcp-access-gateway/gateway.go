@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
@@ -28,15 +30,25 @@ type mcpGateway struct {
 	verifier tokenVerifier
 	sessions *sessionSigner
 	clients  *authenticatedClientRegistry
+	resolver connectorBindingResolver
 	proxy    *httputil.ReverseProxy
 }
 
 func newMCPGateway(cfg config, verifier tokenVerifier) *mcpGateway {
+	return newMCPGatewayWithResolver(cfg, verifier, newHTTPConnectorBindingResolver(cfg))
+}
+
+func newMCPGatewayWithResolver(
+	cfg config,
+	verifier tokenVerifier,
+	resolver connectorBindingResolver,
+) *mcpGateway {
 	gateway := &mcpGateway{
 		cfg:      cfg,
 		verifier: verifier,
 		sessions: newSessionSigner(cfg.signingKey, cfg.sessionLifetime),
 		clients:  newAuthenticatedClientRegistry(),
+		resolver: resolver,
 	}
 	gateway.proxy = gateway.newReverseProxy(cfg.upstreamURL)
 	return gateway
@@ -143,6 +155,30 @@ func (g *mcpGateway) authenticate(next http.Handler) http.Handler {
 }
 
 func (g *mcpGateway) proxyMCP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxMCPRequestBody+1))
+		if err != nil || len(body) > maxMCPRequestBody {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error":             "invalid_request",
+				"error_description": "MCP request body is unreadable or too large",
+			})
+			return
+		}
+		_ = r.Body.Close()
+
+		caller, ok := r.Context().Value(identityContextKey).(identity)
+		if !ok {
+			g.writeAuthError(w, http.StatusUnauthorized, "invalid_token")
+			return
+		}
+		filtered := g.filterConnectorRequest(r.Context(), body, caller)
+		if filtered.handled {
+			writeJSON(w, http.StatusOK, filtered.localResponse)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(filtered.body))
+		r.ContentLength = int64(len(filtered.body))
+	}
 	g.proxy.ServeHTTP(w, r)
 }
 

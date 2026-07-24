@@ -39,7 +39,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 全局网关 | Caddy 2.11 | 统一代理模型、MCP、RAG、Runtime、Connector、知识库、可观测与 SSO 管理入口 | 不承载业务逻辑、密钥管理或数据存储 |
 | 出口 DNS | AdGuard dnsproxy | 为 Envoy AI Gateway 与 Open Connector 提供分流解析；公网域名走 DoH，企业内网域名走本机 DNS | 不映射宿主机端口，不通过关闭 SSRF 校验兼容 Fake-IP |
 | Agent Runtime | FastAPI + `pydantic-ai-slim` | Agent 运行、结构化输出、身份上下文、业务策略 | 不保存外部 SaaS 密钥 |
-| MCP 访问网关 | Go + `net/http` + OAuth/OIDC | 面向 WorkBuddy 提供 OAuth 发现、DCR、PKCE、员工登录、MCP 鉴权、身份绑定会话和访问策略 | Dex 仅作登录上游；不注册 MCP 上游、不向 Envoy 透传员工 Token、不执行 Agent |
+| MCP 访问网关 | Go + `net/http` + OAuth/OIDC | 面向兼容 OAuth 的 MCP 客户端提供发现、DCR、PKCE、员工登录、MCP 鉴权、身份绑定会话和访问策略 | Dex 仅作登录上游；不注册 MCP 上游、不向 Envoy 透传员工 Token、不执行 Agent |
 | 持久工作流 | DBOS | 审批、队列、定时和恢复 | 复用 PostgreSQL，不加消息队列 |
 | AI 网关 | Envoy AI Gateway standalone | OpenAI 兼容模型入口；内部 MCP 注册、聚合、工具路由与过滤 | MCP API 不直接暴露；Console 生成 `AIGatewayRoute` 与 `MCPRoute` 原生资源 |
 | 内部工具 | 官方 MCP SDK + 薄注册层 | JSON Schema、版本、作用域、风险等级、幂等和审计 | MCP 是协议，不当作安全沙箱 |
@@ -68,17 +68,18 @@ Envoy AI Gateway 是内部外部 MCP 注册中心。Console 管理 `MCPRoute`、
 
 公共 `/mcp` 与 `/oauth` 由独立 Go 服务 MCP Access Gateway 接管：
 
-- OAuth Broker 面向 WorkBuddy 提供 RFC 8414 发现、动态客户端注册、Authorization Code + S256 PKCE、Token 与 JWKS；
+- OAuth Broker 面向兼容 OAuth 的 MCP 客户端提供 RFC 8414 发现、动态客户端注册、Authorization Code + S256 PKCE、Token 与 JWKS；
 - Broker 通过独立 OIDC Client 将员工登录委托给 Dex/企业 IdP，并校验 state、nonce 与上游 PKCE；
 - 网关在内存中保留最近 24 小时的成功鉴权客户端摘要，按员工 Subject、Issuer 与 OAuth Client 绑定聚合；Console 通过独立管理令牌读取，外部能力网关不暴露该管理端点；
 - 每个 MCP 请求都验证 Broker JWT Access Token 的 issuer、audience、有效期和必需 scope；
+- 保护 OpenConnector 的 `execute_action`、`get_action_guide` 与 `list_connections`：网关按 `issuer + subject` 查询员工绑定，覆盖客户端连接名，并在本地过滤连接列表；
 - 发布 RFC 9728 Protected Resource Metadata，并在 `401` 响应中返回 `WWW-Authenticate` 发现地址；
 - 员工 Access Token 在进入 Envoy 前移除，禁止 Token passthrough；
 - Envoy Session ID 经 HMAC 签名并绑定 `issuer + subject + client_id`，避免跨员工会话复用；
-- WorkBuddy 回调地址使用明确白名单，Refresh Token 一次性轮换；服务重启后安全失效并要求重新登录；
-- Go 网关只做身份与协议边界，Agent 运行仍由 Agent Runtime 承担。
+- MCP 客户端回调地址使用明确白名单，Refresh Token 一次性轮换；服务重启后安全失效并要求重新登录；
+- Go 网关只做身份、个人连接选择与协议边界，Agent 运行仍由 Agent Runtime 承担。
 
-后续个人 Connector 绑定在该网关解析身份后完成：客户端不得提交 OpenConnector `connectionName`，服务端根据稳定的 `issuer + subject` 选择个人连接，且不得回退到共享 `default`。
+个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，解析器只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
 
 ## 出口 DNS 与 SSRF
 
@@ -114,7 +115,8 @@ SilverBullet 提供浏览器内 Markdown 编辑、Wiki Link、双向链接和插
 - 通过独立卡片页面管理大模型渠道、Provider/Base URL、服务端 Key、模型别名和启停状态，并原子生成 Envoy AI Gateway 原生资源；
 - 默认将 Open Connector `/mcp` 以系统托管、只读配置接入 Envoy AI，并通过与模型配置并列的 MCP 配置页面管理其他 Streamable HTTP 上游、工具命名空间、允许/排除列表和可选密钥；
 - 通过连接器配置页面管理 OpenConnector 的连接生命周期；Connector 搜索、认证方式和动态字段读取真实 Provider Schema，凭证只经服务端 Admin API 写入且不回显，OAuth 授权成功后才创建卡片；
-- 通过独立集成管理页面维护飞书、企微和钉钉的多个企业应用；本阶段只保存 App ID 与经 AES-256-GCM 加密的 App Secret，数据落 PostgreSQL，不触发 OAuth、OpenConnector 连接或员工身份绑定；
+- 通过管理员集成管理页面维护飞书、企微和钉钉的多个企业应用，并约束每个平台只有一个启用应用；App Secret 经 AES-256-GCM 加密后落 PostgreSQL；
+- 普通员工通过账号绑定页面发起受支持平台的个人 OAuth；OpenConnector 保存个人 Token，PostgreSQL 保存 OIDC 主体到命名连接的映射，当前上游只有飞书支持用户 OAuth；
 - 通过单独修订文件触发网关进程重载，Key 以文件替换方式注入生成过程，不写入路由 YAML 或浏览器响应；
 - 服务端聚合全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、SilverBullet、Jaeger 与 Promptfoo 的真实运行摘要；
 - JSON 配置读取、字段白名单校验和原子写入；

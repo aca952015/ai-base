@@ -268,7 +268,7 @@ func (b *oauthBroker) registerClient(w http.ResponseWriter, r *http.Request) {
 			w,
 			http.StatusBadRequest,
 			"invalid_redirect_uri",
-			"Exactly one WorkBuddy or loopback redirect URI is required",
+			"Exactly one allowed MCP client redirect URI is required",
 		)
 		return
 	}

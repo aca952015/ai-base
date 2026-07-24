@@ -12,6 +12,10 @@ services:
       AI_CONSOLE_DATA_DIR: /data
       DATABASE_URL: postgresql://ai_base:${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}@postgres:5432/ai_base
       AI_CONSOLE_SECRET_ENCRYPTION_KEY: ${AI_CONSOLE_SECRET_ENCRYPTION_KEY:-local-ai-console-secret-encryption-key-change-me}
+      AI_CONSOLE_ADMIN_EMAILS: ${AI_CONSOLE_ADMIN_EMAILS:-admin@bluetron.cn}
+      AI_CONSOLE_DEV_IDENTITY_ENABLED: ${AI_CONSOLE_DEV_IDENTITY_ENABLED:-false}
+      POMERIUM_JWT_PUBLIC_KEY_PATH: /run/secrets/pomerium-signing-public.pem
+      POMERIUM_JWT_AUDIENCE: ai-console.localhost.pomerium.io
       GLOBAL_GATEWAY_URL: http://global-gateway:8080
       MCP_ACCESS_GATEWAY_URL: http://mcp-access-gateway:8081
       MCP_ADMIN_TOKEN: ${MCP_ADMIN_TOKEN:-local-mcp-admin-token-change-me}
@@ -22,6 +26,9 @@ services:
       OPEN_CONNECTOR_URL: http://global-gateway:8080/connector
       OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
       OPEN_CONNECTOR_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:-local-admin-token-change-me}
+      MCP_CONNECTOR_BINDING_RESOLVER_TOKEN: ${MCP_CONNECTOR_BINDING_RESOLVER_TOKEN:-local-connector-binding-resolver-token-change-me}
+      MCP_OIDC_ISSUER: ${MCP_OIDC_ISSUER:-http://127.0.0.1:8080/oauth}
+      MCP_LOGIN_OIDC_ISSUER: ${MCP_LOGIN_OIDC_ISSUER:-http://dex.localtest.me:5556/dex}
       SILVERBULLET_URL: http://global-gateway:8080/knowledge
       SILVERBULLET_SPACE_DIR: /knowledge
       POSTGRES_HOST: postgres
@@ -32,6 +39,7 @@ services:
     volumes:
       - console-data:/data
       - ./deploy/silverbullet/space:/knowledge:ro
+      - ./deploy/pomerium/dev-signing-public.pem:/run/secrets/pomerium-signing-public.pem:ro
     depends_on:
       global-gateway:
         condition: service_healthy
@@ -166,6 +174,8 @@ services:
       MCP_SESSION_SIGNING_KEY: ${MCP_SESSION_SIGNING_KEY:-local-mcp-session-signing-key-change-me}
       MCP_SESSION_LIFETIME: ${MCP_SESSION_LIFETIME:-8h}
       MCP_ADMIN_TOKEN: ${MCP_ADMIN_TOKEN:-local-mcp-admin-token-change-me}
+      MCP_CONNECTOR_BINDING_RESOLVER_URL: http://ai-console:3000/api/internal/connector-bindings/resolve
+      MCP_CONNECTOR_BINDING_RESOLVER_TOKEN: ${MCP_CONNECTOR_BINDING_RESOLVER_TOKEN:-local-connector-binding-resolver-token-change-me}
     volumes:
       - mcp-auth-data:/data
     depends_on:
@@ -230,7 +240,10 @@ services:
       start_period: 5s
 
   open-connector:
-    image: ghcr.io/oomol-lab/open-connector:v1.2.0
+    image: ai-base/open-connector:main-27b111b
+    build:
+      context: ./vendor/open-connector
+      dockerfile: docker/Dockerfile
     restart: unless-stopped
     dns:
       - 172.30.54.53
@@ -325,6 +338,7 @@ services:
       SHARED_SECRET: ${POMERIUM_SHARED_SECRET:-tq+Rx6zdR8G7iv9SFdiCS1dBGVnug94N+WyOSx1QyCM=}
     volumes:
       - ./deploy/pomerium/config.example.yaml:/pomerium/config.yaml:ro
+      - ./deploy/pomerium/dev-signing-key.pem:/run/secrets/pomerium-signing-key.pem:ro
     depends_on:
       ai-console:
         condition: service_healthy

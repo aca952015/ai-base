@@ -365,11 +365,15 @@ export async function saveConnectorOAuthConfig(service: string, input: Connector
   return config;
 }
 
-export async function startConnectorOAuthAuthorization(service: string, connectionName: string): Promise<ConnectorOAuthAuthorization> {
+export async function startConnectorOAuthAuthorization(
+  service: string,
+  connectionName: string,
+  actionIds?: string[],
+): Promise<ConnectorOAuthAuthorization> {
   const safeService = assertService(service);
   const payload = await requestOpenConnector<Record<string, unknown>>("api/oauth/authorizations", {
     method: "POST",
-    body: JSON.stringify({ service: safeService, connectionName }),
+    body: JSON.stringify({ service: safeService, connectionName, actionIds }),
   });
   const authorizationUrl = optionalString(payload.authorizationUrl);
   if (!authorizationUrl) throw new OpenConnectorError("OpenConnector 未返回 OAuth 授权地址");

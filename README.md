@@ -5,11 +5,12 @@
 ## Docker 一键启动
 
 ```bash
+git submodule update --init --recursive
 docker compose up -d --build
 docker compose ps
 ```
 
-首次拉取和构建需要几分钟。只有 `global-gateway` 映射宿主机端口，其他组件仅在 Compose 网络内开放：
+OpenConnector 从 `vendor/open-connector` 中固定的上游提交构建本地镜像，当前固定为 `27b111b50b80db83cf472ed5290372eda2cd0130`。这个提交包含 MCP 命名连接能力；浮动 `main` 和旧的 `v1.3.0` 镜像都不会在部署时使用。首次拉取和构建需要几分钟。只有 `global-gateway` 映射宿主机端口，其他组件仅在 Compose 网络内开放：
 
 | 服务 | 地址 | 用途 |
 | --- | --- | --- |
@@ -51,11 +52,11 @@ POMERIUM_IDP_CLIENT_ID=ai-base-pomerium
 POMERIUM_IDP_CLIENT_SECRET=replace-with-the-real-client-secret
 ```
 
-Dex 中的 `ai-base-pomerium` 客户端回调地址是 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback`。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域；更换企业域名时同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml)。Pomerium 本机入口使用开发证书；正式部署必须配置受信任证书、正式域名和企业 OIDC。
+Dex 中的 `ai-base-pomerium` 客户端回调地址是 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback`。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域；更换企业域名时同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml)。Pomerium 本机入口使用开发证书和仓库内的本地签名键；正式部署必须替换签名键，并配置受信任证书、正式域名和企业 OIDC。AI Console 会验证 Pomerium 签名的 JWT Assertion、有效期和 audience，不信任可由客户端直接伪造的身份头。
 
 OpenConnector 的管理请求由独立内部代理注入 Admin Token，Token 不进入浏览器。OpenConnector 不再映射宿主机端口；管理入口经 Pomerium，Agent 功能流量经全局网关 `/connector`，分别使用 Admin Token 与 Runtime Token。
 
-MCP Access Gateway 内置轻量 OAuth Broker，面向 WorkBuddy 提供标准发现、动态客户端注册、Authorization Code + S256 PKCE 和令牌端点；Dex 只作为员工登录上游，不要求 Dex 支持动态客户端注册：
+MCP Access Gateway 内置轻量 OAuth Broker，面向兼容 MCP OAuth 的客户端提供标准发现、动态客户端注册、Authorization Code + S256 PKCE 和令牌端点；Dex 只作为员工登录上游，不要求 Dex 支持动态客户端注册。WorkBuddy 是常用客户端示例，但不是唯一入口：
 
 ```dotenv
 MCP_PUBLIC_RESOURCE_URL=http://127.0.0.1:8080/mcp
@@ -70,7 +71,7 @@ MCP_SESSION_SIGNING_KEY=replace-with-at-least-32-random-bytes
 MCP_ADMIN_TOKEN=replace-with-a-random-admin-token
 ```
 
-WorkBuddy 只需配置 MCP URL：
+以 WorkBuddy 为例，只需配置 MCP URL：
 
 ```json
 {
@@ -82,7 +83,9 @@ WorkBuddy 只需配置 MCP URL：
 }
 ```
 
-点击“连接”后，WorkBuddy 从 `/.well-known/oauth-protected-resource/mcp` 发现 AI Base OAuth Broker，完成客户端注册后跳转 Dex 登录。Broker 使用 Dex 的稳定用户 ID 派生内部员工 ID，签发 audience 为 MCP Resource、包含 `ai-base:mcp` scope 的短期 JWT；员工令牌进入 Envoy 前会被移除。刷新令牌为服务内存中的一次性轮换凭据，Broker 重启后客户端需要重新登录。
+客户端点击“连接”后，从 `/.well-known/oauth-protected-resource/mcp` 发现 AI Base OAuth Broker，完成客户端注册后跳转 Dex 登录。Broker 使用 Dex 的稳定用户 ID 派生内部员工 ID，签发 audience 为 MCP Resource、包含 `ai-base:mcp` scope 的短期 JWT；员工令牌进入 Envoy 前会被移除。刷新令牌为服务内存中的一次性轮换凭据，Broker 重启后客户端需要重新登录。
+
+员工还需要在 AI Console 的 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account) 完成个人企业账号授权。MCP Access Gateway 会按 Broker JWT 的 `issuer + subject` 查询 PostgreSQL 映射，覆盖客户端提交的 `connectionName`，并只向当前员工的 MCP 客户端返回该员工自己的有效连接。需要凭据的 Connector 在没有绑定、连接已失效或映射服务不可用时会关闭失败，不会回退到共享 `default` 连接；上游明确声明为 `no_auth` 的虚拟公共 Connector 可以按系统 `default` 连接使用。
 
 `http://127.0.0.1:8080` 只用于本机验证。共享环境必须改用同一个正式 HTTPS 主机，并同步更新 MCP Resource、OAuth Issuer、Dex 回调地址和允许的客户端回调白名单。
 
@@ -95,7 +98,7 @@ WorkBuddy 只需配置 MCP URL：
 | `/v1`、`/v1/*` | Envoy AI Gateway 模型 API | 保留路径，支持流式响应 |
 | `/mcp`、`/mcp/*` | MCP Access Gateway | OIDC 验证后转发到内部 Envoy MCP，支持 Streamable HTTP |
 | `/.well-known/oauth-protected-resource/mcp` | MCP Access Gateway | OAuth Protected Resource Metadata |
-| `/oauth/*`、OAuth well-known 路径 | MCP Access Gateway | WorkBuddy OAuth、DCR、PKCE、Token 与 JWKS |
+| `/oauth/*`、OAuth well-known 路径 | MCP Access Gateway | MCP 客户端 OAuth、DCR、PKCE、Token 与 JWKS |
 | `/rag/*` | Agent Runtime RAG API | 保留路径；当前 `/rag/health` 返回数据库与 pgvector 的真实就绪状态 |
 | `/runtime/*` | Agent Runtime API | 移除 `/runtime` 前缀 |
 | `/llm-admin/*` | Envoy AI Gateway 管理 API | 移除 `/llm-admin` 前缀，仅供控制台内部使用 |
@@ -165,9 +168,16 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 
 ### 集成管理
 
-[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 固定提供飞书、企微和钉钉三个分组。每个分组可以登记多个企业应用，当前只管理 `App ID` 与 `App Secret`，不发起 OAuth、不创建 OpenConnector 连接，也不绑定员工身份。
+[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 仅供管理员使用，固定提供飞书、企微和钉钉三个分组。每个分组可以登记多个企业应用，但同一平台只有一个启用应用；员工开始授权前，AI Base 会把启用应用的 OAuth Client 配置同步到 OpenConnector。
 
-应用配置独立保存在 PostgreSQL 的 `integration_applications` 表中。`App Secret` 使用 `AI_CONSOLE_SECRET_ENCRYPTION_KEY` 在服务端执行 AES-256-GCM 加密，读取接口和编辑表单均不回显明文。
+应用配置独立保存在 PostgreSQL 的 `integration_applications` 表中。`App Secret` 使用 `AI_CONSOLE_SECRET_ENCRYPTION_KEY` 在服务端执行 AES-256-GCM 加密，读取接口和编辑表单均不回显明文。OpenConnector 当前只有飞书 Provider 提供用户级 OAuth；企微和钉钉现有 Provider 是机器人/API Key 模式，因此控制台保留企业应用配置，但个人授权按钮保持不可用，直到上游提供用户 OAuth。
+
+普通员工登录 Console 后只进入 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account)。飞书授权成功后：
+
+1. OpenConnector 在自己的加密 SQLite 数据中保存 OAuth Token；
+2. PostgreSQL 的 `employee_connector_bindings` 只保存员工 OIDC 主体与命名连接的映射、状态和安全摘要；
+3. MCP 客户端通过 AI Base OAuth 登录后，请求由服务端选择该员工的命名连接；
+4. 客户端伪造的连接名会被覆盖，员工不能读取或调用其他员工的连接。
 
 ## Console 数据接口
 
@@ -180,6 +190,8 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `GET/PUT/DELETE /api/open-connector/connections`：读取安全摘要，并在服务端创建、更新或删除真实连接。
 - `GET/PUT /api/open-connector/oauth-configs/:service`、`POST /api/open-connector/oauth-authorizations`：管理 OAuth Client 配置并启动授权。
 - `GET/POST /api/integrations`、`PUT/DELETE /api/integrations/:id`：读取并管理飞书、企微和钉钉应用凭据。
+- `POST /api/integrations/:id/activate`：将应用设为平台唯一启用配置，并同步支持的 OAuth Client。
+- `GET /api/account/integrations`、`POST/DELETE /api/account/integrations/:platform/authorize`：读取、发起或解除当前员工个人绑定。
 
 OpenConnector Token、模型渠道 Key、MCP 上游 Key 与企业应用 Secret 保存在服务端，知识目录以只读方式挂载。
 
@@ -195,9 +207,10 @@ docker compose --profile quality up -d promptfoo
 
 ## 本机验证与生产边界
 
-Compose 内置的数据库密码、OpenConnector token、Pomerium Client Secret 和加密键只用于 loopback 本机验证。共享主机或正式环境必须从 [`.env.example`](./.env.example) 创建 `.env` 并替换全部值；OpenConnector 与 AI Console 的加密键都必须稳定备份，丢失后无法恢复已经加密的凭据。
+Compose 内置的数据库密码、OpenConnector token、Pomerium Client Secret、开发签名键和加密键只用于 loopback 本机验证。共享主机或正式环境必须从 [`.env.example`](./.env.example) 创建 `.env` 并替换全部值，同时替换 `deploy/pomerium/dev-signing-key.pem` 及对应公钥挂载；OpenConnector 与 AI Console 的加密键都必须稳定备份，丢失后无法恢复已经加密的凭据。
 
 - OpenConnector 默认禁止通用 provider proxy，避免 Agent 绕过审阅过的 Action。
+- `MCP_CONNECTOR_BINDING_RESOLVER_TOKEN` 只用于 MCP Access Gateway 到 AI Console 的 Compose 内网查询，正式环境必须替换默认值。
 - Promptfoo 和 Jaeger UI 没有内建企业认证；正式环境应放在 Pomerium 或等价身份边界后。
 - Jaeger 默认使用内存存储，容器重启后 Trace 会清空；审计数据保存在 PostgreSQL，Trace 不作为合规账本。
 

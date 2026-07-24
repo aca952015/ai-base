@@ -1,0 +1,334 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+const maxMCPRequestBody = 2 << 20
+
+var protectedOpenConnectorTools = map[string]struct{}{
+	"execute_action":   {},
+	"get_action_guide": {},
+	"list_connections": {},
+}
+
+type mcpRequestFilterResult struct {
+	body          []byte
+	localResponse any
+	handled       bool
+}
+
+func (g *mcpGateway) filterConnectorRequest(
+	ctx context.Context,
+	body []byte,
+	caller identity,
+) mcpRequestFilterResult {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+
+	var payload any
+	if err := decoder.Decode(&payload); err != nil {
+		return mcpRequestFilterResult{body: body}
+	}
+
+	switch typed := payload.(type) {
+	case map[string]any:
+		return g.filterSingleConnectorCall(ctx, body, typed, caller)
+	case []any:
+		if !batchContainsProtectedConnectorCall(typed) {
+			return mcpRequestFilterResult{body: body}
+		}
+		return mcpRequestFilterResult{
+			handled:       true,
+			localResponse: protectedBatchErrorResponses(typed),
+		}
+	default:
+		return mcpRequestFilterResult{body: body}
+	}
+}
+
+func (g *mcpGateway) filterSingleConnectorCall(
+	ctx context.Context,
+	original []byte,
+	request map[string]any,
+	caller identity,
+) mcpRequestFilterResult {
+	tool, arguments, protected := protectedConnectorToolCall(request)
+	if !protected {
+		return mcpRequestFilterResult{body: original}
+	}
+
+	if tool == "list_connections" {
+		bindings, err := g.resolver.list(ctx, caller)
+		if err != nil {
+			return mcpRequestFilterResult{
+				handled:       true,
+				localResponse: connectorToolErrorResponse(request["id"], resolverToolError(err)),
+			}
+		}
+		if service, _ := arguments["service"].(string); strings.TrimSpace(service) != "" {
+			filtered := bindings[:0]
+			for _, binding := range bindings {
+				if binding.Service == strings.TrimSpace(service) {
+					filtered = append(filtered, binding)
+				}
+			}
+			bindings = filtered
+		}
+		return mcpRequestFilterResult{
+			handled:       true,
+			localResponse: connectorListResponse(request["id"], bindings),
+		}
+	}
+
+	actionID, _ := arguments["actionId"].(string)
+	service, ok := serviceFromActionID(actionID)
+	if !ok {
+		return mcpRequestFilterResult{
+			handled: true,
+			localResponse: connectorToolErrorResponse(
+				request["id"],
+				toolError{
+					code:    "invalid_action_id",
+					message: "actionId must contain a provider service prefix, for example feishu.list_records",
+				},
+			),
+		}
+	}
+
+	binding, err := g.resolver.resolve(ctx, caller, service)
+	if err != nil {
+		return mcpRequestFilterResult{
+			handled:       true,
+			localResponse: connectorToolErrorResponse(request["id"], resolverToolError(err)),
+		}
+	}
+
+	// The authenticated employee-to-connector mapping is authoritative. Public
+	// no-auth providers intentionally use their virtual default connection;
+	// credential-backed providers must always receive the server-selected alias.
+	if binding.Public {
+		delete(arguments, "connectionName")
+	} else {
+		arguments["connectionName"] = binding.ConnectionName
+	}
+	updated, err := json.Marshal(request)
+	if err != nil {
+		return mcpRequestFilterResult{
+			handled: true,
+			localResponse: connectorToolErrorResponse(
+				request["id"],
+				toolError{code: "invalid_request", message: "Unable to secure the connector request"},
+			),
+		}
+	}
+	return mcpRequestFilterResult{body: updated}
+}
+
+func protectedConnectorToolCall(request map[string]any) (string, map[string]any, bool) {
+	method, _ := request["method"].(string)
+	if method != "tools/call" {
+		return "", nil, false
+	}
+
+	params, ok := request["params"].(map[string]any)
+	if !ok {
+		return "", nil, false
+	}
+	name, _ := params["name"].(string)
+	tool := normalizedOpenConnectorTool(name)
+	if tool == "" {
+		return "", nil, false
+	}
+
+	arguments, ok := params["arguments"].(map[string]any)
+	if !ok {
+		arguments = make(map[string]any)
+		params["arguments"] = arguments
+	}
+	return tool, arguments, true
+}
+
+func normalizedOpenConnectorTool(name string) string {
+	name = strings.TrimSpace(name)
+	if _, ok := protectedOpenConnectorTools[name]; ok {
+		return name
+	}
+	for tool := range protectedOpenConnectorTools {
+		if strings.HasSuffix(name, "__"+tool) && len(name) > len(tool)+2 {
+			return tool
+		}
+	}
+	return ""
+}
+
+func serviceFromActionID(actionID string) (string, bool) {
+	actionID = strings.TrimSpace(actionID)
+	service, action, found := strings.Cut(actionID, ".")
+	service = strings.TrimSpace(service)
+	action = strings.TrimSpace(action)
+	if !found || service == "" || action == "" {
+		return "", false
+	}
+	for _, character := range service {
+		if (character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') &&
+			character != '_' &&
+			character != '-' {
+			return "", false
+		}
+	}
+	return service, true
+}
+
+func batchContainsProtectedConnectorCall(batch []any) bool {
+	for _, item := range batch {
+		request, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, _, protected := protectedConnectorToolCall(request); protected {
+			return true
+		}
+	}
+	return false
+}
+
+func protectedBatchErrorResponses(batch []any) []any {
+	responses := make([]any, 0, len(batch))
+	for _, item := range batch {
+		request, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, hasID := request["id"]; !hasID {
+			continue
+		}
+		responses = append(responses, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request["id"],
+			"error": map[string]any{
+				"code":    -32600,
+				"message": "Batched OpenConnector tool calls are not supported by the identity gateway",
+			},
+		})
+	}
+	if len(responses) == 0 {
+		return []any{
+			map[string]any{
+				"jsonrpc": "2.0",
+				"id":      nil,
+				"error": map[string]any{
+					"code":    -32600,
+					"message": "Batched OpenConnector tool calls are not supported by the identity gateway",
+				},
+			},
+		}
+	}
+	return responses
+}
+
+type toolError struct {
+	code        string
+	message     string
+	remediation map[string]any
+}
+
+func resolverToolError(err error) toolError {
+	switch {
+	case errors.Is(err, errConnectorBindingNotFound):
+		return toolError{
+			code:    "connector_binding_required",
+			message: "No active personal connector is available for this employee and service. Open AI Base > Account binding, bind or reauthorize the corresponding enterprise account, then retry. Do not request credentials or use a shared/default connection.",
+			remediation: map[string]any{
+				"action": "open_account_binding",
+				"path":   "/account",
+				"label":  "AI Base 账号绑定",
+			},
+		}
+	case errors.Is(err, errInvalidConnectorBinding):
+		return toolError{
+			code:    "connector_binding_invalid",
+			message: "The employee connector binding is invalid",
+		}
+	default:
+		return toolError{
+			code:    "connector_binding_resolver_unavailable",
+			message: "Employee connector authorization is temporarily unavailable",
+		}
+	}
+}
+
+func connectorListResponse(id any, bindings []connectorBinding) map[string]any {
+	connections := make([]map[string]any, 0, len(bindings))
+	for _, binding := range bindings {
+		connection := map[string]any{
+			"id":             binding.Service + ":" + binding.ConnectionName,
+			"service":        binding.Service,
+			"connectionName": binding.ConnectionName,
+			"default":        binding.Public,
+		}
+		if binding.Public {
+			connection["public"] = true
+		}
+		if binding.AuthType != "" {
+			connection["authType"] = binding.AuthType
+		}
+		profile := binding.Profile
+		if profile == nil && binding.DisplayName != "" {
+			profile = map[string]any{"displayName": binding.DisplayName}
+		}
+		if profile != nil {
+			connection["profile"] = profile
+		}
+		connections = append(connections, connection)
+	}
+	return connectorToolResponse(id, map[string]any{
+		"ok":   true,
+		"data": connections,
+	}, false)
+}
+
+func connectorToolErrorResponse(id any, failure toolError) map[string]any {
+	errorPayload := map[string]any{
+		"code":    failure.code,
+		"message": failure.message,
+	}
+	if failure.remediation != nil {
+		errorPayload["remediation"] = failure.remediation
+	}
+	return connectorToolResponse(id, map[string]any{
+		"ok":    false,
+		"error": errorPayload,
+	}, true)
+}
+
+func connectorToolResponse(id any, payload map[string]any, isError bool) map[string]any {
+	pretty, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		pretty = []byte(fmt.Sprintf(`{"ok":false,"error":{"code":"internal_error","message":%q}}`, err.Error()))
+		isError = true
+	}
+	result := map[string]any{
+		"content": []map[string]any{
+			{
+				"type": "text",
+				"text": string(pretty),
+			},
+		},
+		"structuredContent": payload,
+	}
+	if isError {
+		result["isError"] = true
+	}
+	return map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	}
+}

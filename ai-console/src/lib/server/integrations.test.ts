@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { IntegrationApplication } from "../control-plane/integrations";
+import type {
+  EmployeeConnectorBinding,
+  IntegrationApplication,
+} from "../control-plane/integrations";
 import {
+  buildEmployeeIntegrationsSnapshot,
   buildEnterpriseIntegrationsSnapshot,
+  decryptIntegrationSecret,
   encryptIntegrationSecret,
 } from "./integrations";
 
@@ -26,6 +31,8 @@ describe("enterprise integration store", () => {
         name: "钉钉协同应用",
         appId: "ding-app",
         note: "用于经销商订单协同",
+        actionIds: [],
+        active: true,
         secretConfigured: true,
         createdAt: "2026-07-23T01:00:00.000Z",
         updatedAt: "2026-07-23T01:00:00.000Z",
@@ -36,6 +43,8 @@ describe("enterprise integration store", () => {
         name: "飞书协同应用",
         appId: "feishu-app",
         note: "用于项目交付风险分析",
+        actionIds: ["feishu.search_bitable_records"],
+        active: true,
         secretConfigured: true,
         createdAt: "2026-07-23T02:00:00.000Z",
         updatedAt: "2026-07-23T02:00:00.000Z",
@@ -45,6 +54,18 @@ describe("enterprise integration store", () => {
     const snapshot = buildEnterpriseIntegrationsSnapshot(
       applications,
       "2026-07-23T03:00:00.000Z",
+      {
+        feishu: {
+          actions: [{
+            id: "feishu.search_bitable_records",
+            name: "search_bitable_records",
+            description: "Read Bitable records.",
+            providerPermissions: ["bitable:app:readonly"],
+          }],
+          defaultActionIds: ["feishu.search_bitable_records"],
+          oauthBaseScopes: ["offline_access"],
+        },
+      },
     );
 
     expect(snapshot.groups.map((group) => group.platform)).toEqual([
@@ -55,6 +76,10 @@ describe("enterprise integration store", () => {
     expect(snapshot.groups[0].applications).toEqual([applications[1]]);
     expect(snapshot.groups[1].applications).toEqual([]);
     expect(snapshot.groups[2].applications).toEqual([applications[0]]);
+    expect(snapshot.groups[0].actions.map((action) => action.id)).toEqual([
+      "feishu.search_bitable_records",
+    ]);
+    expect(snapshot.groups[0].oauthBaseScopes).toEqual(["offline_access"]);
     expect(snapshot.updatedAt).toBe("2026-07-23T03:00:00.000Z");
   });
 
@@ -67,5 +92,79 @@ describe("enterprise integration store", () => {
     expect(second).toMatch(/^v1\.[^.]+\.[^.]+\.[^.]+$/);
     expect(first).not.toContain(secret);
     expect(first).not.toBe(second);
+    expect(decryptIntegrationSecret(first)).toBe(secret);
+  });
+
+  it("builds one employee binding card for every configured application", () => {
+    const applications: IntegrationApplication[] = [
+      {
+        id: "019fd023-aec6-7cd0-8d43-29f9523a63c1",
+        platform: "feishu",
+        name: "WorkBuddy 生产应用",
+        appId: "feishu-production",
+        note: "生产员工使用",
+        actionIds: ["feishu.search_bitable_records"],
+        active: true,
+        secretConfigured: true,
+        createdAt: "2026-07-23T01:00:00.000Z",
+        updatedAt: "2026-07-23T01:00:00.000Z",
+      },
+      {
+        id: "019fd023-aec6-7cd0-8d43-29f9523a63c2",
+        platform: "feishu",
+        name: "WorkBuddy 测试应用",
+        appId: "feishu-staging",
+        note: "测试员工使用",
+        actionIds: ["feishu.get_document"],
+        active: false,
+        secretConfigured: true,
+        createdAt: "2026-07-23T02:00:00.000Z",
+        updatedAt: "2026-07-23T02:00:00.000Z",
+      },
+      {
+        id: "019fd023-aec6-7cd0-8d43-29f9523a63c3",
+        platform: "dingtalk",
+        name: "钉钉审批应用",
+        appId: "dingtalk-approval",
+        note: "",
+        actionIds: [],
+        active: true,
+        secretConfigured: true,
+        createdAt: "2026-07-23T03:00:00.000Z",
+        updatedAt: "2026-07-23T03:00:00.000Z",
+      },
+    ];
+    const binding: EmployeeConnectorBinding = {
+      id: "019fd023-aec6-7cd0-8d43-29f9523a63d1",
+      applicationId: applications[0].id,
+      platform: "feishu",
+      service: "feishu",
+      connectionName: "usr_employee",
+      status: "connected",
+      connectedAt: "2026-07-23T04:00:00.000Z",
+      updatedAt: "2026-07-23T04:00:00.000Z",
+    };
+
+    const snapshot = buildEmployeeIntegrationsSnapshot(
+      applications,
+      [binding],
+      { name: "employee01", email: "employee01@bluetron.cn" },
+      "2026-07-23T05:00:00.000Z",
+    );
+
+    expect(snapshot.applications.map((application) => application.id)).toEqual([
+      applications[0].id,
+      applications[1].id,
+      applications[2].id,
+    ]);
+    expect(snapshot.applications.map((application) => application.platformDisplayName)).toEqual([
+      "飞书",
+      "飞书",
+      "钉钉",
+    ]);
+    expect(snapshot.applications[0].binding).toEqual(binding);
+    expect(snapshot.applications[1].binding).toBeUndefined();
+    expect(snapshot.applications[1].active).toBe(false);
+    expect(snapshot.identity.email).toBe("employee01@bluetron.cn");
   });
 });

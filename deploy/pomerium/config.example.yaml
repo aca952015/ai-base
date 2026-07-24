@@ -2,6 +2,8 @@
 # supplied by compose environment variables.
 authenticate_service_url: https://authenticate.localhost.pomerium.io:8443
 idp_scopes: openid,profile,email
+signing_key_file: /run/secrets/pomerium-signing-key.pem
+signout_redirect_url: https://ai-console.localhost.pomerium.io:8443
 
 routes:
   - from: https://ai-console.localhost.pomerium.io:8443

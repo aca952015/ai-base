@@ -3,11 +3,13 @@
 import {
   Building2,
   CheckCircle2,
+  ClipboardPaste,
   LockKeyhole,
   MessageSquareShare,
   Plus,
   RefreshCw,
   Save,
+  Search,
   ShieldCheck,
   Trash2,
   X,
@@ -21,6 +23,11 @@ import type {
   EnterpriseIntegrationsSnapshot,
   IntegrationApplication,
 } from "@/lib/control-plane/integrations";
+import {
+  parseFeishuPermissionExport,
+  removeActionsRequiringPermission,
+  selectActionsForImportedPermissions,
+} from "@/lib/control-plane/integrations";
 import { formatDateTime } from "@/lib/format";
 
 type EditorState = {
@@ -31,6 +38,7 @@ type EditorState = {
   appId: string;
   note: string;
   appSecret: string;
+  actionIds: string[];
 };
 
 const platformIcons = {
@@ -62,7 +70,8 @@ export function IntegrationManager({
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [editor, setEditor] = useState<EditorState>();
-  const [state, setState] = useState<"idle" | "saving" | "saved" | "deleting" | "error">(initialError ? "error" : "idle");
+  const [actionQuery, setActionQuery] = useState("");
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "deleting" | "activating" | "error">(initialError ? "error" : "idle");
   const [message, setMessage] = useState(initialError || "");
   const drawerRef = useRef<HTMLElement>(null);
   const isEditorOpen = Boolean(editor);
@@ -93,6 +102,7 @@ export function IntegrationManager({
   }, [closeEditor, isEditorOpen]);
 
   function addApplication(platform: EnterpriseIntegrationPlatform) {
+    const group = platformGroup(platform);
     setEditor({
       mode: "create",
       platform,
@@ -100,7 +110,9 @@ export function IntegrationManager({
       appId: "",
       note: "",
       appSecret: "",
+      actionIds: group?.defaultActionIds ?? [],
     });
+    setActionQuery("");
     setState("idle");
     setMessage("");
   }
@@ -114,7 +126,9 @@ export function IntegrationManager({
       appId: application.appId,
       note: application.note,
       appSecret: "",
+      actionIds: application.actionIds,
     });
+    setActionQuery("");
     setState("idle");
     setMessage("");
   }
@@ -146,6 +160,12 @@ export function IntegrationManager({
       setMessage("App Secret 不能为空");
       return;
     }
+    const actionCatalog = platformGroup(editor.platform)?.actions ?? [];
+    if (actionCatalog.length > 0 && editor.actionIds.length === 0) {
+      setState("error");
+      setMessage("至少选择一个 Action");
+      return;
+    }
 
     setState("saving");
     setMessage("正在加密并保存应用配置…");
@@ -162,6 +182,7 @@ export function IntegrationManager({
           appId: editor.appId,
           note: editor.note,
           appSecret: editor.appSecret || undefined,
+          actionIds: editor.actionIds,
         }),
       });
       await reload();
@@ -172,6 +193,29 @@ export function IntegrationManager({
       setState("error");
       setMessage(error instanceof Error ? error.message : "应用配置保存失败");
     }
+  }
+
+  function toggleAction(actionId: string) {
+    setEditor((current) => {
+      if (!current) return current;
+      const selected = new Set(current.actionIds);
+      if (selected.has(actionId)) selected.delete(actionId);
+      else selected.add(actionId);
+      return { ...current, actionIds: [...selected] };
+    });
+  }
+
+  function setFilteredActions(actionIds: string[], selected: boolean) {
+    setEditor((current) => {
+      if (!current) return current;
+      const next = new Set(current.actionIds);
+      actionIds.forEach((actionId) => selected ? next.add(actionId) : next.delete(actionId));
+      return { ...current, actionIds: [...next] };
+    });
+  }
+
+  function replaceActions(actionIds: string[]) {
+    setEditor((current) => current ? { ...current, actionIds } : current);
   }
 
   async function deleteEditor() {
@@ -192,6 +236,23 @@ export function IntegrationManager({
     }
   }
 
+  async function activateApplication(application: IntegrationApplication) {
+    if (application.active || state === "activating") return;
+    setState("activating");
+    setMessage(`正在启用 ${application.name} 并同步 OAuth 客户端…`);
+    try {
+      await fetchJson(`/api/integrations/${encodeURIComponent(application.id)}/activate`, {
+        method: "POST",
+      });
+      await reload();
+      setState("saved");
+      setMessage(`${application.name} 已设为该平台的启用应用`);
+    } catch (error) {
+      setState("error");
+      setMessage(error instanceof Error ? error.message : "应用启用失败");
+    }
+  }
+
   return (
     <>
       {message ? (
@@ -206,6 +267,7 @@ export function IntegrationManager({
           group={group}
           onAdd={() => addApplication(group.platform)}
           onEdit={editApplication}
+          onActivate={activateApplication}
           key={group.platform}
         />
       ))}
@@ -216,7 +278,7 @@ export function IntegrationManager({
             <div className="gateway-channel-editor__header">
               <div>
                 <h3 id="integration-editor-title">{editor.mode === "create" ? `增加${platformGroup(editor.platform)?.displayName || ""}应用配置` : "编辑应用配置"}</h3>
-                <p>填写应用名称、App ID、App Secret 和备注。</p>
+                <p>配置应用凭据，并选择允许员工授权使用的 Action。</p>
               </div>
               <button type="button" data-drawer-autofocus onClick={closeEditor} disabled={state === "saving" || state === "deleting"} aria-label="关闭应用配置"><X size={17} /></button>
             </div>
@@ -267,6 +329,16 @@ export function IntegrationManager({
                   </label>
                 </div>
               </section>
+
+              <IntegrationActionSelector
+                group={platformGroup(editor.platform)}
+                selectedActionIds={editor.actionIds}
+                query={actionQuery}
+                onQueryChange={setActionQuery}
+                onToggle={toggleAction}
+                onSetFiltered={setFilteredActions}
+                onReplace={replaceActions}
+              />
             </div>
 
             <div className="gateway-channel-editor__footer">
@@ -289,14 +361,233 @@ export function IntegrationManager({
   );
 }
 
+function IntegrationActionSelector({
+  group,
+  selectedActionIds,
+  query,
+  onQueryChange,
+  onToggle,
+  onSetFiltered,
+  onReplace,
+}: {
+  group?: EnterpriseIntegrationGroup;
+  selectedActionIds: string[];
+  query: string;
+  onQueryChange: (value: string) => void;
+  onToggle: (actionId: string) => void;
+  onSetFiltered: (actionIds: string[], selected: boolean) => void;
+  onReplace: (actionIds: string[]) => void;
+}) {
+  const [permissionImportOpen, setPermissionImportOpen] = useState(false);
+  const [permissionJson, setPermissionJson] = useState("");
+  const [permissionImportFeedback, setPermissionImportFeedback] = useState<{
+    tone: "success" | "warning" | "error";
+    message: string;
+  }>();
+
+  if (!group?.actions.length) {
+    return (
+      <section className="resource-detail-section integration-action-section">
+        <div className="resource-detail-section__header">
+          <strong>授权 Action</strong>
+          <span>暂不可用</span>
+        </div>
+        <div className="resource-detail-empty">当前平台尚未接入可配置的个人授权 Action。</div>
+      </section>
+    );
+  }
+
+  const selected = new Set(selectedActionIds);
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  const filtered = group.actions.filter((action) => (
+    !normalizedQuery
+    || action.name.toLocaleLowerCase("zh-CN").includes(normalizedQuery)
+    || action.id.toLocaleLowerCase("zh-CN").includes(normalizedQuery)
+    || (action.description || "").toLocaleLowerCase("zh-CN").includes(normalizedQuery)
+    || action.providerPermissions.some((permission) => permission.toLocaleLowerCase("zh-CN").includes(normalizedQuery))
+  ));
+  const filteredIds = filtered.map((action) => action.id);
+  const allFilteredSelected = filteredIds.length > 0 && filteredIds.every((actionId) => selected.has(actionId));
+  const selectedActions = group.actions.filter((action) => selected.has(action.id));
+  const scopes = [...new Set([
+    ...group.oauthBaseScopes,
+    ...selectedActions.flatMap((action) => action.providerPermissions),
+  ])];
+  const baseScopes = new Set(group.oauthBaseScopes);
+
+  function importFeishuPermissions() {
+    try {
+      const imported = parseFeishuPermissionExport(permissionJson);
+      const selection = selectActionsForImportedPermissions(
+        group!.actions,
+        imported.scopes,
+        group!.oauthBaseScopes,
+      );
+      if (selection.actionIds.length === 0) {
+        setPermissionImportFeedback({
+          tone: "error",
+          message: "没有找到权限要求完全被该 JSON 覆盖的 Action，请检查导出的应用权限。",
+        });
+        return;
+      }
+      onReplace(selection.actionIds);
+      setPermissionImportFeedback({
+        tone: selection.unmatchedScopes.length ? "warning" : "success",
+        message: selection.unmatchedScopes.length
+          ? `已勾选 ${selection.actionIds.length} 个 Action；另有 ${selection.unmatchedScopes.length} 个权限未映射到完整 Action。`
+          : `已根据 ${imported.scopes.length} 个权限勾选 ${selection.actionIds.length} 个 Action。`,
+      });
+    } catch (error) {
+      setPermissionImportFeedback({
+        tone: "error",
+        message: error instanceof Error ? error.message : "权限 JSON 导入失败",
+      });
+    }
+  }
+
+  return (
+    <section className="resource-detail-section integration-action-section">
+      <div className="resource-detail-section__header">
+        <strong>授权 Action</strong>
+        <span>{selected.size}/{group.actions.length} 已选择</span>
+      </div>
+      <p className="integration-action-help">
+        员工绑定账号时，仅申请已选 Action 所需的权限。修改后，已经绑定的员工需要重新授权才能生效。
+      </p>
+      <div className="integration-action-toolbar">
+        <label className="connector-search-input integration-action-search">
+          <Search size={15} />
+          <input
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="搜索 Action、说明或权限"
+            aria-label="搜索 Action"
+          />
+        </label>
+        <div className="integration-action-toolbar__actions">
+          {group.platform === "feishu" ? (
+            <button
+              type="button"
+              className={`button ${permissionImportOpen ? "button--primary" : "button--secondary"}`}
+              onClick={() => {
+                setPermissionImportOpen((open) => !open);
+                setPermissionImportFeedback(undefined);
+              }}
+            >
+              <ClipboardPaste size={14} />
+              导入权限 JSON
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="button button--secondary"
+            disabled={filteredIds.length === 0}
+            onClick={() => onSetFiltered(filteredIds, !allFilteredSelected)}
+          >
+            {allFilteredSelected ? "取消当前结果" : "选择当前结果"}
+          </button>
+        </div>
+      </div>
+      {permissionImportOpen ? (
+        <div className="integration-permission-import">
+          <div className="integration-permission-import__header">
+            <div>
+              <strong>导入飞书应用权限</strong>
+              <span>粘贴“批量导入/导出权限”中复制的 JSON，导入结果将替换当前勾选。</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setPermissionImportOpen(false);
+                setPermissionImportFeedback(undefined);
+              }}
+              aria-label="关闭权限 JSON 导入"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <textarea
+            value={permissionJson}
+            onChange={(event) => {
+              setPermissionJson(event.target.value);
+              setPermissionImportFeedback(undefined);
+            }}
+            placeholder={'{\n  "scopes": {\n    "tenant": ["base:record:read"],\n    "user": []\n  }\n}'}
+            aria-label="飞书权限 JSON"
+            spellCheck={false}
+          />
+          <div className="integration-permission-import__footer">
+            <span className={permissionImportFeedback ? `is-${permissionImportFeedback.tone}` : ""} aria-live="polite">
+              {permissionImportFeedback?.message || "只会勾选所需权限全部包含在导入 JSON 中的 Action。"}
+            </span>
+            <button className="button button--primary" type="button" onClick={importFeishuPermissions}>导入并替换勾选</button>
+          </div>
+        </div>
+      ) : null}
+      <div className="integration-scope-summary">
+        <div>
+          <strong>{scopes.length}</strong>
+          <span>个 OAuth 权限</span>
+        </div>
+        <div className="integration-scope-tags">
+          {scopes.map((scope) => (
+            <span
+              className={`integration-scope-tag${baseScopes.has(scope) ? " is-required" : ""}`}
+              title={baseScopes.has(scope) ? "系统基础权限，无法移除" : undefined}
+              key={scope}
+            >
+              <code>{scope}</code>
+              {!baseScopes.has(scope) ? (
+                <button
+                  type="button"
+                  onClick={() => onReplace(removeActionsRequiringPermission(group.actions, selectedActionIds, scope))}
+                  aria-label={`移除权限 ${scope} 并取消相关 Action`}
+                  title={`移除 ${scope}`}
+                >
+                  <X size={11} />
+                </button>
+              ) : null}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="integration-action-list">
+        {filtered.map((action) => (
+          <label className={selected.has(action.id) ? "is-selected" : ""} key={action.id}>
+            <input
+              type="checkbox"
+              checked={selected.has(action.id)}
+              onChange={() => onToggle(action.id)}
+            />
+            <span className="integration-action-copy">
+              <strong className="integration-action-name">{action.name}</strong>
+              <code className="integration-action-id">{action.id}</code>
+              {action.description ? <small className="integration-action-description">{action.description}</small> : null}
+              {action.providerPermissions.length ? (
+                <span className="integration-action-permissions">
+                  {action.providerPermissions.slice(0, 3).map((permission) => <em key={permission}>{permission}</em>)}
+                  {action.providerPermissions.length > 3 ? <em>+{action.providerPermissions.length - 3}</em> : null}
+                </span>
+              ) : null}
+            </span>
+          </label>
+        ))}
+        {filtered.length === 0 ? <div className="integration-action-empty">没有匹配的 Action</div> : null}
+      </div>
+    </section>
+  );
+}
+
 function IntegrationGroup({
   group,
   onAdd,
   onEdit,
+  onActivate,
 }: {
   group: EnterpriseIntegrationGroup;
   onAdd: () => void;
   onEdit: (application: IntegrationApplication) => void;
+  onActivate: (application: IntegrationApplication) => void;
 }) {
   const Icon = platformIcons[group.platform];
   return (
@@ -330,12 +621,26 @@ function IntegrationGroup({
                 <strong title={application.name}>{application.name}</strong>
                 <small title={application.appId}>{application.appId}</small>
               </div>
+              {application.active ? (
+                <span className="integration-active-badge"><CheckCircle2 size={12} />已启用</span>
+              ) : (
+                <button
+                  className="integration-activate-button"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onActivate(application);
+                  }}
+                >
+                  设为启用
+                </button>
+              )}
             </div>
             <p className={`integration-application-note${application.note ? "" : " is-empty"}`} title={application.note || undefined}>
               {application.note || "暂无备注"}
             </p>
             <div className="integration-application-status">
-              <span><LockKeyhole size={13} />密钥已保存</span>
+              <span><LockKeyhole size={13} />密钥已保存 · {application.actionIds.length} Actions</span>
               <span>更新于 {formatDateTime(application.updatedAt)}</span>
             </div>
           </article>

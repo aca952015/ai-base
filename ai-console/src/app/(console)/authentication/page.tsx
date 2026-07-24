@@ -137,7 +137,7 @@ export default async function AuthenticationPage() {
         ) : (
           <div className="empty-data">
             <strong>暂无已认证客户端</strong>
-            <span>员工通过 WorkBuddy 等客户端成功访问 MCP 后会显示在这里。</span>
+            <span>员工通过支持 AI Base MCP 的客户端成功访问后会显示在这里。</span>
           </div>
         )}
       </SectionCard>

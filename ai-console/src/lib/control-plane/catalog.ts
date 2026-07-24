@@ -31,7 +31,7 @@ export const serviceCatalog: ServiceDefinition[] = [
     id: "mcp-access-gateway",
     name: "MCP 访问网关",
     product: "Go + OIDC",
-    description: "为 WorkBuddy 提供身份感知的 MCP 访问接口。",
+    description: "为兼容 OAuth 的 MCP 客户端提供身份感知访问接口。",
     group: "gateway",
     endpointEnv: "MCP_PUBLIC_RESOURCE_URL",
     defaultEndpoint: "http://localhost:8080/mcp",

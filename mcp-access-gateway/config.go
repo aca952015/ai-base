@@ -11,6 +11,8 @@ import (
 type config struct {
 	listenAddress             string
 	upstreamURL               *url.URL
+	connectorResolverURL      *url.URL
+	connectorResolverToken    string
 	resourceURL               string
 	metadataURL               string
 	issuer                    string
@@ -35,6 +37,23 @@ func loadConfig() (config, error) {
 	upstream, err := url.Parse(envOrDefault("MCP_UPSTREAM_URL", "http://llm-gateway:1975/mcp"))
 	if err != nil || upstream.Scheme == "" || upstream.Host == "" {
 		return config{}, errors.New("MCP_UPSTREAM_URL must be an absolute HTTP(S) URL")
+	}
+
+	connectorResolver, err := url.Parse(envOrDefault(
+		"MCP_CONNECTOR_BINDING_RESOLVER_URL",
+		"http://ai-console:3000/api/internal/connector-bindings/resolve",
+	))
+	if err != nil ||
+		(connectorResolver.Scheme != "http" && connectorResolver.Scheme != "https") ||
+		connectorResolver.Host == "" {
+		return config{}, errors.New("MCP_CONNECTOR_BINDING_RESOLVER_URL must be an absolute HTTP(S) URL")
+	}
+	connectorResolverToken := strings.TrimSpace(envOrDefault(
+		"MCP_CONNECTOR_BINDING_RESOLVER_TOKEN",
+		"local-connector-binding-resolver-token-change-me",
+	))
+	if connectorResolverToken == "" {
+		return config{}, errors.New("MCP_CONNECTOR_BINDING_RESOLVER_TOKEN must not be empty")
 	}
 
 	resourceURL := strings.TrimRight(envOrDefault("MCP_PUBLIC_RESOURCE_URL", "http://127.0.0.1:8080/mcp"), "/")
@@ -111,6 +130,8 @@ func loadConfig() (config, error) {
 	return config{
 		listenAddress:             envOrDefault("MCP_LISTEN_ADDRESS", ":8081"),
 		upstreamURL:               upstream,
+		connectorResolverURL:      connectorResolver,
+		connectorResolverToken:    connectorResolverToken,
 		resourceURL:               resourceURL,
 		metadataURL:               metadata.String(),
 		issuer:                    issuer,

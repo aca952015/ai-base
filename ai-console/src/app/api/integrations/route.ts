@@ -5,12 +5,16 @@ import {
   getEnterpriseIntegrations,
   IntegrationStoreError,
 } from "@/lib/server/integrations";
+import { ConsoleAuthError, requireConsoleAdmin } from "@/lib/server/console-identity";
+import { OpenConnectorError } from "@/lib/server/open-connector";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function errorResponse(error: unknown) {
-  const known = error instanceof IntegrationStoreError;
+  const known = error instanceof IntegrationStoreError
+    || error instanceof ConsoleAuthError
+    || error instanceof OpenConnectorError;
   const status = known ? error.status : 500;
   if (!known) console.error("Integration application request failed", error);
   return NextResponse.json({
@@ -30,6 +34,7 @@ async function requestBody(request: Request) {
 
 export async function GET() {
   try {
+    await requireConsoleAdmin();
     return NextResponse.json(await getEnterpriseIntegrations());
   } catch (error) {
     return errorResponse(error);
@@ -38,6 +43,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    await requireConsoleAdmin();
     const body = await requestBody(request);
     return NextResponse.json(await createIntegrationApplication({
       platform: body.platform,
@@ -45,6 +51,7 @@ export async function POST(request: Request) {
       appId: body.appId,
       note: body.note,
       appSecret: body.appSecret,
+      actionIds: body.actionIds,
     }), { status: 201 });
   } catch (error) {
     return errorResponse(error);
