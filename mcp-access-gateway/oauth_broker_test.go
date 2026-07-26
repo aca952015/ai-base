@@ -125,7 +125,7 @@ func TestDynamicClientRegistrationRestrictsRedirects(t *testing.T) {
 	}
 }
 
-func TestAuthorizationCodeFlowAndRefreshRotation(t *testing.T) {
+func TestAuthorizationCodeFlowAndReusableRefresh(t *testing.T) {
 	broker, _ := newBrokerForTest(t)
 	clientID := registerWorkBuddyClient(t, broker)
 	verifier := strings.Repeat("v", 64)
@@ -191,14 +191,15 @@ func TestAuthorizationCodeFlowAndRefreshRotation(t *testing.T) {
 		t.Fatal("expected refresh token")
 	}
 
-	rotated := refreshAccessToken(t, broker, clientID, token.RefreshToken, http.StatusOK)
-	if rotated.RefreshToken == "" || rotated.RefreshToken == token.RefreshToken {
-		t.Fatal("refresh token was not rotated")
+	refreshed := refreshAccessToken(t, broker, clientID, token.RefreshToken, http.StatusOK)
+	if refreshed.RefreshToken != token.RefreshToken {
+		t.Fatal("refresh response did not preserve the reusable refresh token")
 	}
-	refreshAccessToken(t, broker, clientID, token.RefreshToken, http.StatusBadRequest)
+	assertAccessToken(t, broker, refreshed.AccessToken, clientID)
+	refreshAccessToken(t, broker, clientID, token.RefreshToken, http.StatusOK)
 }
 
-func TestRefreshTokenPersistsAndRotatesAcrossBrokerRestarts(t *testing.T) {
+func TestRefreshTokenPersistsAndSlidesAcrossBrokerRestarts(t *testing.T) {
 	cfg := brokerTestConfig(t)
 	cfg.refreshTokenLifetime = 2160 * time.Hour
 	cfg.oauthRefreshStorePath = t.TempDir() + "/oauth-refresh-grants.json"
@@ -250,17 +251,24 @@ func TestRefreshTokenPersistsAndRotatesAcrossBrokerRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rotated := refreshAccessToken(t, secondBroker, clientID, firstToken, http.StatusOK)
-	if rotated.RefreshToken == "" || rotated.RefreshToken == firstToken {
-		t.Fatal("persisted refresh token was not rotated after restart")
+	initialExpiry := secondBroker.refresh[refreshTokenHash(firstToken)].ExpiresAt
+	secondBroker.now = func() time.Time {
+		return initialExpiry.Add(-time.Hour)
+	}
+	refreshed := refreshAccessToken(t, secondBroker, clientID, firstToken, http.StatusOK)
+	if refreshed.RefreshToken != firstToken {
+		t.Fatal("persisted refresh token changed after restart")
+	}
+	slidingExpiry := secondBroker.refresh[refreshTokenHash(firstToken)].ExpiresAt
+	if !slidingExpiry.After(initialExpiry) {
+		t.Fatalf("refresh token expiry did not slide forward: initial=%s renewed=%s", initialExpiry, slidingExpiry)
 	}
 
 	thirdBroker, err := newOAuthBrokerWithKey(cfg, login, key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	refreshAccessToken(t, thirdBroker, clientID, firstToken, http.StatusBadRequest)
-	refreshAccessToken(t, thirdBroker, clientID, rotated.RefreshToken, http.StatusOK)
+	refreshAccessToken(t, thirdBroker, clientID, firstToken, http.StatusOK)
 }
 
 func TestAuthorizationCodeIsSingleUseAfterPKCEFailure(t *testing.T) {

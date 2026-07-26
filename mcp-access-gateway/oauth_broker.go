@@ -543,18 +543,6 @@ func (b *oauthBroker) exchangeRefreshToken(w http.ResponseWriter, r *http.Reques
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Unable to issue token")
 		return
 	}
-	rotatedToken, err := randomURLToken(32)
-	if err != nil {
-		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Unable to issue token")
-		return
-	}
-	rotatedGrant := refreshGrant{
-		ClientID:  grant.ClientID,
-		Scope:     scope,
-		Resource:  grant.Resource,
-		Employee:  grant.Employee,
-		ExpiresAt: b.now().Add(b.cfg.refreshTokenLifetime),
-	}
 
 	b.mu.Lock()
 	currentGrant, stillValid := b.refresh[tokenHash]
@@ -563,11 +551,14 @@ func (b *oauthBroker) exchangeRefreshToken(w http.ResponseWriter, r *http.Reques
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Refresh token is invalid")
 		return
 	}
-	delete(b.refresh, tokenHash)
-	rotatedHash := refreshTokenHash(rotatedToken)
-	b.refresh[rotatedHash] = rotatedGrant
+	// WorkBuddy can keep more than one MCP process alive while its credential-file
+	// watcher is unavailable. Reusing one sliding refresh token lets every process
+	// refresh independently instead of invalidating its peers after the first use.
+	renewedGrant := currentGrant
+	renewedGrant.Scope = scope
+	renewedGrant.ExpiresAt = b.now().Add(b.cfg.refreshTokenLifetime)
+	b.refresh[tokenHash] = renewedGrant
 	if err := b.persistRefreshLocked(); err != nil {
-		delete(b.refresh, rotatedHash)
 		b.refresh[tokenHash] = currentGrant
 		b.mu.Unlock()
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Unable to persist token")
@@ -575,7 +566,7 @@ func (b *oauthBroker) exchangeRefreshToken(w http.ResponseWriter, r *http.Reques
 	}
 	b.mu.Unlock()
 
-	b.writeIssuedTokenResponse(w, accessToken, rotatedToken, scope)
+	b.writeIssuedTokenResponse(w, accessToken, rawToken, scope)
 }
 
 func (b *oauthBroker) writeTokenResponse(
