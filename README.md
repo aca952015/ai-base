@@ -67,7 +67,10 @@ MCP_LOGIN_OIDC_ISSUER=http://dex.localtest.me:5556/dex
 MCP_LOGIN_OIDC_CLIENT_ID=ai-base-mcp-broker
 MCP_LOGIN_OIDC_REDIRECT_URL=http://127.0.0.1:8080/oauth/callback
 MCP_OAUTH_ALLOWED_REDIRECT_URIS=workbuddy://workbuddy/mcp/custom-mcp%3Aai-base/oauth/callback
+MCP_OAUTH_ACCESS_TOKEN_LIFETIME=1h
+MCP_OAUTH_REFRESH_TOKEN_LIFETIME=2160h
 MCP_SESSION_SIGNING_KEY=replace-with-at-least-32-random-bytes
+MCP_SESSION_LIFETIME=2160h
 MCP_ADMIN_TOKEN=replace-with-a-random-admin-token
 ```
 
@@ -83,7 +86,9 @@ MCP_ADMIN_TOKEN=replace-with-a-random-admin-token
 }
 ```
 
-客户端点击“连接”后，从 `/.well-known/oauth-protected-resource/mcp` 发现 AI Base OAuth Broker，完成客户端注册后跳转 Dex 登录。Broker 使用 Dex 的稳定用户 ID 派生内部员工 ID，签发 audience 为 MCP Resource、包含 `ai-base:mcp` scope 的短期 JWT；员工令牌进入 Envoy 前会被移除。刷新令牌为服务内存中的一次性轮换凭据，Broker 重启后客户端需要重新登录。
+客户端点击“连接”后，从 `/.well-known/oauth-protected-resource/mcp` 发现 AI Base OAuth Broker，完成客户端注册后跳转 Dex 登录。Broker 使用 Dex 的稳定用户 ID 派生内部员工 ID，签发 audience 为 MCP Resource、包含 `ai-base:mcp` scope 的 1 小时短期 JWT；员工令牌进入 Envoy 前会被移除。刷新令牌采用一次性轮换，默认 90 天滑动有效，并只以 SHA-256 哈希形式原子保存到 `mcp-auth-data` Volume。员工电脑关机、休眠或网关正常重启都不会丢失刷新状态；只要 90 天内至少使用一次，客户端就可以持续刷新而无需重新登录。MCP Session 同样默认 90 天且绑定员工与客户端身份。
+
+从旧的内存刷新令牌版本升级时，已有客户端需要重新连接一次；新令牌写入持久化存储后，后续网关重启不再要求重新登录。不要通过延长 Access Token 来实现长期登录，长期能力由可轮换的 Refresh Token 提供。
 
 员工还需要在 AI Console 的 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account) 完成个人企业账号授权。MCP Access Gateway 会按 Broker JWT 的 `issuer + subject` 查询 PostgreSQL 映射，覆盖客户端提交的 `connectionName`，并只向当前员工的 MCP 客户端返回该员工自己的有效连接。需要凭据的 Connector 在没有绑定、连接已失效或映射服务不可用时会关闭失败，不会回退到共享 `default` 连接；上游明确声明为 `no_auth` 的虚拟公共 Connector 可以按系统 `default` 连接使用。
 

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -195,6 +196,71 @@ func TestAuthorizationCodeFlowAndRefreshRotation(t *testing.T) {
 		t.Fatal("refresh token was not rotated")
 	}
 	refreshAccessToken(t, broker, clientID, token.RefreshToken, http.StatusBadRequest)
+}
+
+func TestRefreshTokenPersistsAndRotatesAcrossBrokerRestarts(t *testing.T) {
+	cfg := brokerTestConfig(t)
+	cfg.refreshTokenLifetime = 2160 * time.Hour
+	cfg.oauthRefreshStorePath = t.TempDir() + "/oauth-refresh-grants.json"
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := &fakeLoginProvider{}
+	employee := employeeIdentity{
+		Subject: "persistent-employee",
+		Email:   "employee@example.com",
+		Name:    "Example Employee",
+	}
+	clientID := clientIDForRedirectURI(workBuddyRedirectURI)
+
+	firstBroker, err := newOAuthBrokerWithKey(cfg, login, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstToken, err := firstBroker.issueRefreshToken(
+		employee,
+		clientID,
+		"ai-base:mcp offline_access",
+		cfg.resourceURL,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedGrant := firstBroker.refresh[refreshTokenHash(firstToken)]
+	if remaining := time.Until(storedGrant.ExpiresAt); remaining < 2159*time.Hour {
+		t.Fatalf("expected an employee-friendly refresh lifetime, got %s", remaining)
+	}
+	contents, err := os.ReadFile(cfg.oauthRefreshStorePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), firstToken) {
+		t.Fatal("refresh grant store must contain only token hashes")
+	}
+	info, err := os.Stat(cfg.oauthRefreshStorePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("refresh grant store must use 0600 permissions, got %o", info.Mode().Perm())
+	}
+
+	secondBroker, err := newOAuthBrokerWithKey(cfg, login, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated := refreshAccessToken(t, secondBroker, clientID, firstToken, http.StatusOK)
+	if rotated.RefreshToken == "" || rotated.RefreshToken == firstToken {
+		t.Fatal("persisted refresh token was not rotated after restart")
+	}
+
+	thirdBroker, err := newOAuthBrokerWithKey(cfg, login, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshAccessToken(t, thirdBroker, clientID, firstToken, http.StatusBadRequest)
+	refreshAccessToken(t, thirdBroker, clientID, rotated.RefreshToken, http.StatusOK)
 }
 
 func TestAuthorizationCodeIsSingleUseAfterPKCEFailure(t *testing.T) {

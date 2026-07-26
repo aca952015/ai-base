@@ -70,6 +70,7 @@ Envoy AI Gateway 是内部外部 MCP 注册中心。Console 管理 `MCPRoute`、
 
 - OAuth Broker 面向兼容 OAuth 的 MCP 客户端提供 RFC 8414 发现、动态客户端注册、Authorization Code + S256 PKCE、Token 与 JWKS；
 - Broker 通过独立 OIDC Client 将员工登录委托给 Dex/企业 IdP，并校验 state、nonce 与上游 PKCE；
+- Access Token 保持 1 小时短有效期；Refresh Token 默认 90 天滑动有效、每次使用后轮换，服务端只将 Token 哈希原子持久化到 `mcp-auth-data`，因此员工设备休眠和网关重启不会中断长期登录；
 - 网关在内存中保留最近 24 小时的成功鉴权客户端摘要，按员工 Subject、Issuer 与 OAuth Client 绑定聚合；Console 通过独立管理令牌读取，外部能力网关不暴露该管理端点；
 - 每个 MCP 请求都验证 Broker JWT Access Token 的 issuer、audience、有效期和必需 scope；
 - 保护 OpenConnector 的 `execute_action`、`get_action_guide` 与 `list_connections`：网关按 `issuer + subject` 查询员工绑定，覆盖客户端连接名，并在本地过滤连接列表；

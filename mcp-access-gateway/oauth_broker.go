@@ -149,19 +149,20 @@ type authorizationCode struct {
 }
 
 type refreshGrant struct {
-	ClientID  string
-	Scope     string
-	Resource  string
-	Employee  employeeIdentity
-	ExpiresAt time.Time
+	ClientID  string           `json:"clientId"`
+	Scope     string           `json:"scope"`
+	Resource  string           `json:"resource"`
+	Employee  employeeIdentity `json:"employee"`
+	ExpiresAt time.Time        `json:"expiresAt"`
 }
 
 type oauthBroker struct {
-	cfg        config
-	login      loginProvider
-	signingKey *rsa.PrivateKey
-	keyID      string
-	now        func() time.Time
+	cfg          config
+	login        loginProvider
+	signingKey   *rsa.PrivateKey
+	keyID        string
+	now          func() time.Time
+	refreshStore *refreshGrantStore
 
 	mu           sync.Mutex
 	transactions map[string]loginTransaction
@@ -192,15 +193,21 @@ func newOAuthBrokerWithKey(
 	if err != nil {
 		return nil, err
 	}
+	refreshStore := newRefreshGrantStore(cfg.oauthRefreshStorePath)
+	refresh, err := refreshStore.load(time.Now())
+	if err != nil {
+		return nil, err
+	}
 	return &oauthBroker{
 		cfg:          cfg,
 		login:        login,
 		signingKey:   signingKey,
 		keyID:        keyID,
 		now:          time.Now,
+		refreshStore: refreshStore,
 		transactions: make(map[string]loginTransaction),
 		codes:        make(map[string]authorizationCode),
-		refresh:      make(map[string]refreshGrant),
+		refresh:      refresh,
 	}, nil
 }
 
@@ -508,7 +515,6 @@ func (b *oauthBroker) exchangeRefreshToken(w http.ResponseWriter, r *http.Reques
 	b.mu.Lock()
 	b.cleanupExpiredLocked()
 	grant, ok := b.refresh[tokenHash]
-	delete(b.refresh, tokenHash)
 	b.mu.Unlock()
 	if !ok || rawToken == "" || grant.ExpiresAt.Before(b.now()) {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Refresh token is invalid")
@@ -531,13 +537,45 @@ func (b *oauthBroker) exchangeRefreshToken(w http.ResponseWriter, r *http.Reques
 		}
 		scope = normalized
 	}
-	b.writeTokenResponse(
-		w,
-		grant.Employee,
-		grant.ClientID,
-		scope,
-		grant.Resource,
-	)
+
+	accessToken, err := b.signAccessToken(grant.Employee, grant.ClientID, scope, grant.Resource)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Unable to issue token")
+		return
+	}
+	rotatedToken, err := randomURLToken(32)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Unable to issue token")
+		return
+	}
+	rotatedGrant := refreshGrant{
+		ClientID:  grant.ClientID,
+		Scope:     scope,
+		Resource:  grant.Resource,
+		Employee:  grant.Employee,
+		ExpiresAt: b.now().Add(b.cfg.refreshTokenLifetime),
+	}
+
+	b.mu.Lock()
+	currentGrant, stillValid := b.refresh[tokenHash]
+	if !stillValid || currentGrant.ExpiresAt.Before(b.now()) {
+		b.mu.Unlock()
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "Refresh token is invalid")
+		return
+	}
+	delete(b.refresh, tokenHash)
+	rotatedHash := refreshTokenHash(rotatedToken)
+	b.refresh[rotatedHash] = rotatedGrant
+	if err := b.persistRefreshLocked(); err != nil {
+		delete(b.refresh, rotatedHash)
+		b.refresh[tokenHash] = currentGrant
+		b.mu.Unlock()
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Unable to persist token")
+		return
+	}
+	b.mu.Unlock()
+
+	b.writeIssuedTokenResponse(w, accessToken, rotatedToken, scope)
 }
 
 func (b *oauthBroker) writeTokenResponse(
@@ -557,6 +595,15 @@ func (b *oauthBroker) writeTokenResponse(
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", "Unable to issue token")
 		return
 	}
+	b.writeIssuedTokenResponse(w, accessToken, refreshToken, scope)
+}
+
+func (b *oauthBroker) writeIssuedTokenResponse(
+	w http.ResponseWriter,
+	accessToken string,
+	refreshToken string,
+	scope string,
+) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
@@ -606,15 +653,25 @@ func (b *oauthBroker) issueRefreshToken(
 	}
 	b.mu.Lock()
 	b.cleanupExpiredLocked()
-	b.refresh[refreshTokenHash(token)] = refreshGrant{
+	tokenHash := refreshTokenHash(token)
+	b.refresh[tokenHash] = refreshGrant{
 		ClientID:  clientID,
 		Scope:     scope,
 		Resource:  resource,
 		Employee:  employee,
 		ExpiresAt: b.now().Add(b.cfg.refreshTokenLifetime),
 	}
+	if err := b.persistRefreshLocked(); err != nil {
+		delete(b.refresh, tokenHash)
+		b.mu.Unlock()
+		return "", err
+	}
 	b.mu.Unlock()
 	return token, nil
+}
+
+func (b *oauthBroker) persistRefreshLocked() error {
+	return b.refreshStore.save(b.refresh)
 }
 
 func (b *oauthBroker) signJWT(claims interface{}, tokenType string) (string, error) {

@@ -26,6 +26,7 @@ type config struct {
 	loginClientID             string
 	loginRedirectURL          string
 	oauthSigningKeyPath       string
+	oauthRefreshStorePath     string
 	accessTokenLifetime       time.Duration
 	refreshTokenLifetime      time.Duration
 	authorizationCodeLifetime time.Duration
@@ -82,7 +83,7 @@ func loadConfig() (config, error) {
 		return config{}, errors.New("MCP_SESSION_SIGNING_KEY must contain at least 32 bytes")
 	}
 
-	sessionLifetime, err := time.ParseDuration(envOrDefault("MCP_SESSION_LIFETIME", "8h"))
+	sessionLifetime, err := time.ParseDuration(envOrDefault("MCP_SESSION_LIFETIME", "2160h"))
 	if err != nil || sessionLifetime <= 0 {
 		return config{}, errors.New("MCP_SESSION_LIFETIME must be a positive Go duration")
 	}
@@ -114,7 +115,7 @@ func loadConfig() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	refreshTokenLifetime, err := positiveDuration("MCP_OAUTH_REFRESH_TOKEN_LIFETIME", "8h")
+	refreshTokenLifetime, err := positiveDuration("MCP_OAUTH_REFRESH_TOKEN_LIFETIME", "2160h")
 	if err != nil {
 		return config{}, err
 	}
@@ -145,6 +146,7 @@ func loadConfig() (config, error) {
 		loginClientID:             loginClientID,
 		loginRedirectURL:          loginRedirectURL,
 		oauthSigningKeyPath:       strings.TrimSpace(envOrDefault("MCP_OAUTH_SIGNING_KEY_PATH", "/data/oauth-signing-key.pem")),
+		oauthRefreshStorePath:     strings.TrimSpace(envOrDefault("MCP_OAUTH_REFRESH_STORE_PATH", "/data/oauth-refresh-grants.json")),
 		accessTokenLifetime:       accessTokenLifetime,
 		refreshTokenLifetime:      refreshTokenLifetime,
 		authorizationCodeLifetime: authorizationCodeLifetime,

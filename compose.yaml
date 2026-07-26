@@ -168,11 +168,12 @@ services:
       MCP_LOGIN_OIDC_CLIENT_ID: ${MCP_LOGIN_OIDC_CLIENT_ID:-ai-base-mcp-broker}
       MCP_LOGIN_OIDC_REDIRECT_URL: ${MCP_LOGIN_OIDC_REDIRECT_URL:-http://127.0.0.1:8080/oauth/callback}
       MCP_OAUTH_SIGNING_KEY_PATH: /data/oauth-signing-key.pem
+      MCP_OAUTH_REFRESH_STORE_PATH: /data/oauth-refresh-grants.json
       MCP_OAUTH_ACCESS_TOKEN_LIFETIME: ${MCP_OAUTH_ACCESS_TOKEN_LIFETIME:-1h}
-      MCP_OAUTH_REFRESH_TOKEN_LIFETIME: ${MCP_OAUTH_REFRESH_TOKEN_LIFETIME:-8h}
+      MCP_OAUTH_REFRESH_TOKEN_LIFETIME: ${MCP_OAUTH_REFRESH_TOKEN_LIFETIME:-2160h}
       MCP_OAUTH_ALLOWED_REDIRECT_URIS: ${MCP_OAUTH_ALLOWED_REDIRECT_URIS:-workbuddy://workbuddy/mcp/custom-mcp%3Aai-base/oauth/callback}
       MCP_SESSION_SIGNING_KEY: ${MCP_SESSION_SIGNING_KEY:-local-mcp-session-signing-key-change-me}
-      MCP_SESSION_LIFETIME: ${MCP_SESSION_LIFETIME:-8h}
+      MCP_SESSION_LIFETIME: ${MCP_SESSION_LIFETIME:-2160h}
       MCP_ADMIN_TOKEN: ${MCP_ADMIN_TOKEN:-local-mcp-admin-token-change-me}
       MCP_CONNECTOR_BINDING_RESOLVER_URL: http://ai-console:3000/api/internal/connector-bindings/resolve
       MCP_CONNECTOR_BINDING_RESOLVER_TOKEN: ${MCP_CONNECTOR_BINDING_RESOLVER_TOKEN:-local-connector-binding-resolver-token-change-me}
