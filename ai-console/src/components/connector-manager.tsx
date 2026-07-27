@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   ChevronRight,
   ExternalLink,
+  Globe2,
   KeyRound,
   LockKeyhole,
   Pencil,
@@ -14,13 +15,16 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  UserRound,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import {
+  connectorActionIsAuthorized,
   connectorAuthLabels,
+  type ConnectorAccessMode,
   type ConnectorAuthDefinition,
   type ConnectorAuthType,
   type ConnectorConnection,
@@ -56,6 +60,9 @@ type ConnectorDetailsState = {
   loading: boolean;
   error?: string;
 };
+
+type ConnectorActionView = "authorized" | "all";
+type ConnectorAccessFilter = "all" | ConnectorAccessMode;
 
 function errorMessage(payload: unknown, fallback: string) {
   if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
@@ -132,6 +139,13 @@ function ConnectorCard({
   onEdit: (connection: ConnectorConnection) => void;
   onDisconnect: (connection: ConnectorConnection) => void;
 }) {
+  const accountBound = connection.accessMode === "account_bound";
+  const accessLabel = connection.accessMode === "no_auth"
+    ? "无需认证"
+    : accountBound
+      ? "用户绑定"
+      : "全局使用";
+
   return (
     <article
       className={`gateway-channel-tile is-clickable is-enabled${connection.virtual ? " is-system-managed" : ""}`}
@@ -147,7 +161,7 @@ function ConnectorCard({
       <div className="gateway-channel-tile__top">
         <span className="gateway-channel-tile__icon connector-provider-icon" aria-hidden="true"><ProviderIcon provider={provider} /></span>
         <div><strong>{provider?.displayName || connection.service}</strong><small>{connection.connectionName}</small></div>
-        <span className={`gateway-channel-state is-enabled${connection.virtual ? " is-managed" : ""}`}>{connection.virtual ? "系统可用" : "已连接"}</span>
+        <span className={`gateway-channel-state is-enabled${connection.accessMode !== "global" ? " is-managed" : ""}`}>{accessLabel}</span>
       </div>
       <p className="gateway-channel-endpoint" title={connection.profile.accountId}>{connection.profile.displayName}</p>
       <div className="gateway-channel-metrics">
@@ -160,9 +174,13 @@ function ConnectorCard({
         {connection.profile.grantedScopes.length === 0 ? <em>{provider?.actionCount || 0} 个可用 Action</em> : null}
       </div>
       <div className="gateway-channel-tile__actions" onClick={(event) => event.stopPropagation()}>
-        {connection.virtual ? <span className="gateway-managed-lock"><ShieldCheck size={14} />无需配置</span> : <span className="gateway-managed-lock"><CheckCircle2 size={14} />凭据已保存</span>}
-        {!connection.virtual ? <button className="button button--secondary" type="button" onClick={() => onEdit(connection)}><Pencil size={14} />编辑</button> : null}
-        {!connection.virtual ? <button className="gateway-remove-button" type="button" onClick={() => onDisconnect(connection)} disabled={deleting} aria-label={`断开${connection.connectionName}`}><Trash2 size={15} /></button> : null}
+        {connection.virtual
+          ? <span className="gateway-managed-lock"><ShieldCheck size={14} />无需配置</span>
+          : accountBound
+            ? <span className="gateway-managed-lock"><UserRound size={14} />员工专属连接</span>
+            : <span className="gateway-managed-lock"><CheckCircle2 size={14} />凭据已保存</span>}
+        {connection.accessMode === "global" ? <button className="button button--secondary" type="button" onClick={() => onEdit(connection)}><Pencil size={14} />编辑</button> : null}
+        {connection.accessMode === "global" ? <button className="gateway-remove-button" type="button" onClick={() => onDisconnect(connection)} disabled={deleting} aria-label={`断开${connection.connectionName}`}><Trash2 size={15} /></button> : null}
       </div>
     </article>
   );
@@ -191,6 +209,8 @@ export function ConnectorManager({
   const [providerLoading, setProviderLoading] = useState(false);
   const [editor, setEditor] = useState<EditorState>();
   const [details, setDetails] = useState<ConnectorDetailsState>();
+  const [detailsActionView, setDetailsActionView] = useState<ConnectorActionView>("authorized");
+  const [accessFilter, setAccessFilter] = useState<ConnectorAccessFilter>("all");
   const [state, setState] = useState<RequestState>(initialError ? "error" : "idle");
   const [message, setMessage] = useState(initialError || "");
   const [deletingId, setDeletingId] = useState<string>();
@@ -201,19 +221,23 @@ export function ConnectorManager({
     () => new Map(knownProviders.map((provider) => [provider.service, provider])),
     [knownProviders],
   );
-  const credentialConnections = useMemo(
-    () => connections.filter((connection) => connection.authType !== "no_auth"),
+  const accountBoundConnections = useMemo(
+    () => connections.filter((connection) => connection.accessMode === "account_bound"),
     [connections],
   );
   const noAuthConnections = useMemo(
-    () => connections.filter((connection) => connection.authType === "no_auth"),
+    () => connections.filter((connection) => connection.accessMode === "no_auth"),
     [connections],
   );
-  const managedConnections = useMemo(() => connections.filter((connection) => !connection.virtual), [connections]);
-  const authenticatedConnections = useMemo(
-    () => managedConnections.filter((connection) => connection.authType !== "no_auth"),
-    [managedConnections],
+  const globalConnections = useMemo(
+    () => connections.filter((connection) => connection.accessMode === "global"),
+    [connections],
   );
+  const detailActions = details?.provider?.actions ?? [];
+  const authorizedDetailActions = details
+    ? detailActions.filter((action) => connectorActionIsAuthorized(details.connection, action))
+    : [];
+  const visibleDetailActions = detailsActionView === "authorized" ? authorizedDetailActions : detailActions;
   const selectingProvider = Boolean(editor && !editor.provider && !editor.loadingProvider);
   const drawerOpen = Boolean(editor || details);
   const drawerFocusKey = editor
@@ -576,6 +600,7 @@ export function ConnectorManager({
   }
 
   async function viewConnector(connection: ConnectorConnection) {
+    setDetailsActionView("authorized");
     setDetails({ connection, loading: true });
     try {
       const provider = await fetchJson<ConnectorProviderDetail>(`/api/open-connector/providers/${encodeURIComponent(connection.service)}`);
@@ -601,44 +626,33 @@ export function ConnectorManager({
   return (
     <>
       <section className="model-gateway-summary connector-summary" aria-label="连接器摘要">
-        <article><span><PlugZap size={17} /></span><div><strong>{managedConnections.length}</strong><small>个已配置连接</small></div></article>
-        <article><span><ShieldCheck size={17} /></span><div><strong>{authenticatedConnections.length}</strong><small>个认证连接</small></div></article>
-        <article><span><KeyRound size={17} /></span><div><strong>{initialProviders.total}</strong><small>个可用 Connector</small></div></article>
+        <article><span><ShieldCheck size={17} /></span><div><strong>{noAuthConnections.length}</strong><small>个无需认证连接</small></div></article>
+        <article><span><UserRound size={17} /></span><div><strong>{accountBoundConnections.length}</strong><small>个用户绑定连接</small></div></article>
+        <article><span><Globe2 size={17} /></span><div><strong>{globalConnections.length}</strong><small>个全局连接</small></div></article>
       </section>
 
-      <section className="portal-group gateway-resource-section" aria-labelledby="connector-management-title">
-        <header className="portal-group__header">
-          <div>
-            <h2 id="connector-management-title">连接管理</h2>
-            <p>管理 OpenConnector 连接、认证方式和授权状态。</p>
-          </div>
-          <div className="gateway-resource-actions">
-            <button className="button button--secondary" type="button" onClick={addConnector} disabled={state === "saving"}><Plus size={15} />添加连接器</button>
-          </div>
-        </header>
-        {message ? <p className={`gateway-channel-message${state === "error" ? " is-error" : ""}`} aria-live="polite">{state === "saved" ? <CheckCircle2 size={15} /> : null}{message}</p> : null}
-        <div className="gateway-channel-grid connector-card-grid">
-          {credentialConnections.map((connection) => {
-            const provider = providerByService.get(connection.service);
-            return (
-              <ConnectorCard
-                connection={connection}
-                provider={provider}
-                deleting={deletingId === connection.id}
-                onView={viewConnector}
-                onEdit={editConnector}
-                onDisconnect={disconnect}
-                key={connection.id}
-              />
-            );
-          })}
-          <button className="gateway-channel-add-card" type="button" onClick={addConnector} disabled={state === "saving"}>
-            <span><Plus size={19} /></span><strong>添加连接器</strong><small>从 OpenConnector 动态读取配置</small>
+      <nav className="connector-access-filter" aria-label="连接器使用范围筛选">
+        {([
+          ["all", "全部", connections.length],
+          ["no_auth", "无需认证", noAuthConnections.length],
+          ["account_bound", "用户绑定", accountBoundConnections.length],
+          ["global", "全局使用", globalConnections.length],
+        ] as const).map(([value, label, count]) => (
+          <button
+            className={accessFilter === value ? "is-active" : ""}
+            type="button"
+            aria-pressed={accessFilter === value}
+            onClick={() => setAccessFilter(value)}
+            key={value}
+          >
+            {label}<span>({count})</span>
           </button>
-        </div>
-      </section>
+        ))}
+      </nav>
 
-      <section className="portal-group gateway-resource-section" aria-labelledby="connector-no-auth-title">
+      {message ? <p className={`gateway-channel-message${state === "error" ? " is-error" : ""}`} aria-live="polite">{state === "saved" ? <CheckCircle2 size={15} /> : null}{message}</p> : null}
+
+      {accessFilter === "all" || accessFilter === "no_auth" ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-no-auth-title">
         <header className="portal-group__header">
           <div>
             <h2 id="connector-no-auth-title">无需认证</h2>
@@ -666,13 +680,72 @@ export function ConnectorManager({
             </div>
           ) : null}
         </div>
-      </section>
+      </section> : null}
+
+      {accessFilter === "all" || accessFilter === "account_bound" ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-account-bound-title">
+        <header className="portal-group__header">
+          <div>
+            <h2 id="connector-account-bound-title">用户绑定</h2>
+            <p>由员工完成个人账号授权，仅对绑定身份开放。</p>
+          </div>
+          <span className="gateway-channel-state is-managed">{accountBoundConnections.length} 个 Connector</span>
+        </header>
+        <div className="gateway-channel-grid connector-card-grid">
+          {accountBoundConnections.map((connection) => (
+            <ConnectorCard
+              connection={connection}
+              provider={providerByService.get(connection.service)}
+              deleting={deletingId === connection.id}
+              onView={viewConnector}
+              onEdit={editConnector}
+              onDisconnect={disconnect}
+              key={connection.id}
+            />
+          ))}
+          {accountBoundConnections.length === 0 ? (
+            <div className="connector-empty-group">
+              <UserRound size={20} />
+              <strong>暂无用户绑定的 Connector</strong>
+              <span>员工完成账号绑定后会自动显示在这里。</span>
+            </div>
+          ) : null}
+        </div>
+      </section> : null}
+
+      {accessFilter === "all" || accessFilter === "global" ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-global-title">
+        <header className="portal-group__header">
+          <div>
+            <h2 id="connector-global-title">全局使用</h2>
+            <p>由管理员统一配置，可供基础设施中的授权用户共享使用。</p>
+          </div>
+          <div className="gateway-resource-actions">
+            <span className="gateway-channel-state is-managed">{globalConnections.length} 个 Connector</span>
+            <button className="button button--secondary" type="button" onClick={addConnector} disabled={state === "saving"}><Plus size={15} />添加连接器</button>
+          </div>
+        </header>
+        <div className="gateway-channel-grid connector-card-grid">
+          {globalConnections.map((connection) => (
+            <ConnectorCard
+              connection={connection}
+              provider={providerByService.get(connection.service)}
+              deleting={deletingId === connection.id}
+              onView={viewConnector}
+              onEdit={editConnector}
+              onDisconnect={disconnect}
+              key={connection.id}
+            />
+          ))}
+          <button className="gateway-channel-add-card" type="button" onClick={addConnector} disabled={state === "saving"}>
+            <span><Plus size={19} /></span><strong>添加连接器</strong><small>从 OpenConnector 动态读取配置</small>
+          </button>
+        </div>
+      </section> : null}
 
       {details ? createPortal(
         <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDetails(); }}>
           <aside className="gateway-channel-drawer connector-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="connector-details-title">
             <div className="gateway-channel-editor__header">
-              <div><span className="card-kicker">Connector 详情</span><h3 id="connector-details-title">{details.provider?.displayName || providerByService.get(details.connection.service)?.displayName || details.connection.service}</h3><p>只读展示连接配置、授权信息和该 Connector 提供的全部 Action。</p></div>
+              <div><span className="card-kicker">Connector 详情</span><h3 id="connector-details-title">{details.provider?.displayName || providerByService.get(details.connection.service)?.displayName || details.connection.service}</h3><p>只读展示连接配置与授权信息，默认查看当前连接已授权的 Action。</p></div>
               <button type="button" data-drawer-autofocus onClick={closeDetails} aria-label="关闭 Connector 详情"><X size={17} /></button>
             </div>
 
@@ -683,6 +756,7 @@ export function ConnectorManager({
                   <div><dt>Service ID</dt><dd className="is-mono">{details.connection.service}</dd></div>
                   <div><dt>连接名称</dt><dd className="is-mono">{details.connection.connectionName}</dd></div>
                   <div><dt>认证方式</dt><dd>{connectorAuthLabels[details.connection.authType]}</dd></div>
+                  <div><dt>使用范围</dt><dd>{details.connection.accessMode === "no_auth" ? "无需认证" : details.connection.accessMode === "account_bound" ? "用户绑定" : "全局使用"}</dd></div>
                   <div><dt>连接类型</dt><dd>{details.connection.default ? "默认连接" : "命名连接"}</dd></div>
                   <div><dt>账号名称</dt><dd>{details.connection.profile.displayName}</dd></div>
                   <div><dt>凭据状态</dt><dd>{details.connection.virtual ? "无需凭据" : details.connection.configured ? "服务端已保存" : "未配置"}</dd></div>
@@ -696,14 +770,37 @@ export function ConnectorManager({
               </section>
 
               <section className="resource-detail-section">
-                <div className="resource-detail-section__header"><strong>Actions</strong><span>{details.provider?.actions.length ?? "—"} 个</span></div>
+                <div className="resource-detail-section__header">
+                  <strong>Actions</strong>
+                  <span>{details.loading ? "读取中" : `${authorizedDetailActions.length}/${detailActions.length} 已授权`}</span>
+                </div>
+                {!details.loading && !details.error && detailActions.length ? (
+                  <div className="connector-action-view" role="group" aria-label="Action 展示范围">
+                    <button
+                      className={detailsActionView === "authorized" ? "is-active" : ""}
+                      type="button"
+                      aria-pressed={detailsActionView === "authorized"}
+                      onClick={() => setDetailsActionView("authorized")}
+                    >
+                      已授权 <span>{authorizedDetailActions.length}</span>
+                    </button>
+                    <button
+                      className={detailsActionView === "all" ? "is-active" : ""}
+                      type="button"
+                      aria-pressed={detailsActionView === "all"}
+                      onClick={() => setDetailsActionView("all")}
+                    >
+                      全部 <span>{detailActions.length}</span>
+                    </button>
+                  </div>
+                ) : null}
                 {details.loading ? (
                   <div className="gateway-mcp-tools-state"><RefreshCw className="is-spinning" size={18} /><strong>正在读取 Actions</strong><p>正在从 OpenConnector 获取完整 Action 定义…</p></div>
                 ) : details.error ? (
                   <div className="gateway-mcp-tools-state is-error"><PlugZap size={18} /><strong>Action 读取失败</strong><p>{details.error}</p></div>
-                ) : details.provider?.actions.length ? (
+                ) : visibleDetailActions.length ? (
                   <div className="gateway-mcp-tool-list connector-action-list">
-                    {details.provider.actions.map((action, index) => (
+                    {visibleDetailActions.map((action, index) => (
                       <article key={action.id}>
                         <span>{String(index + 1).padStart(2, "0")}</span>
                         <div>
@@ -722,6 +819,8 @@ export function ConnectorManager({
                       </article>
                     ))}
                   </div>
+                ) : detailActions.length ? (
+                  <div className="resource-detail-empty">当前连接没有已授权 Action，可切换到“全部”查看完整目录。</div>
                 ) : <div className="resource-detail-empty">该 Connector 当前没有公开 Action。</div>}
               </section>
             </div>

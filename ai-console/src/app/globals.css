@@ -711,6 +711,11 @@ svg { flex: 0 0 auto; }
 .resource-detail-route-list small { color: var(--ink-faint); font-size: calc(8px + var(--font-size-step)); }
 .resource-detail-route-list code { min-width: 0; overflow-wrap: anywhere; color: var(--ink-soft); font-size: calc(8.5px + var(--font-size-step)); grid-column: 1 / -1; }
 .resource-detail-empty { display: grid; min-height: 110px; padding: 20px; color: var(--ink-faint); background: var(--surface-muted); border: 1px dashed var(--line-strong); border-radius: 10px; font-size: calc(9.5px + var(--font-size-step)); place-items: center; }
+.connector-action-view { display: inline-flex; width: fit-content; padding: 3px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 9px; gap: 3px; }
+.connector-action-view button { display: inline-flex; min-height: 30px; padding: 5px 9px; color: var(--ink-faint); background: transparent; border: 0; border-radius: 7px; font-size: calc(9px + var(--font-size-step)); font-weight: 700; cursor: pointer; align-items: center; gap: 6px; }
+.connector-action-view button:hover { color: var(--ink); background: var(--surface-muted); }
+.connector-action-view button.is-active { color: var(--model-tag-ink); background: var(--model-tag-surface); box-shadow: inset 0 0 0 1px var(--model-tag-border); }
+.connector-action-view button span { min-width: 20px; padding: 1px 5px; color: inherit; background: rgb(255 255 255 / 7%); border-radius: 99px; font-family: "SFMono-Regular", Consolas, monospace; font-size: calc(8px + var(--font-size-step)); text-align: center; }
 .connector-action-list article { align-items: start; }
 .connector-action-meta { display: flex; margin-top: 8px; flex-wrap: wrap; gap: 5px; }
 .connector-action-meta span { padding: 3px 6px; color: var(--blue); background: var(--blue-soft); border-radius: 6px; font-size: calc(8px + var(--font-size-step)); font-weight: 700; }
@@ -761,6 +766,12 @@ svg { flex: 0 0 auto; }
 .gateway-remove-button:hover { color: var(--red); background: var(--red-soft); border-color: #eccbc6; }
 .gateway-channel-savebar { border-top: 1px solid var(--line); justify-content: flex-end; }
 .connector-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.connector-access-filter { display: flex; width: fit-content; max-width: 100%; padding: 4px; overflow-x: auto; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 11px; gap: 3px; scrollbar-width: none; }
+.connector-access-filter::-webkit-scrollbar { display: none; }
+.connector-access-filter button { display: inline-flex; min-height: 34px; padding: 6px 11px; color: var(--ink-faint); background: transparent; border: 0; border-radius: 8px; font-size: calc(9.5px + var(--font-size-step)); font-weight: 700; white-space: nowrap; cursor: pointer; align-items: center; gap: 3px; }
+.connector-access-filter button:hover { color: var(--ink); background: var(--surface); }
+.connector-access-filter button.is-active { color: var(--model-tag-ink); background: var(--model-tag-surface); box-shadow: inset 0 0 0 1px var(--model-tag-border); }
+.connector-access-filter button span { color: inherit; font-family: "SFMono-Regular", Consolas, monospace; font-size: calc(8.5px + var(--font-size-step)); font-weight: 600; opacity: .82; }
 .connector-card-grid .gateway-channel-tile { min-height: 226px; }
 .connector-empty-group { display: grid; min-height: 150px; padding: 24px; color: var(--ink-faint); background: var(--surface-muted); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); place-content: center; justify-items: center; gap: 5px; }
 .connector-empty-group > svg { color: var(--blue); }

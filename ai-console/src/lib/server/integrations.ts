@@ -13,6 +13,11 @@ import type {
   IntegrationActionOption,
   IntegrationApplication,
 } from "../control-plane/integrations";
+import {
+  classifyConnectorConnections,
+  connectorConnectionKey,
+  type ConnectorConnectionsSnapshot,
+} from "../control-plane/connectors";
 import type { ConsoleIdentity } from "./console-identity";
 import {
   deleteConnectorConnection,
@@ -671,6 +676,25 @@ export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promis
     bindings.map(serializeBinding),
     { name: identity.name, email: identity.email },
   );
+}
+
+export async function listClassifiedConnectorConnections(): Promise<ConnectorConnectionsSnapshot> {
+  await ensureSchema();
+  const [snapshot, bindings] = await Promise.all([
+    listConnectorConnections(),
+    getPool().query<Pick<EmployeeConnectorBindingRow, "service" | "connection_name">>(`
+      SELECT service, connection_name
+      FROM employee_connector_bindings
+      WHERE status <> 'revoked'
+    `),
+  ]);
+  const accountBoundConnectionKeys = new Set(
+    bindings.rows.map((binding) => connectorConnectionKey(binding.service, binding.connection_name)),
+  );
+  return {
+    ...snapshot,
+    connections: classifyConnectorConnections(snapshot.connections, accountBoundConnectionKeys),
+  };
 }
 
 export function buildEmployeeIntegrationsSnapshot(

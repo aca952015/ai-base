@@ -4,7 +4,8 @@ import { StatusPill } from "@/components/status-pill";
 import type { ConnectorConnectionsSnapshot, ConnectorProvidersPage } from "@/lib/control-plane/connectors";
 import { getComponentData } from "@/lib/server/component-data";
 import { readConfig } from "@/lib/server/config";
-import { getConnectorProviderSummaries, listConnectorConnections, listConnectorProviders } from "@/lib/server/open-connector";
+import { listClassifiedConnectorConnections } from "@/lib/server/integrations";
+import { getConnectorProviderSummaries, listConnectorProviders } from "@/lib/server/open-connector";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export default async function ConnectorsPage() {
   const config = await readConfig();
   const [data, connectionsResult, providersResult] = await Promise.all([
     getComponentData(config),
-    listConnectorConnections().then((value) => ({ value })).catch((error: unknown) => ({ error })),
+    listClassifiedConnectorConnections().then((value) => ({ value })).catch((error: unknown) => ({ error })),
     listConnectorProviders({ limit: 24 }).then((value) => ({ value })).catch((error: unknown) => ({ error })),
   ]);
   const connections = "value" in connectionsResult ? connectionsResult.value : emptyConnections;

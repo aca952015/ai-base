@@ -126,6 +126,7 @@ describe("OpenConnector connection adapter", () => {
       service: "github",
       connectionName: "default",
       authType: "api_key",
+      accessMode: "global",
       configured: true,
       virtual: false,
       default: true,

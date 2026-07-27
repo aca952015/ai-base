@@ -1,4 +1,5 @@
 export type ConnectorAuthType = "no_auth" | "api_key" | "custom_credential" | "oauth2";
+export type ConnectorAccessMode = "no_auth" | "account_bound" | "global";
 
 export type ConnectorCredentialField = {
   key: string;
@@ -79,6 +80,7 @@ export type ConnectorConnection = {
   service: string;
   connectionName: string;
   authType: ConnectorAuthType;
+  accessMode: ConnectorAccessMode;
   configured: boolean;
   virtual: boolean;
   default: boolean;
@@ -118,6 +120,33 @@ export type ConnectorOAuthAuthorization = {
   service: string;
   authorizationUrl: string;
 };
+
+export function connectorActionIsAuthorized(
+  connection: ConnectorConnection,
+  action: ConnectorActionDefinition,
+) {
+  if (connection.authType !== "oauth2") return true;
+  const grantedScopes = new Set(connection.profile.grantedScopes);
+  return action.providerPermissions.every((permission) => grantedScopes.has(permission));
+}
+
+export function connectorConnectionKey(service: string, connectionName: string) {
+  return `${service}\0${connectionName}`;
+}
+
+export function classifyConnectorConnections(
+  connections: ConnectorConnection[],
+  accountBoundConnectionKeys: ReadonlySet<string>,
+) {
+  return connections.map((connection) => ({
+    ...connection,
+    accessMode: connection.authType === "no_auth"
+      ? "no_auth" as const
+      : accountBoundConnectionKeys.has(connectorConnectionKey(connection.service, connection.connectionName))
+        ? "account_bound" as const
+        : "global" as const,
+  }));
+}
 
 export const connectorAuthLabels: Record<ConnectorAuthType, string> = {
   no_auth: "无需认证",

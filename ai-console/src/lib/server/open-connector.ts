@@ -296,6 +296,7 @@ function normalizeConnection(value: unknown): ConnectorConnection | undefined {
     service,
     connectionName,
     authType,
+    accessMode: authType === "no_auth" ? "no_auth" : "global",
     configured: value.configured === true,
     virtual: value.virtual === true,
     default: value.default === true,
