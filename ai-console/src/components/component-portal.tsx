@@ -30,6 +30,7 @@ const portalIcons: Record<ServiceId, LucideIcon> = {
   "llm-gateway": BrainCircuit,
   "open-connector": Network,
   lightrag: NotebookTabs,
+  "rag-mcp": BrainCircuit,
   postgres: Database,
   promptfoo: ShieldCheck,
   jaeger: Activity,

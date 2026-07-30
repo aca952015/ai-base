@@ -5,6 +5,7 @@ export type ServiceId =
   | "llm-gateway"
   | "open-connector"
   | "lightrag"
+  | "rag-mcp"
   | "postgres"
   | "jaeger"
   | "promptfoo";

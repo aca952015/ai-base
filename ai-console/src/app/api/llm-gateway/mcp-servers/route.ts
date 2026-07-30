@@ -58,7 +58,7 @@ export async function POST(request: Request) {
     ? (server as { id?: unknown }).id
     : undefined;
   if (isSystemManagedMcpServerId(serverId)) {
-    return NextResponse.json(await testGatewayMcpServer(getSystemManagedMcpServer()));
+    return NextResponse.json(await testGatewayMcpServer(getSystemManagedMcpServer(serverId)));
   }
   const testableServer = typeof server === "object" && server !== null && !Array.isArray(server)
     ? { ...server, enabled: false }

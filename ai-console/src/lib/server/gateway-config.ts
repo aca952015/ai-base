@@ -27,6 +27,8 @@ const SECRET_DIRECTORY_NAME = "llm-gateway-secrets";
 const MCP_SECRET_DIRECTORY_NAME = "llm-gateway-mcp-secrets";
 const OPEN_CONNECTOR_MCP_ID = "mcp-open-connector";
 const OPEN_CONNECTOR_MCP_NAMESPACE = "open-connector";
+const RAG_MCP_ID = "mcp-rag";
+const RAG_MCP_NAMESPACE = "rag";
 const SYSTEM_MANAGED_TIMESTAMP = new Date(0).toISOString();
 const MAX_CHANNELS = 20;
 const MAX_MODELS = 100;
@@ -77,25 +79,55 @@ function openConnectorRuntimeToken() {
   return process.env.OPEN_CONNECTOR_RUNTIME_TOKEN?.trim() || undefined;
 }
 
-export function isSystemManagedMcpServerId(id: unknown) {
-  return id === OPEN_CONNECTOR_MCP_ID;
+function ragMcpUrl() {
+  return process.env.RAG_MCP_URL?.trim() || "http://rag-mcp:8080/mcp";
 }
 
-export function getSystemManagedMcpServer(): GatewayMcpServer {
-  return {
-    id: OPEN_CONNECTOR_MCP_ID,
-    name: "Open Connector",
-    namespace: OPEN_CONNECTOR_MCP_NAMESPACE,
-    url: openConnectorMcpUrl(),
-    enabled: true,
-    managed: true,
-    authHeader: "Authorization",
-    toolIncludes: [],
-    toolExcludes: [],
-    keyConfigured: Boolean(openConnectorRuntimeToken()),
-    createdAt: SYSTEM_MANAGED_TIMESTAMP,
-    updatedAt: SYSTEM_MANAGED_TIMESTAMP,
-  };
+function lightRagApiKey() {
+  return process.env.LIGHTRAG_API_KEY?.trim() || undefined;
+}
+
+export function isSystemManagedMcpServerId(id: unknown) {
+  return id === OPEN_CONNECTOR_MCP_ID || id === RAG_MCP_ID;
+}
+
+export function getSystemManagedMcpServers(): GatewayMcpServer[] {
+  return [
+    {
+      id: OPEN_CONNECTOR_MCP_ID,
+      name: "Open Connector",
+      namespace: OPEN_CONNECTOR_MCP_NAMESPACE,
+      url: openConnectorMcpUrl(),
+      enabled: true,
+      managed: true,
+      authHeader: "Authorization",
+      toolIncludes: [],
+      toolExcludes: [],
+      keyConfigured: Boolean(openConnectorRuntimeToken()),
+      createdAt: SYSTEM_MANAGED_TIMESTAMP,
+      updatedAt: SYSTEM_MANAGED_TIMESTAMP,
+    },
+    {
+      id: RAG_MCP_ID,
+      name: "企业知识库 RAG",
+      namespace: RAG_MCP_NAMESPACE,
+      url: ragMcpUrl(),
+      enabled: true,
+      managed: true,
+      authHeader: "X-API-Key",
+      toolIncludes: [],
+      toolExcludes: [],
+      keyConfigured: Boolean(lightRagApiKey()),
+      createdAt: SYSTEM_MANAGED_TIMESTAMP,
+      updatedAt: SYSTEM_MANAGED_TIMESTAMP,
+    },
+  ];
+}
+
+export function getSystemManagedMcpServer(id: unknown): GatewayMcpServer {
+  const server = getSystemManagedMcpServers().find((item) => item.id === id);
+  if (!server) throw new Error("unknown system-managed MCP service");
+  return server;
 }
 
 export function getGatewayConfigPaths() {
@@ -317,11 +349,11 @@ export function validateGatewayMcpServersInput(input: unknown): GatewayMcpServer
   const ids = new Set<string>();
   const namespaces = new Set<string>();
   for (const [index, server] of servers.entries()) {
-    if (server.id === OPEN_CONNECTOR_MCP_ID) {
-      errors.push(`servers[${index}].id is reserved for the system-managed Open Connector service`);
+    if (isSystemManagedMcpServerId(server.id)) {
+      errors.push(`servers[${index}].id is reserved for a system-managed MCP service`);
     }
-    if (server.namespace === OPEN_CONNECTOR_MCP_NAMESPACE) {
-      errors.push(`servers[${index}].namespace is reserved for the system-managed Open Connector service`);
+    if ([OPEN_CONNECTOR_MCP_NAMESPACE, RAG_MCP_NAMESPACE].includes(server.namespace)) {
+      errors.push(`servers[${index}].namespace is reserved for a system-managed MCP service`);
     }
     if (ids.has(server.id)) errors.push(`servers[${index}].id is duplicated`);
     if (namespaces.has(server.namespace)) errors.push(`servers[${index}].namespace is duplicated`);
@@ -360,7 +392,7 @@ async function readStoredMcpServers(): Promise<StoredGatewayMcpServers> {
     )) as StoredGatewayMcpServers;
     return {
       ...stored,
-      servers: stored.servers.filter((server) => server.id !== OPEN_CONNECTOR_MCP_ID),
+      servers: stored.servers.filter((server) => !isSystemManagedMcpServerId(server.id)),
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -368,20 +400,42 @@ async function readStoredMcpServers(): Promise<StoredGatewayMcpServers> {
   }
 }
 
-export async function readGatewayMcpServers(): Promise<GatewayMcpServersSnapshot> {
+async function readGatewayMcpServersSnapshot(): Promise<GatewayMcpServersSnapshot> {
   const stored = await readStoredMcpServers();
   const servers = await Promise.all(stored.servers.map(async (server) => ({
     ...server,
     managed: false,
     keyConfigured: await fileExists(mcpSecretPath(server.id)),
   })));
-  return { ...stored, servers: [getSystemManagedMcpServer(), ...servers] };
+  return { ...stored, servers: [...getSystemManagedMcpServers(), ...servers] };
 }
 
-async function syncSystemManagedMcpSecret() {
-  const token = openConnectorRuntimeToken();
-  if (token) await atomicWrite(mcpSecretPath(OPEN_CONNECTOR_MCP_ID), token);
-  else await unlink(mcpSecretPath(OPEN_CONNECTOR_MCP_ID)).catch(() => undefined);
+async function syncSystemManagedMcpSecrets() {
+  const secrets = [
+    { id: OPEN_CONNECTOR_MCP_ID, value: openConnectorRuntimeToken() },
+    { id: RAG_MCP_ID, value: lightRagApiKey() },
+  ];
+  for (const secret of secrets) {
+    if (secret.value) await atomicWrite(mcpSecretPath(secret.id), secret.value);
+    else await unlink(mcpSecretPath(secret.id)).catch(() => undefined);
+  }
+}
+
+async function systemManagedMcpSecretsNeedSync() {
+  const secrets = [
+    { id: OPEN_CONNECTOR_MCP_ID, value: openConnectorRuntimeToken() },
+    { id: RAG_MCP_ID, value: lightRagApiKey() },
+  ];
+  for (const secret of secrets) {
+    try {
+      const stored = (await readFile(mcpSecretPath(secret.id), "utf8")).trim();
+      if (!secret.value || stored !== secret.value) return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (secret.value) return true;
+    }
+  }
+  return false;
 }
 
 function yamlString(value: string) {
@@ -662,13 +716,41 @@ spec:
   return `${BASE_GATEWAY_CONFIG}${route}${backends}${mcpRoute}${mcpBackends}${trafficPolicy}`;
 }
 
+async function ensureSystemManagedMcpRegistration(snapshot: GatewayMcpServersSnapshot) {
+  const paths = getGatewayConfigPaths();
+  let currentConfig = "";
+  try {
+    currentConfig = await readFile(paths.config, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const missingManagedBackend = getSystemManagedMcpServers().some((server) => (
+    server.enabled && !currentConfig.includes(`name: ${mcpBackendName(server.namespace)}\n`)
+  ));
+  if (!missingManagedBackend && !(await systemManagedMcpSecretsNeedSync())) return;
+
+  const channels = await readGatewayChannels();
+  await syncSystemManagedMcpSecrets();
+  const generated = generateGatewayConfig(channels.channels, snapshot.servers);
+  if (generated) await atomicWrite(paths.config, generated);
+  else await unlink(paths.config).catch(() => undefined);
+  await atomicWrite(paths.revision, `${randomUUID()}\n`, 0o644);
+}
+
+export async function readGatewayMcpServers(): Promise<GatewayMcpServersSnapshot> {
+  const snapshot = await readGatewayMcpServersSnapshot();
+  await ensureSystemManagedMcpRegistration(snapshot);
+  return snapshot;
+}
+
 export async function saveGatewayChannels(
   drafts: GatewayChannelDraft[],
   now = new Date(),
 ): Promise<GatewayChannelsSnapshot> {
   const [previous, mcpSnapshot] = await Promise.all([
     readGatewayChannels(),
-    readGatewayMcpServers(),
+    readGatewayMcpServersSnapshot(),
   ]);
   const previousById = new Map(previous.channels.map((channel) => [channel.id, channel]));
   const errors: string[] = [];
@@ -708,7 +790,7 @@ export async function saveGatewayChannels(
     }
   }
 
-  await syncSystemManagedMcpSecret();
+  await syncSystemManagedMcpSecrets();
   const generated = generateGatewayConfig(channels, mcpSnapshot.servers);
   if (generated) await atomicWrite(paths.config, generated);
   else await unlink(paths.config).catch(() => undefined);
@@ -737,7 +819,7 @@ export async function saveGatewayMcpServers(
   now = new Date(),
 ): Promise<GatewayMcpServersSnapshot> {
   const [previous, channelSnapshot] = await Promise.all([
-    readGatewayMcpServers(),
+    readGatewayMcpServersSnapshot(),
     readGatewayChannels(),
   ]);
   const previousUserServers = previous.servers.filter((server) => !server.managed);
@@ -777,8 +859,8 @@ export async function saveGatewayMcpServers(
     }
   }
 
-  await syncSystemManagedMcpSecret();
-  const allServers = [getSystemManagedMcpServer(), ...servers];
+  await syncSystemManagedMcpSecrets();
+  const allServers = [...getSystemManagedMcpServers(), ...servers];
   const generated = generateGatewayConfig(channelSnapshot.channels, allServers);
   if (generated) await atomicWrite(paths.config, generated);
   else await unlink(paths.config).catch(() => undefined);
@@ -862,6 +944,7 @@ export async function testGatewayChannel(draft: GatewayChannelDraft): Promise<Ga
 
 async function resolveMcpTestKey(draft: GatewayMcpServerDraft) {
   if (draft.id === OPEN_CONNECTOR_MCP_ID) return openConnectorRuntimeToken();
+  if (draft.id === RAG_MCP_ID) return lightRagApiKey();
   if (draft.apiKey) return draft.apiKey;
   if (draft.removeApiKey) return undefined;
   try {

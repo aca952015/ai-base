@@ -75,6 +75,12 @@ export const portalEntries: PortalEntry[] = [
     manageLabel: "管理知识索引",
   },
   {
+    id: "rag-mcp",
+    category: "knowledge",
+    managePath: "/mcp",
+    manageLabel: "查看 MCP 工具",
+  },
+  {
     id: "postgres",
     category: "knowledge",
     managePath: "/data",

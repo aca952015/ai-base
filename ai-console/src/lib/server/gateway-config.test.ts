@@ -23,6 +23,7 @@ import {
 const temporaryDirectories: string[] = [];
 const originalDataDirectory = process.env.AI_CONSOLE_DATA_DIR;
 const originalOpenConnectorRuntimeToken = process.env.OPEN_CONNECTOR_RUNTIME_TOKEN;
+const originalLightRagApiKey = process.env.LIGHTRAG_API_KEY;
 
 async function useTemporaryDataDirectory() {
   const directory = await mkdtemp(path.join(tmpdir(), "ai-console-gateway-"));
@@ -36,6 +37,8 @@ afterEach(async () => {
   else process.env.AI_CONSOLE_DATA_DIR = originalDataDirectory;
   if (originalOpenConnectorRuntimeToken === undefined) delete process.env.OPEN_CONNECTOR_RUNTIME_TOKEN;
   else process.env.OPEN_CONNECTOR_RUNTIME_TOKEN = originalOpenConnectorRuntimeToken;
+  if (originalLightRagApiKey === undefined) delete process.env.LIGHTRAG_API_KEY;
+  else process.env.LIGHTRAG_API_KEY = originalLightRagApiKey;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -146,14 +149,19 @@ describe("gateway MCP validation", () => {
     expect(validation.errors).toContain("servers[1].namespace is duplicated");
   });
 
-  it("reserves the Open Connector id and namespace for the system-managed service", () => {
+  it("reserves Open Connector and RAG ids and namespaces for system-managed services", () => {
     const validation = validateGatewayMcpServersInput({
-      servers: [mcpDraft({ id: "mcp-open-connector", namespace: "open-connector" })],
+      servers: [
+        mcpDraft({ id: "mcp-open-connector", namespace: "open-connector" }),
+        mcpDraft({ id: "mcp-rag", namespace: "rag" }),
+      ],
     });
     expect(validation.ok).toBe(false);
     if (validation.ok) return;
-    expect(validation.errors).toContain("servers[0].id is reserved for the system-managed Open Connector service");
-    expect(validation.errors).toContain("servers[0].namespace is reserved for the system-managed Open Connector service");
+    expect(validation.errors).toContain("servers[0].id is reserved for a system-managed MCP service");
+    expect(validation.errors).toContain("servers[0].namespace is reserved for a system-managed MCP service");
+    expect(validation.errors).toContain("servers[1].id is reserved for a system-managed MCP service");
+    expect(validation.errors).toContain("servers[1].namespace is reserved for a system-managed MCP service");
   });
 });
 
@@ -170,9 +178,10 @@ describe("gateway channel storage", () => {
     expect((await readGatewayChannels()).channels[0].keyConfigured).toBe(true);
   });
 
-  it("keeps the system-managed Open Connector MCP route when all channels are removed", async () => {
+  it("keeps all system-managed MCP routes when all channels are removed", async () => {
     await useTemporaryDataDirectory();
     process.env.OPEN_CONNECTOR_RUNTIME_TOKEN = "connector-runtime-token";
+    process.env.LIGHTRAG_API_KEY = "lightrag-api-key";
     await saveGatewayChannels([draft()]);
     const paths = getGatewayConfigPaths();
     await saveGatewayChannels([]);
@@ -180,18 +189,40 @@ describe("gateway channel storage", () => {
     expect(config).not.toContain("kind: AIGatewayRoute");
     expect(config).toContain("kind: MCPRoute");
     expect(config).toContain("mcp-open-connector");
+    expect(config).toContain("mcp-rag");
     expect(await readFile(path.join(paths.mcpSecrets, "mcp-open-connector.key"), "utf8")).toBe("connector-runtime-token");
+    expect(await readFile(path.join(paths.mcpSecrets, "mcp-rag.key"), "utf8")).toBe("lightrag-api-key");
     await expect(access(path.join(paths.secrets, "channel-openai.key"))).rejects.toThrow();
   });
 });
 
 describe("gateway MCP storage", () => {
+  it("bootstraps system-managed MCP routes when the snapshot is first read", async () => {
+    await useTemporaryDataDirectory();
+    process.env.OPEN_CONNECTOR_RUNTIME_TOKEN = "connector-runtime-token";
+    process.env.LIGHTRAG_API_KEY = "lightrag-api-key";
+
+    const snapshot = await readGatewayMcpServers();
+    expect(snapshot.servers.map((server) => server.id)).toEqual([
+      "mcp-open-connector",
+      "mcp-rag",
+    ]);
+
+    const paths = getGatewayConfigPaths();
+    const config = await readFile(paths.config, "utf8");
+    expect(config).toContain("mcp-open-connector");
+    expect(config).toContain("mcp-rag");
+    expect(await readFile(path.join(paths.mcpSecrets, "mcp-rag.key"), "utf8")).toBe("lightrag-api-key");
+  });
+
   it("persists MCP secrets separately and preserves model routes", async () => {
     await useTemporaryDataDirectory();
+    process.env.LIGHTRAG_API_KEY = "lightrag-api-key";
     await saveGatewayChannels([draft()]);
     const saved = await saveGatewayMcpServers([mcpDraft()], new Date("2026-07-20T08:00:00.000Z"));
     const savedCustomServer = saved.servers.find((server) => server.id === "mcp-github");
     expect(saved.servers[0]).toMatchObject({ id: "mcp-open-connector", managed: true, enabled: true });
+    expect(saved.servers[1]).toMatchObject({ id: "mcp-rag", managed: true, enabled: true });
     expect(savedCustomServer?.keyConfigured).toBe(true);
     expect(savedCustomServer).not.toHaveProperty("apiKey");
 
@@ -200,6 +231,7 @@ describe("gateway MCP storage", () => {
     const config = await readFile(paths.config, "utf8");
     expect(config).toContain("kind: AIGatewayRoute");
     expect(config).toContain("kind: MCPRoute");
+    expect(config).toContain("mcp-rag");
     expect(config).not.toContain("super-private-token");
     expect((await readGatewayMcpServers()).servers.find((server) => server.id === "mcp-github")?.keyConfigured).toBe(true);
     expect(JSON.parse(await readFile(paths.mcpServers, "utf8")).servers).toHaveLength(1);
@@ -215,6 +247,7 @@ describe("gateway MCP storage", () => {
     expect(config).toContain("kind: AIGatewayRoute");
     expect(config).toContain("kind: MCPRoute");
     expect(config).toContain("mcp-open-connector");
+    expect(config).toContain("mcp-rag");
     expect(config).not.toContain("mcp-github");
     await expect(access(path.join(paths.mcpSecrets, "mcp-github.key"))).rejects.toThrow();
   });

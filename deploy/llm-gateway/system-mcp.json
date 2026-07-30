@@ -6,6 +6,13 @@
       "headers": {
         "Authorization": "Bearer ${OPEN_CONNECTOR_RUNTIME_TOKEN}"
       }
+    },
+    "rag": {
+      "type": "http",
+      "url": "http://rag-mcp:8080/mcp",
+      "headers": {
+        "X-API-Key": "${LIGHTRAG_API_KEY}"
+      }
     }
   }
 }

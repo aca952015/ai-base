@@ -17,8 +17,8 @@ read_revision() {
 start_gateway() {
   if [ -s "$config_path" ]; then
     /app run "$config_path" &
-  elif [ -n "${OPEN_CONNECTOR_RUNTIME_TOKEN:-}" ]; then
-    /app run --mcp-config /etc/ai-base/open-connector-mcp.json &
+  elif [ -n "${OPEN_CONNECTOR_RUNTIME_TOKEN:-}" ] || [ -n "${LIGHTRAG_API_KEY:-}" ]; then
+    /app run --mcp-config /etc/ai-base/system-mcp.json &
   else
     OPENAI_API_KEY="${OPENAI_API_KEY:-not-configured}" /app run &
   fi

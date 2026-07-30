@@ -19,7 +19,7 @@ export default async function McpConfigPage() {
     <div className="page-stack">
       <PageHeader
         title="MCP配置"
-        description="Open Connector 默认接入；在这里管理其他 MCP 服务并通过 /mcp 提供统一入口。"
+        description="Open Connector 与企业知识库 RAG 默认接入；在这里管理其他 MCP 服务并通过 /mcp 提供统一入口。"
         actions={<StatusPill status={status} />}
       />
 

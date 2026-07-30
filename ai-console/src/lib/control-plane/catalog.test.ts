@@ -14,5 +14,6 @@ describe("service catalog", () => {
     expect(getServiceDefinition("llm-gateway")?.product).toBe("Envoy AI Gateway");
     expect(getServiceDefinition("open-connector")?.product).toBe("Open Connector");
     expect(getServiceDefinition("lightrag")?.product).toBe("LightRAG");
+    expect(getServiceDefinition("rag-mcp")?.product).toBe("Python MCP Adapter");
   });
 });

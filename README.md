@@ -21,6 +21,7 @@ OpenConnector 从 `vendor/open-connector` 中固定的上游提交构建本地�
 | 全局网关 | http://localhost:8080 | 模型、MCP、RAG、Runtime、Connector、知识库与可观测统一入口 |
 | MCP Access Gateway | http://127.0.0.1:8080/mcp | Go 实现的 OAuth 保护 MCP 接口 |
 | Envoy AI Gateway | 仅容器内访问 | 模型路由，以及内部 `/mcp` 上的外部 MCP 注册、聚合与工具路由 |
+| RAG MCP | 仅容器内访问 | 将 LightRAG 只读查询封装为内置 MCP 工具，不修改 LightRAG |
 | Agent Runtime | http://runtime.localhost:8080/docs | FastAPI、PydanticAI、MCP 与 DBOS 运行边界 |
 | Jaeger | http://jaeger.localhost:8080 | OpenTelemetry Trace |
 | PostgreSQL | 仅容器内访问 | 控制面、审计、pgvector 与 Apache AGE |
@@ -141,12 +142,13 @@ OPENAI_API_KEY=...
 打开 [MCP配置页面](https://ai-console.localhost.pomerium.io:8443/mcp)，可以管理 Envoy AI Gateway v1.0 的 MCP Gateway：
 
 - Open Connector 的 `/mcp` 默认接入统一入口，使用系统 Runtime Token，控制台以只读卡片展示；
+- 独立 `rag-mcp` 容器默认接入统一入口，提供知识问答、上下文检索、文档状态和知识图谱只读工具；
 - 上游 Streamable HTTP MCP URL 和工具命名空间；
 - 可选 API Key 与注入请求头；
 - 工具允许/排除列表、启停和真实 `tools/list` 连接测试；
 - 保存后生成原生 `MCPRoute`、`Backend`、TLS 和 Secret 资源，并触发网关自动重载。
 
-Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 Envoy 注册的 Open Connector 和其他 Streamable HTTP MCP 服务。员工 Access Token 只在 MCP Access Gateway 验证，不会透传给 Envoy 或外部 MCP；Envoy 使用各上游自身的服务凭据。
+Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 Envoy 注册的 Open Connector、企业知识库 RAG 和其他 Streamable HTTP MCP 服务。RAG MCP 通过 Compose 内网调用 LightRAG API，不修改或扩展 LightRAG 镜像。员工 Access Token 只在 MCP Access Gateway 验证，不会透传给 Envoy 或外部 MCP；Envoy 使用各上游自身的服务凭据。
 
 `/mcp` 是受 OIDC 保护的 Streamable HTTP 协议端点，不是管理页面。未认证请求返回 `401` 和标准 `WWW-Authenticate` 发现信息。网关把外部 MCP Session 签名并绑定到 `issuer + subject + client_id`，不同员工不能复用彼此会话。管理页面位于 `https://ai-console.localhost.pomerium.io:8443/mcp`。
 

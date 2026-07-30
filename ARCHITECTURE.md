@@ -22,11 +22,12 @@ Pomerium ── AI Console / Component Portal (Next.js)
    │       │        (Go + OAuth Broker)  (FastAPI +          │
    │       │             │                PydanticAI)        │
    │       │◀────────────┘                                   │
-   │       ▼           │                    ▼
-   │   外部大模型       │                 外部 SaaS
-   │                   ▼
-   └──────────── LightRAG ───── PostgreSQL + pgvector + AGE
-                 文档/RAG             KV/向量/图
+   │       ├──────── RAG MCP ────────┐      ▼
+   │       ▼           │             ▼   外部 SaaS
+   │   外部大模型       │         LightRAG
+   │                   ▼          文档/RAG
+   └──────────────────────────── PostgreSQL + pgvector + AGE
+                                      KV/向量/图
 
 Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入发布门禁，不常驻默认生产环境。
 ```
@@ -45,6 +46,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 内部工具 | 官方 MCP SDK + 薄注册层 | JSON Schema、版本、作用域、风险等级、幂等和审计 | MCP 是协议，不当作安全沙箱 |
 | 外部系统 | Open Connector | OAuth、连接凭证、Action 目录和执行 | HTTP 为主接入，MCP 为兼容入口 |
 | 知识与 RAG | LightRAG | 文档导入、分块、混合检索、知识图谱和引用查询 | 复用大模型网关与 PostgreSQL，不增加独立向量或图数据库 |
+| RAG MCP 适配器 | Python 标准库 | 将 LightRAG 问答、上下文、文档状态和知识图谱读取封装为 Streamable HTTP MCP 工具 | 独立容器、只读调用；不修改 LightRAG 镜像或代码 |
 | 数据基础设施 | PostgreSQL 17 + pgvector + Apache AGE | 控制面、审计、LightRAG KV、文档状态、向量与图数据 | 单一数据库基础设施，使用 workspace 隔离 LightRAG 数据 |
 | 评测 | Promptfoo | 黄金集、回归、安全、红队与发布门禁 | Docker profile / CI 按需运行 |
 | 可观测 | OpenTelemetry + Jaeger v2 | Agent、模型、检索、工具的统一 Trace | Trace 不替代合规审计账本 |
@@ -65,6 +67,8 @@ Agent Runtime 通过 HTTP `/v1/actions/*` 调用 Open Connector。HTTP 路径支
 ## MCP 身份边界
 
 Envoy AI Gateway 是内部外部 MCP 注册中心。Console 管理 `MCPRoute`、Backend、上游密钥和工具过滤；Envoy 的 MCP 监听端口只在 Compose 网络中开放。
+
+Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独立 `rag-mcp` 容器中，通过 API Key 调用 LightRAG 内网接口，只暴露查询类工具；LightRAG 本身不承载 MCP 协议，也不因该适配层发生代码或镜像改动。
 
 公共 `/mcp` 与 `/oauth` 由独立 Go 服务 MCP Access Gateway 接管：
 
@@ -116,13 +120,13 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 - 一站式组件 Portal、基础设施管理页面和 Agent 详情页；
 - 为每个组件提供实时状态、工作台入口、内部管理入口和端点配置入口；
 - 通过独立卡片页面管理大模型渠道、Provider/Base URL、服务端 Key、模型别名和启停状态，并原子生成 Envoy AI Gateway 原生资源；
-- 默认将 Open Connector `/mcp` 以系统托管、只读配置接入 Envoy AI，并通过与模型配置并列的 MCP 配置页面管理其他 Streamable HTTP 上游、工具命名空间、允许/排除列表和可选密钥；
+- 默认将 Open Connector `/mcp` 与独立 RAG MCP 以系统托管、只读配置接入 Envoy AI，并通过与模型配置并列的 MCP 配置页面管理其他 Streamable HTTP 上游、工具命名空间、允许/排除列表和可选密钥；
 - 通过连接器配置页面管理 OpenConnector 的连接生命周期；Connector 搜索、认证方式和动态字段读取真实 Provider Schema，凭证只经服务端 Admin API 写入且不回显，OAuth 授权成功后才创建卡片；
 - 通过管理员集成管理页面维护飞书、企微和钉钉的多个企业应用，并约束每个平台只有一个启用应用；App Secret 经 AES-256-GCM 加密后落 PostgreSQL；
 - 普通员工通过账号绑定页面发起受支持平台的个人 OAuth；OpenConnector 保存个人 Token，PostgreSQL 保存 OIDC 主体到命名连接的映射，当前上游只有飞书支持用户 OAuth；
 - 通过单独修订文件触发网关进程重载，Key 以文件替换方式注入生成过程，不写入路由 YAML 或浏览器响应；
 - 通过系统设置的 LightRAG 二级页面选择网关已发布模型并管理切片、摘要和并发参数；保存后由内部配置控制面完成原子更新、健康等待与失败回滚；
-- 服务端聚合全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、LightRAG、Jaeger 与 Promptfoo 的真实运行摘要；
+- 服务端聚合全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、LightRAG、RAG MCP、Jaeger 与 Promptfoo 的真实运行摘要；
 - JSON 配置读取、字段白名单校验和原子写入；
 - HTTP/TCP 服务健康探测；
 - “同步知识”调用 LightRAG 扫描接口并触发真实索引；评测仍由按需 profile 执行；
@@ -132,7 +136,7 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 
 Portal 负责发现、导航和常用配置治理，专业组件负责 Action 调试、运行策略等深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 
-默认 Compose 启动 AI Console、Caddy 全局网关、Go MCP Access Gateway、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、LightRAG、PostgreSQL/pgvector/AGE、Jaeger 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium 与 MCP Access Gateway 使用环境变量连接外部 OIDC。只有全局网关映射 loopback 宿主机端口。
+默认 Compose 启动 AI Console、Caddy 全局网关、Go MCP Access Gateway、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、LightRAG、独立 RAG MCP、PostgreSQL/pgvector/AGE、Jaeger 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium 与 MCP Access Gateway 使用环境变量连接外部 OIDC。只有全局网关映射 loopback 宿主机端口。
 
 下一阶段可补充 LightRAG 的企业 ACL、Promptfoo 结果导出、发布审批与审计表；不在当前浏览器控制台中添加容器管理权限。
 
