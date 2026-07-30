@@ -41,13 +41,17 @@ http://:8080 {
 		}
 
 		handle /rag/health {
-			rewrite * /ready
-			reverse_proxy agent-runtime:8000
+			uri strip_prefix /rag
+			reverse_proxy lightrag:9621 {
+				header_up X-API-Key {env.LIGHTRAG_API_KEY}
+			}
 		}
 
 		@rag path /rag /rag/*
 		handle @rag {
-			reverse_proxy agent-runtime:8000 {
+			uri strip_prefix /rag
+			reverse_proxy lightrag:9621 {
+				header_up X-API-Key {env.LIGHTRAG_API_KEY}
 				flush_interval -1
 			}
 		}
@@ -74,10 +78,15 @@ http://:8080 {
 			}
 		}
 
-		@knowledge path /knowledge /knowledge/*
-		handle @knowledge {
+		handle /knowledge {
+			redir http://knowledge.localhost:8080/webui 308
+		}
+
+		@knowledgeApi path /knowledge/*
+		handle @knowledgeApi {
 			uri strip_prefix /knowledge
-			reverse_proxy silverbullet:3000 {
+			reverse_proxy lightrag:9621 {
+				header_up X-API-Key {env.LIGHTRAG_API_KEY}
 				flush_interval -1
 			}
 		}
@@ -121,7 +130,8 @@ http://runtime.localhost:8080 {
 }
 
 http://knowledge.localhost:8080 {
-	reverse_proxy silverbullet:3000 {
+	reverse_proxy lightrag:9621 {
+		header_up X-API-Key {env.LIGHTRAG_API_KEY}
 		flush_interval -1
 	}
 }

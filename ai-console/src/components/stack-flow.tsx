@@ -5,7 +5,7 @@ const nodes = [
   { label: "模型", meta: "Envoy AI Gateway", icon: BrainCircuit, tone: "teal" },
   { label: "工具", meta: "MCP", icon: Blocks, tone: "amber" },
   { label: "连接", meta: "Open Connector", icon: Network, tone: "teal" },
-  { label: "知识", meta: "SilverBullet", icon: NotebookTabs, tone: "blue" },
+  { label: "知识", meta: "LightRAG", icon: NotebookTabs, tone: "blue" },
   { label: "数据", meta: "Postgres", icon: Database, tone: "teal" },
 ] as const;
 

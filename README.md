@@ -15,7 +15,7 @@ OpenConnector 从 `vendor/open-connector` 中固定的上游提交构建本地�
 | 服务 | 地址 | 用途 |
 | --- | --- | --- |
 | AI Console | https://ai-console.localhost.pomerium.io:8443 | 经 Pomerium 与外部 OIDC 认证的一站式 Portal |
-| SilverBullet | http://knowledge.localhost:8080 | 类 Obsidian 的 Markdown 知识库 |
+| LightRAG | http://knowledge.localhost:8080/webui | 文档、混合检索与知识图谱工作台 |
 | OpenConnector | https://open-connector.localhost.pomerium.io:8443 | 经 Pomerium 单点登录的外部连接管理入口 |
 | 本地 OIDC | http://dex.localtest.me:5556/dex | 独立部署的 Dex 认证中心，不属于 AI Base Stack |
 | 全局网关 | http://localhost:8080 | 模型、MCP、RAG、Runtime、Connector、知识库与可观测统一入口 |
@@ -23,7 +23,7 @@ OpenConnector 从 `vendor/open-connector` 中固定的上游提交构建本地�
 | Envoy AI Gateway | 仅容器内访问 | 模型路由，以及内部 `/mcp` 上的外部 MCP 注册、聚合与工具路由 |
 | Agent Runtime | http://runtime.localhost:8080/docs | FastAPI、PydanticAI、MCP 与 DBOS 运行边界 |
 | Jaeger | http://jaeger.localhost:8080 | OpenTelemetry Trace |
-| PostgreSQL | 仅容器内访问 | 控制面、审计与 pgvector |
+| PostgreSQL | 仅容器内访问 | 控制面、审计、pgvector 与 Apache AGE |
 
 查看日志或停止服务：
 
@@ -104,16 +104,18 @@ MCP_ADMIN_TOKEN=replace-with-a-random-admin-token
 | `/mcp`、`/mcp/*` | MCP Access Gateway | OIDC 验证后转发到内部 Envoy MCP，支持 Streamable HTTP |
 | `/.well-known/oauth-protected-resource/mcp` | MCP Access Gateway | OAuth Protected Resource Metadata |
 | `/oauth/*`、OAuth well-known 路径 | MCP Access Gateway | MCP 客户端 OAuth、DCR、PKCE、Token 与 JWKS |
-| `/rag/*` | Agent Runtime RAG API | 保留路径；当前 `/rag/health` 返回数据库与 pgvector 的真实就绪状态 |
+| `/rag/*` | LightRAG API | 移除 `/rag` 前缀；提供文档、检索和知识图谱 API |
 | `/runtime/*` | Agent Runtime API | 移除 `/runtime` 前缀 |
 | `/llm-admin/*` | Envoy AI Gateway 管理 API | 移除 `/llm-admin` 前缀，仅供控制台内部使用 |
 | `/connector/*` | Open Connector 功能 API | 移除 `/connector` 前缀 |
-| `/knowledge/*` | SilverBullet | 移除 `/knowledge` 前缀；浏览器使用 `knowledge.localhost:8080` |
+| `/knowledge/*` | LightRAG | 移除 `/knowledge` 前缀；浏览器使用 `knowledge.localhost:8080/webui` |
 | `/jaeger/*` | Jaeger 查询 API | 移除 `/jaeger` 前缀；浏览器使用 `jaeger.localhost:8080` |
 | `/promptfoo/*` | Promptfoo | 移除 `/promptfoo` 前缀；仅在 `quality` profile 启动后可用 |
 | `/otel/*` | Jaeger OTLP HTTP | 移除 `/otel` 前缀，例如 `/otel/v1/traces` |
 
-当前版本尚未实现知识分块、Embedding 和检索 API；除 `/rag/health` 外的 `/rag/*` 会原样转发给 Agent Runtime，待 RAG API 落地后无需再次调整统一入口。
+LightRAG 通过 Envoy AI Gateway 使用 `qwen` 完成实体关系抽取与查询，通过 `BAAI/bge-m3` 生成 1024 维向量。KV、文档状态、向量和知识图谱统一复用 PostgreSQL；pgvector 承载向量索引，Apache AGE 承载图数据。
+
+管理员可在 [系统设置 / LightRAG 配置](https://ai-console.localhost.pomerium.io:8443/settings/lightrag) 中调整运行模型、Embedding、切片和并发参数。LLM 与 Embedding 下拉项只读取大模型网关中启用渠道发布的模型；保存时 AI Console 会验证模型仍可用、探测 Embedding 维度、持久化配置并重新加载 LightRAG。加载失败时自动恢复上一份配置。`.env` 中的 `LIGHTRAG_LLM_MODEL`、`LIGHTRAG_EMBEDDING_MODEL` 和 `LIGHTRAG_EMBEDDING_DIM` 仅作为首次初始化默认值；修改 Embedding 模型或维度后必须迁移或重建已有向量索引。
 
 ### 大模型网关配置
 
@@ -198,7 +200,7 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `POST /api/integrations/:id/activate`：将应用设为平台唯一启用配置，并同步支持的 OAuth Client。
 - `GET /api/account/integrations`、`POST/DELETE /api/account/integrations/:platform/authorize`：读取、发起或解除当前员工个人绑定。
 
-OpenConnector Token、模型渠道 Key、MCP 上游 Key 与企业应用 Secret 保存在服务端，知识目录以只读方式挂载。
+OpenConnector Token、模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 保存在服务端。Console 只读取 LightRAG 文档状态，不返回知识正文。
 
 ## 可选运行面
 

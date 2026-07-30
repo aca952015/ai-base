@@ -49,6 +49,7 @@ def initialize_database() -> None:
     with psycopg.connect(DATABASE_URL) as connection:
         with connection.cursor() as cursor:
             cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS age CASCADE")
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS runtime_events (
@@ -66,7 +67,9 @@ def database_snapshot() -> dict[str, object]:
     with psycopg.connect(DATABASE_URL) as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
-            extension = cursor.fetchone()
+            vector_extension = cursor.fetchone()
+            cursor.execute("SELECT extversion FROM pg_extension WHERE extname = 'age'")
+            age_extension = cursor.fetchone()
             cursor.execute("SELECT count(*) FROM runtime_events")
             events = cursor.fetchone()
             cursor.execute("SELECT pg_database_size(current_database())")
@@ -77,7 +80,8 @@ def database_snapshot() -> dict[str, object]:
             event_types = cursor.fetchall()
     return {
         "database": "ready",
-        "pgvector": extension[0] if extension else "missing",
+        "pgvector": vector_extension[0] if vector_extension else "missing",
+        "apacheAge": age_extension[0] if age_extension else "missing",
         "runtimeEvents": int(events[0]) if events else 0,
         "databaseSizeBytes": int(database_size[0]) if database_size else 0,
         "runtimeEventTypes": {

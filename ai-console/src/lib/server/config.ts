@@ -194,6 +194,10 @@ function migrateLegacyConfig(config: ConsoleConfig): ConsoleConfig {
     services["llm-gateway"] = legacyBifrost;
   }
   delete services.bifrost;
+  if (!services.lightrag && services.silverbullet) {
+    services.lightrag = services.silverbullet;
+  }
+  delete services.silverbullet;
 
   for (const service of serviceCatalog) {
     services[service.id] ??= { enabled: true };

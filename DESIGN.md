@@ -4,7 +4,7 @@
 
 - Status: Active
 - Last refreshed: 2026-07-21
-- Primary product surfaces: AI 基础设施总览、组件门户、Agent 管理、模型配置、MCP配置、集成管理、连接器配置、能力管理、数据与知识、评测、可观测、认证管理、系统设置
+- Primary product surfaces: AI 基础设施总览、组件门户、Agent 管理、模型配置、MCP配置、集成管理、连接器配置、能力管理、数据与知识、评测、可观测、认证管理、系统设置及组件二级设置
 - Evidence reviewed: `/Users/aca/dev/ai-fde/.omx/plans/sme-agent-infrastructure-v0.1.md`、`ai-console/src/app/(console)`、`ai-console/src/components`、`ai-console/src/lib/server/component-data.ts`、Envoy AI Gateway 1.0 standalone 配置契约、用户确认的 Next.js 技术栈与工具链边界
 
 ## Brand
@@ -16,7 +16,7 @@
 ## Product goals
 
 - Goals: 让平台管理员在一分钟内判断系统健康；通过一个 Portal 找到、打开和配置整套组件；让 Agent 开发者管理模型、工具、连接和知识；让业务负责人看到质量、成本和影响
-- Non-goals: 首版不提供通用 Docker/Kubernetes 生命周期编排；不在浏览器回显密钥；Envoy AI 管理覆盖模型渠道和 MCP 上游路由，不扩展为成本分析、流量分析或评测产品；AI Console 只承接 Open Connector 的高频连接生命周期，不复制其 Action 调试、Runtime Token、策略和运行日志能力；不复制 Jaeger、Promptfoo 与 SilverBullet 的专业管理能力
+- Non-goals: 首版不提供通用 Docker/Kubernetes 生命周期编排；不在浏览器回显密钥；Envoy AI 管理覆盖模型渠道和 MCP 上游路由，不扩展为成本分析、流量分析或评测产品；AI Console 只承接 Open Connector 的高频连接生命周期，不复制其 Action 调试、Runtime Token、策略和运行日志能力；不复制 Jaeger、Promptfoo 与 LightRAG 的专业管理能力
 - Success signals: 关键组件状态可见；全局能力网关的功能入口状态可见；每个组件都能从 Portal 进入工作台或对应的内部管理页；模型渠道与 MCP 服务可以保存、测试并自动应用到 Envoy AI；Open Connector Provider 可搜索、连接凭据可按上游 Schema 动态配置、OAuth 可完成授权；异常能定位到受影响 Agent；所有高风险动作有明确确认和审计语义
 
 ## Personas and jobs
@@ -28,7 +28,7 @@
 ## Information architecture
 
 - Primary navigation: “工作台”组包含总览、组件门户、Agent、能力、数据、评测、可观测、认证；与其同级的“设置”组包含模型配置、MCP配置、集成管理、连接器配置和系统设置
-- Core routes/screens: `/`、`/components`、`/agents`、`/capabilities`、`/data`、`/evaluations`、`/observability`、`/authentication`、`/model-channels`、`/mcp`、`/integrations`、`/connectors`、`/settings`
+- Core routes/screens: `/`、`/components`、`/agents`、`/capabilities`、`/data`、`/evaluations`、`/observability`、`/authentication`、`/model-channels`、`/mcp`、`/integrations`、`/connectors`、`/settings`、`/settings/lightrag`
 - Content hierarchy: 待处理事项 > 常用组件入口 > 核心运行指标 > Agent 运行矩阵 > 依赖与服务状态 > 近期变化 > 快捷操作
 
 ## Design principles
@@ -52,7 +52,7 @@
 ## Components
 
 - Existing components to reuse: AppShell、PageHeader、SectionCard、StatusPill、ServiceTable、Button 和全局语义 token
-- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager、IntegrationManager、ConnectorManager；ComponentPortal 的资源卡片是全局唯一卡片视觉基准，分组容器、摘要/指标、资源列表、可操作设置和抽屉内工具卡片统一复用其石墨渐变卡面、细冷灰边框、14px 圆角、轻微内高光与克制阴影 token，仅按信息密度调整尺寸和内边距；模型、MCP、集成和连接器管理区沿用组件门户的“分组标题 + 直接卡片网格”结构，不再用 SectionCard 包裹整个资源列表；集成管理固定显示飞书、企微、钉钉三个分组，分组标题使用与应用卡片一致的平台彩色图标底座增强识别，每组直接添加多个企业应用；应用配置包含应用名称、App ID、App Secret 和可选备注，紧凑资源卡片展示应用名称、App ID、最多两行备注，并在底部弱化显示密钥状态和更新时间；员工账号绑定页不生成空的平台卡片，而是为管理员实际配置的每个集成应用生成独立卡片，同平台多个应用并列展示，绑定状态按应用归属；绑定卡片保持紧凑，只显示应用名称、所属平台、绑定状态和操作，不重复展示 App ID 与备注；未启用或暂不支持个人 OAuth 的应用保留可见并明确禁用原因；点击卡片进入编辑，不展示存储实现或重复操作控件；侧栏使用系统蓝整行选中态和彩色图标底座，不添加无操作意义的窗口控制装饰；侧栏底部账号触发区展示账号、角色 Badge 和邮箱，点击后向上打开石墨账号操作菜单；资源状态使用小型状态圆点和文字；ComponentPortal 将 Caddy 全局能力网关作为功能入口组件展示，但不将其误作 UI 网关；AppShell 使用“工作台/设置”分组导航和无顶部栏的全局内容布局，所有控制台路由均从窗口内容区顶部开始，不为产品名、搜索或环境状态预留空白横条；所有模块的 PageHeader 直接以页面标题为第一层可见内容，不显示产品名、数据时间或技术栈 eyebrow 小标签；模型、MCP、集成和连接器配置分别使用独立页面、卡片管理区和占满视口高度的右侧编辑抽屉，抽屉头部和底部固定、中间内容独立滚动；连接器抽屉先选择 Open Connector Provider，再从其 `auth` Schema 选择认证类型并动态生成凭据或 OAuth 表单；Provider 在编辑时固定，认证类型可切换；Open Connector MCP 使用带“系统内置”标识的只读卡片；总览和管理页面读取真实数据快照；空状态明确标注未配置项
+- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager、IntegrationManager、ConnectorManager、LightRagSettingsForm；ComponentPortal 的资源卡片是全局唯一卡片视觉基准，分组容器、摘要/指标、资源列表、可操作设置和抽屉内工具卡片统一复用其石墨渐变卡面、细冷灰边框、14px 圆角、轻微内高光与克制阴影 token，仅按信息密度调整尺寸和内边距；模型、MCP、集成和连接器管理区沿用组件门户的“分组标题 + 直接卡片网格”结构，不再用 SectionCard 包裹整个资源列表；系统设置作为配置目录，组件专属配置进入二级路由，LightRAG 使用 `/settings/lightrag`，模型选择项只读取大模型网关中已启用渠道发布的模型，不允许在该页新建渠道或手工输入未发布模型；保存 LightRAG 配置时由 AI Console 调用容器内配置控制面并重启 LightRAG，页面必须明确展示应用状态和失败回滚结果；集成管理固定显示飞书、企微、钉钉三个分组，分组标题使用与应用卡片一致的平台彩色图标底座增强识别，每组直接添加多个企业应用；应用配置包含应用名称、App ID、App Secret 和可选备注，紧凑资源卡片展示应用名称、App ID、最多两行备注，并在底部弱化显示密钥状态和更新时间；员工账号绑定页不生成空的平台卡片，而是为管理员实际配置的每个集成应用生成独立卡片，同平台多个应用并列展示，绑定状态按应用归属；绑定卡片保持紧凑，只显示应用名称、所属平台、绑定状态和操作，不重复展示 App ID 与备注；未启用或暂不支持个人 OAuth 的应用保留可见并明确禁用原因；点击卡片进入编辑，不展示存储实现或重复操作控件；侧栏使用系统蓝整行选中态和彩色图标底座，不添加无操作意义的窗口控制装饰；侧栏底部账号触发区展示账号、角色 Badge 和邮箱，点击后向上打开石墨账号操作菜单；资源状态使用小型状态圆点和文字；ComponentPortal 将 Caddy 全局能力网关作为功能入口组件展示，但不将其误作 UI 网关；AppShell 使用“工作台/设置”分组导航和无顶部栏的全局内容布局，所有控制台路由均从窗口内容区顶部开始，不为产品名、搜索或环境状态预留空白横条；所有模块的 PageHeader 直接以页面标题为第一层可见内容，不显示产品名、数据时间或技术栈 eyebrow 小标签；模型、MCP、集成和连接器配置分别使用独立页面、卡片管理区和占满视口高度的右侧编辑抽屉，抽屉头部和底部固定、中间内容独立滚动；连接器抽屉先选择 Open Connector Provider，再从其 `auth` Schema 选择认证类型并动态生成凭据或 OAuth 表单；Provider 在编辑时固定，认证类型可切换；Open Connector MCP 使用带“系统内置”标识的只读卡片；总览和管理页面读取真实数据快照；空状态明确标注未配置项
 - AppShell sidebar behavior: 参考 Codex App 使用固定品牌区、独立滚动导航区和固定账号区；导航区使用低对比度细滚动条并与主内容滚动完全分离；固定账号区以“账号名 + 管理员/员工 Badge / 邮箱”两行呈现，账号菜单从底部向上展开为紧凑操作列表，账户信息、安全和费用在能力落地前以“即将开放”占位，设置遵守管理员权限，退出登录保持可用
 - Variants and states: default/hover/focus/disabled；healthy/degraded/offline/unconfigured/running
 - Token/component ownership: 全局 CSS 自定义属性定义基础 token；组件使用语义 class，不增加独立设计系统依赖
@@ -77,6 +77,7 @@
 - Empty: 区分尚未创建、筛选无结果、权限不足和服务未接入
 - Error: 展示原因、影响和恢复动作，不只显示错误码
 - Success: 使用页面内 `aria-live` 消息确认保存、连通性测试、OAuth 授权和网关重载状态，并在页面中反映最新配置；新增或编辑模型渠道、MCP 服务时由抽屉保存动作直接写入并应用 Envoy AI，成功前保持为抽屉内草稿，不进入卡片列表或摘要统计；卡片上的启停直接应用，删除经确认后直接应用，不设置页面级二次保存按钮；Open Connector 连接在上游成功前保持为抽屉内草稿；模型同步从当前渠道配置读取可用模型并只回填抽屉草稿，不自动保存或发布
+- LightRAG apply: 保存前验证所选模型仍由启用渠道发布，并使用最小 Embedding 请求确认向量能力与维度；配置更新后等待 LightRAG 重新健康再显示成功，失败时回滚旧配置并保留表单内容
 - Disabled: 解释为什么不可操作；系统托管的 Open Connector MCP 不提供启停、编辑和删除控件，仅保留连接测试
 - Offline/slow network, if applicable: 健康检查超时后保留最后成功时间并标记“状态未知”
 

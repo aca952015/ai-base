@@ -29,8 +29,9 @@ services:
       MCP_CONNECTOR_BINDING_RESOLVER_TOKEN: ${MCP_CONNECTOR_BINDING_RESOLVER_TOKEN:-local-connector-binding-resolver-token-change-me}
       MCP_OIDC_ISSUER: ${MCP_OIDC_ISSUER:-http://127.0.0.1:8080/oauth}
       MCP_LOGIN_OIDC_ISSUER: ${MCP_LOGIN_OIDC_ISSUER:-http://dex.localtest.me:5556/dex}
-      SILVERBULLET_URL: http://global-gateway:8080/knowledge
-      SILVERBULLET_SPACE_DIR: /knowledge
+      LIGHTRAG_URL: http://global-gateway:8080/rag
+      LIGHTRAG_ADMIN_URL: http://lightrag:9622
+      LIGHTRAG_ADMIN_TOKEN: ${LIGHTRAG_ADMIN_TOKEN:-local-lightrag-admin-token-change-me}
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       JAEGER_URL: http://global-gateway:8080/jaeger
@@ -38,7 +39,6 @@ services:
       OIDC_ENABLED: "true"
     volumes:
       - console-data:/data
-      - ./deploy/silverbullet/space:/knowledge:ro
       - ./deploy/pomerium/dev-signing-public.pem:/run/secrets/pomerium-signing-public.pem:ro
     depends_on:
       global-gateway:
@@ -51,8 +51,8 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
-      silverbullet:
-        condition: service_started
+      lightrag:
+        condition: service_healthy
       jaeger:
         condition: service_started
     healthcheck:
@@ -98,7 +98,10 @@ services:
       start_period: 15s
 
   postgres:
-    image: pgvector/pgvector:0.8.5-pg17-bookworm
+    image: ai-base/postgres-age-pgvector:17
+    build:
+      context: .
+      dockerfile: deploy/postgres/Dockerfile
     restart: unless-stopped
     expose:
       - "5432"
@@ -195,6 +198,8 @@ services:
     ports:
       - "127.0.0.1:8080:8080"
       - "127.0.0.1:8443:8443"
+    environment:
+      LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-local-lightrag-api-key-change-me}
     volumes:
       - ./deploy/global-gateway/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
@@ -204,6 +209,8 @@ services:
         condition: service_healthy
       open-connector:
         condition: service_started
+      lightrag:
+        condition: service_healthy
       jaeger:
         condition: service_started
     healthcheck:
@@ -286,16 +293,87 @@ services:
       retries: 10
       start_period: 10s
 
-  silverbullet:
-    image: ghcr.io/silverbulletmd/silverbullet:2.9.0
+  lightrag-input-init:
+    image: ghcr.io/hkuds/lightrag:v1.4.16
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /inputs/.seeded ]; then
+          mkdir -p /inputs/ai_base
+          cp -R /seed/. /inputs/ai_base/
+          touch /inputs/.seeded
+        fi
+    volumes:
+      - lightrag-inputs:/inputs
+      - ./deploy/lightrag/inputs:/seed:ro
+
+  lightrag:
+    image: ai-base/lightrag:v1.4.16
+    build:
+      context: .
+      dockerfile: deploy/lightrag/Dockerfile
     restart: unless-stopped
     expose:
-      - "3000"
+      - "9621"
+      - "9622"
     environment:
-      SB_SHELL_BACKEND: "off"
-      SB_USER: ${SILVERBULLET_USER:-}
+      HOST: 0.0.0.0
+      PORT: "9621"
+      WEBUI_TITLE: AI Base 知识工作台
+      WEBUI_DESCRIPTION: 企业知识图谱与检索增强生成
+      WORKING_DIR: /app/data/rag_storage
+      INPUT_DIR: /app/data/inputs
+      WORKSPACE: ai_base
+      LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-local-lightrag-api-key-change-me}
+      LIGHTRAG_ADMIN_TOKEN: ${LIGHTRAG_ADMIN_TOKEN:-local-lightrag-admin-token-change-me}
+      LIGHTRAG_CONFIG_FILE: /app/data/config/lightrag-config.json
+      WHITELIST_PATHS: /health
+      LIGHTRAG_KV_STORAGE: PGKVStorage
+      LIGHTRAG_VECTOR_STORAGE: PGVectorStorage
+      LIGHTRAG_GRAPH_STORAGE: PGGraphStorage
+      LIGHTRAG_DOC_STATUS_STORAGE: PGDocStatusStorage
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ai_base
+      POSTGRES_PASSWORD: ${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}
+      POSTGRES_DATABASE: ai_base
+      POSTGRES_MAX_CONNECTIONS: "12"
+      POSTGRES_VECTOR_INDEX_TYPE: HNSW
+      LLM_BINDING: openai
+      LLM_BINDING_HOST: http://llm-gateway:1975/v1
+      LLM_BINDING_API_KEY: ai-base-internal
+      LLM_MODEL: ${LIGHTRAG_LLM_MODEL:-qwen}
+      EMBEDDING_BINDING: openai
+      EMBEDDING_BINDING_HOST: http://llm-gateway:1975/v1
+      EMBEDDING_BINDING_API_KEY: ai-base-internal
+      EMBEDDING_MODEL: ${LIGHTRAG_EMBEDDING_MODEL:-BAAI/bge-m3}
+      EMBEDDING_DIM: ${LIGHTRAG_EMBEDDING_DIM:-1024}
+      EMBEDDING_TOKEN_LIMIT: ${LIGHTRAG_EMBEDDING_TOKEN_LIMIT:-8192}
+      SUMMARY_LANGUAGE: Chinese
+      MAX_ASYNC: "4"
+      MAX_PARALLEL_INSERT: "2"
     volumes:
-      - ./deploy/silverbullet/space:/space
+      - lightrag-data:/app/data/rag_storage
+      - lightrag-inputs:/app/data/inputs
+      - lightrag-config:/app/data/config
+    depends_on:
+      lightrag-input-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      llm-gateway:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:9622/health', timeout=3)
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
 
   jaeger:
     image: jaegertracing/jaeger:2.19.0
@@ -350,6 +428,9 @@ volumes:
   console-data:
   mcp-auth-data:
   open-connector-data:
+  lightrag-data:
+  lightrag-config:
+  lightrag-inputs:
   postgres-data:
   promptfoo-data:
 

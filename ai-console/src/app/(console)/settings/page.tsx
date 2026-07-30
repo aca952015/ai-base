@@ -1,4 +1,5 @@
-import { KeyRound, LockKeyhole, Router, ServerCog, ShieldCheck, TriangleAlert } from "lucide-react";
+import { ChevronRight, KeyRound, LockKeyhole, NotebookTabs, Router, ServerCog, ShieldCheck, TriangleAlert } from "lucide-react";
+import Link from "next/link";
 
 import { PageHeader } from "@/components/page-header";
 import { SectionCard } from "@/components/section-card";
@@ -29,7 +30,17 @@ export default async function SettingsPage() {
   return (
     <div className="page-stack">
       <PageHeader title="系统设置" description="管理运行环境和服务端点；组件状态来自实际配置与 API，不回显任何密钥。" />
-      <div className="settings-notice" role="note"><ServerCog size={19} aria-hidden="true" /><div><strong>配置与生产发布分离</strong><p>此页面验证并保存 Console 本地配置。正式环境建议由 SOPS + age 管理敏感变量，再通过受控发布流程注入。</p></div></div>
+      <SectionCard title="组件配置" description="进入组件二级设置，配置会由 AI Console 验证并应用到实际服务。">
+        <div className="settings-subpage-list">
+          <Link className="settings-subpage-row" href="/settings/lightrag">
+            <span className="settings-subpage-row__icon"><NotebookTabs size={19} /></span>
+            <span className="settings-subpage-row__copy"><strong>LightRAG</strong><small>模型、Embedding、切片与并发</small></span>
+            <span className="settings-subpage-row__status">{data.knowledge.pipelineBusy ? "索引处理中" : `${data.knowledge.documentCount} 篇文档`}</span>
+            <ChevronRight size={18} />
+          </Link>
+        </div>
+      </SectionCard>
+      <div className="settings-notice" role="note"><ServerCog size={19} aria-hidden="true" /><div><strong>配置应用边界</strong><p>基础端点保存在 Console；组件二级设置会明确标注是否直接应用。LightRAG 保存后会自动重新加载，敏感变量仍建议由 SOPS + age 管理。</p></div></div>
       <SectionCard title="基础设置与服务端点" description="停用能力后，健康检查会标记为“尚未配置”，而不是误报服务故障。"><SettingsForm /></SectionCard>
       <div className="dashboard-grid dashboard-grid--equal">
         <SectionCard title="真实配置状态" description="只展示 API 可用性和配置计数，不读取或回显原始值。">
@@ -44,7 +55,7 @@ export default async function SettingsPage() {
         <SectionCard title="安全边界" description="本页能由当前部署事实验证的最低控制项。">
           <ul className="check-list">
             <li><ShieldCheck size={16} /><span><strong>Token 仅在服务端</strong>聚合 API 不向浏览器返回原始凭证</span></li>
-            <li><ShieldCheck size={16} /><span><strong>知识只读</strong>Console 以只读挂载读取 SilverBullet 文件元数据</span></li>
+            <li><ShieldCheck size={16} /><span><strong>知识数据最小化</strong>Console 只读取 LightRAG 文档状态，不读取或返回知识正文</span></li>
             <li><ShieldCheck size={16} /><span><strong>能力入口分层</strong>全局网关统一代理功能流量；Envoy AI 仍只承担模型与 MCP</span></li>
             <li><ShieldCheck size={16} /><span><strong>请求体隔离</strong>Console 不读取模型请求/响应或 Jaeger Span 日志</span></li>
             {!oidcConfigured ? <li className="is-warning"><TriangleAlert size={16} /><span><strong>OIDC 未接入</strong>当前仅适用于 loopback 本机验证</span></li> : null}

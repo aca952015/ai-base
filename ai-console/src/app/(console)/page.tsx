@@ -23,7 +23,7 @@ export default async function DashboardPage() {
     <div className="page-stack">
       <PageHeader
         title="控制台总览"
-        description="直接汇总全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、SilverBullet、PostgreSQL 与 Jaeger 的实际数据。"
+        description="直接汇总全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、LightRAG、PostgreSQL 与 Jaeger 的实际数据。"
         actions={<QuickActions />}
       />
 
@@ -53,8 +53,8 @@ export default async function DashboardPage() {
       <section className="real-data-grid" aria-label="组件真实摘要">
         <article><span><BrainCircuit size={18} /></span><div><strong>Envoy AI Gateway</strong><p>{data.modelGateway.channelCount} 个渠道，{data.modelGateway.modelCount} 个已发布模型；渠道由 Console 管理</p></div></article>
         <article><span><Network size={18} /></span><div><strong>OpenConnector</strong><p>{formatNumber(data.connector.providerCount)} 个 Provider，{data.connector.connectionCount} 个连接，{data.connector.authenticatedAppCount} 个认证连接</p></div></article>
-        <article><span><NotebookTabs size={18} /></span><div><strong>SilverBullet</strong><p>{data.knowledge.documentCount} 篇 Markdown，合计 {formatBytes(data.knowledge.totalBytes)}</p></div></article>
-        <article><span><Database size={18} /></span><div><strong>PostgreSQL</strong><p>pgvector {data.runtime.pgvector}，数据库 {formatBytes(data.runtime.databaseSizeBytes)}</p></div></article>
+        <article><span><NotebookTabs size={18} /></span><div><strong>LightRAG</strong><p>{data.knowledge.documentCount} 篇文档，{data.knowledge.statusCounts.processed || 0} 篇已完成索引</p></div></article>
+        <article><span><Database size={18} /></span><div><strong>PostgreSQL</strong><p>pgvector {data.runtime.pgvector} + AGE {data.runtime.apacheAge}，数据库 {formatBytes(data.runtime.databaseSizeBytes)}</p></div></article>
       </section>
 
       <SectionCard title="Agent Runtime 注册表" description="只显示 Runtime 返回的注册配置和 PostgreSQL 中的实际事件。" action={<Link className="section-link" href="/agents">查看全部</Link>}>

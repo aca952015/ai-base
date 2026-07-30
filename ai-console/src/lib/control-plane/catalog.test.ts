@@ -13,6 +13,6 @@ describe("service catalog", () => {
     expect(getServiceDefinition("mcp-access-gateway")?.product).toBe("Go + OIDC");
     expect(getServiceDefinition("llm-gateway")?.product).toBe("Envoy AI Gateway");
     expect(getServiceDefinition("open-connector")?.product).toBe("Open Connector");
-    expect(getServiceDefinition("silverbullet")?.product).toBe("SilverBullet");
+    expect(getServiceDefinition("lightrag")?.product).toBe("LightRAG");
   });
 });

@@ -19,12 +19,12 @@ export default async function CapabilitiesPage() {
     { id: "models", title: "大模型网关", product: "Envoy AI Gateway", icon: BrainCircuit, status: statusOf("llm-gateway"), metric: `${data.modelGateway.channelCount} 个渠道 / ${data.modelGateway.modelCount} 个模型`, detail: "Console 管理上游渠道；网关只承担协议转换、模型路由和流式转发。", serviceId: "llm-gateway", managePath: "/model-channels" },
     { id: "tools", title: "内部工具", product: "Agent Runtime", icon: Blocks, status: statusOf("agent-runtime"), metric: `${registeredTools.length} 个唯一工具`, detail: `${data.runtime.agents.length} 个 Runtime Agent 的注册结果。`, serviceId: "agent-runtime" },
     { id: "connections", title: "外部系统连接", product: "Open Connector", icon: Network, status: statusOf("open-connector"), metric: `${data.connector.connectionCount} 个连接 · ${data.connector.authenticatedAppCount} 个需认证`, detail: `${formatNumber(data.connector.providerCount)} 个可用 Provider。`, serviceId: "open-connector", managePath: "/connectors" },
-    { id: "knowledge", title: "知识能力", product: "SilverBullet + pgvector", icon: NotebookTabs, status: statusOf("silverbullet"), metric: `${data.knowledge.documentCount} 篇 Markdown · pgvector ${data.runtime.pgvector}`, detail: "Markdown 文件是真实知识源；尚未建立的切片不填充演示数量。", serviceId: "silverbullet" },
+    { id: "knowledge", title: "知识能力", product: "LightRAG + PostgreSQL", icon: NotebookTabs, status: statusOf("lightrag"), metric: `${data.knowledge.documentCount} 篇文档 · pgvector ${data.runtime.pgvector}`, detail: "文档状态、向量索引和 AGE 知识图谱均来自真实组件。", serviceId: "lightrag", managePath: "/data#knowledge" },
   ];
 
   return (
     <div className="page-stack">
-      <PageHeader title="能力管理" description="汇总 Envoy AI Gateway、Agent Runtime、OpenConnector 与 SilverBullet 的实际配置和数据。" />
+      <PageHeader title="能力管理" description="汇总 Envoy AI Gateway、Agent Runtime、OpenConnector 与 LightRAG 的实际配置和数据。" />
       <section className="capability-grid" aria-label="能力目录">
         {capabilityCards.map((item) => {
           const Icon = item.icon;

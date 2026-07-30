@@ -15,7 +15,11 @@ export type ActionResult = {
   message: string;
   startedAt: string;
   completedAt: string;
-  data?: { services: ServiceSnapshot[] } | { mode: "safe-placeholder"; target: string };
+  data?: { services: ServiceSnapshot[] } | {
+    mode: "triggered" | "safe-placeholder";
+    target: string;
+    trackId?: string;
+  };
 };
 
 export function parseActionRequest(input: unknown):
@@ -48,9 +52,27 @@ export async function runAction(
   }
 
   const isEnabled = action === "sync-knowledge"
-    ? config.services.silverbullet?.enabled !== false
+    ? config.services.lightrag?.enabled !== false
     : config.services.promptfoo?.enabled !== false;
-  const target = action === "sync-knowledge" ? "silverbullet" : "promptfoo";
+  const target = action === "sync-knowledge" ? "lightrag" : "promptfoo";
+  if (action === "sync-knowledge" && isEnabled) {
+    const base = process.env.LIGHTRAG_URL || "http://localhost:8080/rag";
+    const response = await fetch(`${base}/documents/scan`, {
+      method: "POST",
+      cache: "no-store",
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) throw new Error(`LightRAG 同步请求失败：HTTP ${response.status}`);
+    const payload = await response.json() as { track_id?: string };
+    return {
+      action,
+      status: "accepted",
+      message: "LightRAG 已开始扫描并索引新增文档",
+      startedAt,
+      completedAt: new Date().toISOString(),
+      data: { mode: "triggered", target, trackId: payload.track_id },
+    };
+  }
   return {
     action,
     status: isEnabled ? "accepted" : "skipped",

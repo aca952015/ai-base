@@ -4,7 +4,7 @@ export type ServiceId =
   | "agent-runtime"
   | "llm-gateway"
   | "open-connector"
-  | "silverbullet"
+  | "lightrag"
   | "postgres"
   | "jaeger"
   | "promptfoo";
@@ -116,6 +116,9 @@ export type KnowledgeDocumentSnapshot = {
   relativePath: string;
   sizeBytes: number;
   modifiedAt: string;
+  status: string;
+  chunksCount: number;
+  errorMessage?: string;
 };
 
 export type TraceSnapshot = {
@@ -149,6 +152,7 @@ export type ComponentDataSnapshot = {
   runtime: {
     database: string;
     pgvector: string;
+    apacheAge: string;
     databaseSizeBytes: number;
     eventCount: number;
     eventTypes: Record<string, number>;
@@ -172,6 +176,8 @@ export type ComponentDataSnapshot = {
     documentCount: number;
     totalBytes: number;
     latestModifiedAt?: string;
+    pipelineBusy: boolean;
+    statusCounts: Record<string, number>;
     documents: KnowledgeDocumentSnapshot[];
   };
   tracing: {

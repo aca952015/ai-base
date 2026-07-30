@@ -29,7 +29,7 @@ const portalIcons: Record<ServiceId, LucideIcon> = {
   "agent-runtime": Bot,
   "llm-gateway": BrainCircuit,
   "open-connector": Network,
-  silverbullet: NotebookTabs,
+  lightrag: NotebookTabs,
   postgres: Database,
   promptfoo: ShieldCheck,
   jaeger: Activity,

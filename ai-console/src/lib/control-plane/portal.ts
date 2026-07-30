@@ -20,7 +20,7 @@ export const portalCategories = [
   {
     id: "knowledge" as const,
     title: "知识与数据",
-    description: "可维护的 Markdown 知识源、业务数据和向量索引。",
+    description: "文档、混合检索、知识图谱和共享数据基础设施。",
   },
   {
     id: "governance" as const,
@@ -67,12 +67,12 @@ export const portalEntries: PortalEntry[] = [
     manageLabel: "管理连接能力",
   },
   {
-    id: "silverbullet",
+    id: "lightrag",
     category: "knowledge",
-    workspaceUrl: "http://knowledge.localhost:8080",
+    workspaceUrl: "http://knowledge.localhost:8080/webui",
     workspaceLabel: "打开知识工作台",
     managePath: "/data#knowledge",
-    manageLabel: "管理知识空间",
+    manageLabel: "管理知识索引",
   },
   {
     id: "postgres",

@@ -1,6 +1,3 @@
-import { readdir, stat } from "node:fs/promises";
-import path from "node:path";
-
 import type {
   ComponentDataSnapshot,
   ConnectorConnectionSnapshot,
@@ -39,6 +36,7 @@ async function collectRuntime() {
     fetchJson<{
       database?: string;
       pgvector?: string;
+      apacheAge?: string;
       databaseSizeBytes?: number;
       runtimeEvents?: number;
       runtimeEventTypes?: Record<string, number>;
@@ -50,6 +48,7 @@ async function collectRuntime() {
   return {
     database: ready.database || "unknown",
     pgvector: ready.pgvector || "missing",
+    apacheAge: ready.apacheAge || "missing",
     databaseSizeBytes: ready.databaseSizeBytes || 0,
     eventCount: ready.runtimeEvents || 0,
     eventTypes: ready.runtimeEventTypes || {},
@@ -110,35 +109,52 @@ async function collectConnector() {
   };
 }
 
-async function walkMarkdown(directory: string, root = directory): Promise<KnowledgeDocumentSnapshot[]> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const documents: KnowledgeDocumentSnapshot[] = [];
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-    const absolutePath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      documents.push(...await walkMarkdown(absolutePath, root));
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-      const metadata = await stat(absolutePath);
-      documents.push({
-        name: entry.name.replace(/\.md$/i, ""),
-        relativePath: path.relative(root, absolutePath),
-        sizeBytes: metadata.size,
-        modifiedAt: metadata.mtime.toISOString(),
-      });
-    }
-  }
-  return documents.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt));
-}
-
 async function collectKnowledge(): Promise<ComponentDataSnapshot["knowledge"]> {
-  const directory = process.env.SILVERBULLET_SPACE_DIR
-    || path.resolve(process.cwd(), "../deploy/silverbullet/space");
-  const documents = await walkMarkdown(directory);
+  const base = process.env.LIGHTRAG_URL || "http://localhost:8080/rag";
+  const [health, payload] = await Promise.all([
+    fetchJson<{ pipeline_busy?: boolean }>(`${base}/health`),
+    fetchJson<{
+      documents?: Array<{
+        content_summary?: string;
+        content_length?: number;
+        status?: string;
+        updated_at?: string;
+        chunks_count?: number;
+        error_msg?: string | null;
+        file_path?: string;
+      }>;
+      pagination?: { total_count?: number };
+      status_counts?: Record<string, number>;
+    }>(`${base}/documents/paginated`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page: 1,
+        page_size: 200,
+        sort_field: "updated_at",
+        sort_direction: "desc",
+      }),
+    }),
+  ]);
+  const documents: KnowledgeDocumentSnapshot[] = (payload.documents || []).map((document, index) => {
+    const relativePath = document.file_path || `document-${index + 1}`;
+    const fileName = relativePath.split("/").filter(Boolean).at(-1) || relativePath;
+    return {
+      name: fileName.replace(/\.[^.]+$/, "") || document.content_summary || `文档 ${index + 1}`,
+      relativePath,
+      sizeBytes: document.content_length || 0,
+      modifiedAt: document.updated_at || new Date(0).toISOString(),
+      status: document.status || "UNKNOWN",
+      chunksCount: document.chunks_count || 0,
+      errorMessage: document.error_msg || undefined,
+    };
+  });
   return {
-    documentCount: documents.length,
+    documentCount: payload.pagination?.total_count ?? documents.length,
     totalBytes: documents.reduce((sum, document) => sum + document.sizeBytes, 0),
     latestModifiedAt: documents[0]?.modifiedAt,
+    pipelineBusy: Boolean(health.pipeline_busy),
+    statusCounts: payload.status_counts || {},
     documents,
   };
 }
@@ -254,10 +270,17 @@ export async function getComponentData(
 
   const [services, runtime, modelGateway, connector, knowledge, tracing, authentication, evaluation] = await Promise.all([
     checkServices(config),
-    safe("runtime", collectRuntime, { database: "unknown", pgvector: "missing", databaseSizeBytes: 0, eventCount: 0, eventTypes: {}, agents: [], recentEvents: [] }),
+    safe("runtime", collectRuntime, { database: "unknown", pgvector: "missing", apacheAge: "missing", databaseSizeBytes: 0, eventCount: 0, eventTypes: {}, agents: [], recentEvents: [] }),
     safe("llmGateway", collectLlmGateway, { channelCount: 0, modelCount: 0, models: [] }),
     safe("openConnector", collectConnector, { providerCount: 0, appCount: 0, authenticatedAppCount: 0, connectionCount: 0, recentRunCount: 0, connections: [] }),
-    safe("knowledge", collectKnowledge, { documentCount: 0, totalBytes: 0, latestModifiedAt: undefined, documents: [] }),
+    safe("knowledge", collectKnowledge, {
+      documentCount: 0,
+      totalBytes: 0,
+      latestModifiedAt: undefined,
+      pipelineBusy: false,
+      statusCounts: {},
+      documents: [],
+    }),
     safe("jaeger", collectTracing, { serviceCount: 0, recentTraceCount: 0, spanCount: 0, errorTraceCount: 0, traces: [] }),
     safe("mcpAuthentication", collectAuthentication, {
       identityCount: 0,
