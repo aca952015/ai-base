@@ -3,6 +3,7 @@
 import {
   Blocks,
   CheckCircle2,
+  Copy,
   FlaskConical,
   KeyRound,
   LockKeyhole,
@@ -24,6 +25,7 @@ import type {
   GatewayMcpServersSnapshot,
   GatewayMcpServerTestResult,
 } from "@/lib/control-plane/mcp";
+import { formatMcpClientConfig } from "@/lib/control-plane/mcp-client-config";
 
 type RequestState = "idle" | "saving" | "saved" | "error";
 type EditableMcpServer = Omit<GatewayMcpServer, "toolIncludes" | "toolExcludes"> & {
@@ -62,7 +64,42 @@ function toDraft(server: EditableMcpServer): GatewayMcpServerDraft {
   };
 }
 
-export function GatewayMcpManager({ initialServers }: { initialServers: GatewayMcpServer[] }) {
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Some embedded clients expose the Clipboard API but reject writes.
+      // Fall through to the selection-based compatibility path.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  try {
+    textarea.select();
+    if (!document.execCommand("copy")) {
+      throw new Error("浏览器未允许写入剪贴板");
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
+export function GatewayMcpManager({
+  initialServers,
+  mcpResourceUrl,
+  mcpResourceError,
+}: {
+  initialServers: GatewayMcpServer[];
+  mcpResourceUrl?: string;
+  mcpResourceError?: string;
+}) {
   const [servers, setServers] = useState<EditableMcpServer[]>(() => initialServers.map(toEditable));
   const [editingServer, setEditingServer] = useState<EditableMcpServer>();
   const [isCreatingServer, setIsCreatingServer] = useState(false);
@@ -73,7 +110,10 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
   const [testResults, setTestResults] = useState<Record<string, GatewayMcpServerTestResult>>({});
   const [toolsServer, setToolsServer] = useState<EditableMcpServer>();
   const [toolsResult, setToolsResult] = useState<GatewayMcpServerTestResult>();
+  const [clientConfigCopied, setClientConfigCopied] = useState(false);
+  const [clientConfigError, setClientConfigError] = useState(mcpResourceError || "");
   const drawerRef = useRef<HTMLElement>(null);
+  const clientConfigCopyTimeoutRef = useRef<number | undefined>(undefined);
   const toolsRequestIdRef = useRef(0);
   const editingId = editingServer?.id;
   const activeDrawerId = editingId ? `editor:${editingId}` : toolsServer ? `tools:${toolsServer.id}` : undefined;
@@ -120,6 +160,12 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
     }
     loadServers();
     return () => { ignore = true; };
+  }, []);
+
+  useEffect(() => () => {
+    if (clientConfigCopyTimeoutRef.current !== undefined) {
+      window.clearTimeout(clientConfigCopyTimeoutRef.current);
+    }
   }, []);
 
   useEffect(() => {
@@ -230,6 +276,28 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
     await persistServers(currentServers(), true);
   }
 
+  async function copyClientConfig() {
+    if (!mcpResourceUrl) {
+      setClientConfigError(mcpResourceError || "尚未配置对客户端公开的 MCP Resource URL。");
+      return;
+    }
+    try {
+      await copyText(formatMcpClientConfig(mcpResourceUrl));
+      if (clientConfigCopyTimeoutRef.current !== undefined) {
+        window.clearTimeout(clientConfigCopyTimeoutRef.current);
+      }
+      setClientConfigCopied(true);
+      setClientConfigError("");
+      clientConfigCopyTimeoutRef.current = window.setTimeout(() => {
+        setClientConfigCopied(false);
+        clientConfigCopyTimeoutRef.current = undefined;
+      }, 2_000);
+    } catch (error) {
+      setClientConfigCopied(false);
+      setClientConfigError(error instanceof Error ? error.message : "复制客户端 MCP 配置失败");
+    }
+  }
+
   async function setServerEnabled(id: string, enabled: boolean) {
     await persistServers(servers.map((server) => server.id === id ? { ...server, enabled } : server));
   }
@@ -324,11 +392,29 @@ export function GatewayMcpManager({ initialServers }: { initialServers: GatewayM
             <p>管理 MCP 服务、工具范围和聚合状态。</p>
           </div>
           <div className="gateway-resource-actions">
+            <button
+              className="button button--secondary"
+              type="button"
+              onClick={() => void copyClientConfig()}
+              disabled={!mcpResourceUrl}
+              title={mcpResourceUrl ? undefined : mcpResourceError}
+            >
+              {clientConfigCopied
+                ? <CheckCircle2 size={15} aria-hidden="true" />
+                : <Copy size={15} aria-hidden="true" />}
+              {clientConfigCopied ? "客户端配置已复制" : "复制客户端配置"}
+            </button>
             <button className="button button--secondary" type="button" onClick={addServer} disabled={state === "saving"}>
               <Plus size={15} aria-hidden="true" />添加 MCP 服务
             </button>
           </div>
         </header>
+
+        {clientConfigError ? (
+          <p className="gateway-channel-message is-error" aria-live="polite">
+            {clientConfigError}
+          </p>
+        ) : null}
 
         {message ? (
           <p className={`gateway-channel-message${state === "error" ? " is-error" : ""}`} aria-live="polite">
