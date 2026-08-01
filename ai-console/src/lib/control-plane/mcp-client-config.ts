@@ -59,3 +59,39 @@ export function createMcpClientConfig(resourceUrl: string) {
 export function formatMcpClientConfig(resourceUrl: string) {
   return `${JSON.stringify(createMcpClientConfig(resourceUrl), null, 2)}\n`;
 }
+
+export function createWorkBuddyMcpServerConfig(resourceUrl: string) {
+  return {
+    type: "http",
+    url: normalizeMcpResourceUrl(resourceUrl),
+  };
+}
+
+function quotePosixShellArgument(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function formatWorkBuddyCliCommand(resourceUrl: string) {
+  const serverConfig = JSON.stringify(createWorkBuddyMcpServerConfig(resourceUrl));
+  return `codebuddy mcp add-json --scope user ai-base ${quotePosixShellArgument(serverConfig)}`;
+}
+
+export function createCursorMcpClientConfig(resourceUrl: string) {
+  return {
+    mcpServers: {
+      "ai-base": createWorkBuddyMcpServerConfig(resourceUrl),
+    },
+  };
+}
+
+export function formatCursorMcpClientConfig(resourceUrl: string) {
+  return `${JSON.stringify(createCursorMcpClientConfig(resourceUrl), null, 2)}\n`;
+}
+
+export function formatCodexCliCommands(resourceUrl: string) {
+  const url = quotePosixShellArgument(normalizeMcpResourceUrl(resourceUrl));
+  return [
+    `codex mcp add ai-base --url ${url}`,
+    "codex mcp login ai-base",
+  ].join("\n");
+}

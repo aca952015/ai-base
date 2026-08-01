@@ -19,6 +19,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { copyText } from "@/lib/client/clipboard";
 import type {
   GatewayMcpServer,
   GatewayMcpServerDraft,
@@ -62,33 +63,6 @@ function toDraft(server: EditableMcpServer): GatewayMcpServerDraft {
     apiKey: server.apiKey || undefined,
     removeApiKey: server.removeApiKey,
   };
-}
-
-async function copyText(value: string) {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(value);
-      return;
-    } catch {
-      // Some embedded clients expose the Clipboard API but reject writes.
-      // Fall through to the selection-based compatibility path.
-    }
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = value;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  try {
-    textarea.select();
-    if (!document.execCommand("copy")) {
-      throw new Error("浏览器未允许写入剪贴板");
-    }
-  } finally {
-    textarea.remove();
-  }
 }
 
 export function GatewayMcpManager({

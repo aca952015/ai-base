@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createCursorMcpClientConfig,
   createMcpClientConfig,
+  createWorkBuddyMcpServerConfig,
+  formatCodexCliCommands,
+  formatCursorMcpClientConfig,
   formatMcpClientConfig,
+  formatWorkBuddyCliCommand,
   normalizeMcpResourceUrl,
   resolveMcpPublicResourceUrl,
 } from "./mcp-client-config";
@@ -30,6 +35,54 @@ describe("MCP client config", () => {
         "}",
         "",
       ].join("\n"),
+    );
+  });
+
+  it("builds a WorkBuddy HTTP server configuration", () => {
+    expect(createWorkBuddyMcpServerConfig("https://ai.example.com/mcp/")).toEqual({
+      type: "http",
+      url: "https://ai.example.com/mcp",
+    });
+  });
+
+  it("formats a user-scoped WorkBuddy CLI command", () => {
+    expect(formatWorkBuddyCliCommand("https://ai.example.com/mcp")).toBe(
+      `codebuddy mcp add-json --scope user ai-base '{"type":"http","url":"https://ai.example.com/mcp"}'`,
+    );
+  });
+
+  it("shell-quotes apostrophes in a WorkBuddy CLI command", () => {
+    expect(formatWorkBuddyCliCommand("https://ai.example.com/mcp?name=o'reilly")).toBe(
+      `codebuddy mcp add-json --scope user ai-base '{"type":"http","url":"https://ai.example.com/mcp?name=o'\\''reilly"}'`,
+    );
+  });
+
+  it("formats a global Cursor-compatible MCP configuration", () => {
+    expect(createCursorMcpClientConfig("https://ai.example.com/mcp")).toEqual({
+      mcpServers: {
+        "ai-base": {
+          type: "http",
+          url: "https://ai.example.com/mcp",
+        },
+      },
+    });
+    expect(formatCursorMcpClientConfig("https://ai.example.com/mcp")).toContain(
+      '"type": "http"',
+    );
+  });
+
+  it("formats Codex add and OAuth login commands", () => {
+    expect(formatCodexCliCommands("https://ai.example.com/mcp")).toBe(
+      [
+        "codex mcp add ai-base --url 'https://ai.example.com/mcp'",
+        "codex mcp login ai-base",
+      ].join("\n"),
+    );
+  });
+
+  it("shell-quotes the MCP URL in Codex commands", () => {
+    expect(formatCodexCliCommands("https://ai.example.com/mcp?name=o'reilly")).toContain(
+      "--url 'https://ai.example.com/mcp?name=o'\\''reilly'",
     );
   });
 

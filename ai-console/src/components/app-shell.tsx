@@ -4,6 +4,7 @@ import {
   Activity,
   Blocks,
   Bot,
+  BookOpen,
   BrainCircuit,
   ChevronDown,
   ChevronRight,
@@ -54,6 +55,7 @@ const settingsNavigation: NavigationItem[] = [
   { href: "/integrations", label: "集成管理", icon: Link2 },
   { href: "/connectors", label: "连接器配置", icon: PlugZap },
   { href: "/account", label: "账号绑定", icon: UserRound },
+  { href: "/client-setup", label: "配置指南", icon: BookOpen },
   { href: "/settings", label: "系统设置", icon: Settings },
 ];
 
@@ -76,7 +78,9 @@ export function AppShell({
   const visibleNavigation = identity.isAdmin ? navigation : [];
   const visibleSettingsNavigation = identity.isAdmin
     ? settingsNavigation
-    : settingsNavigation.filter((item) => item.href === "/account");
+    : settingsNavigation.filter((item) => (
+      item.href === "/account" || item.href === "/client-setup"
+    ));
   const initials = identity.name.trim().slice(0, 2).toUpperCase() || "AI";
   const roleLabel = identity.isAdmin ? "管理员" : "员工";
 

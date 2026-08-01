@@ -42,7 +42,11 @@ export function proxy(request: NextRequest) {
     return NextResponse.json({ error: "未认证" }, { status: 401 });
   }
 
-  if (pathname === "/account" || pathname.startsWith("/api/account/")) {
+  if (
+    pathname === "/account"
+    || pathname === "/client-setup"
+    || pathname.startsWith("/api/account/")
+  ) {
     return NextResponse.next();
   }
 
