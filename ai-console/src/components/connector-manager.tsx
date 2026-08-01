@@ -145,6 +145,11 @@ function ConnectorCard({
     : accountBound
       ? "用户绑定"
       : "全局使用";
+  const localAccount = connection.localAccount;
+  const localAccountInitials = (localAccount?.name || localAccount?.email || "AI")
+    .trim()
+    .slice(0, 2)
+    .toUpperCase();
 
   return (
     <article
@@ -163,10 +168,26 @@ function ConnectorCard({
         <div><strong>{provider?.displayName || connection.service}</strong><small>{connection.connectionName}</small></div>
         <span className={`gateway-channel-state is-enabled${connection.accessMode !== "global" ? " is-managed" : ""}`}>{accessLabel}</span>
       </div>
-      <p className="gateway-channel-endpoint" title={connection.profile.accountId}>{connection.profile.displayName}</p>
+      {accountBound && localAccount ? (
+        <div className="connector-local-account">
+          <span className="connector-local-account__avatar" aria-hidden="true">{localAccountInitials}</span>
+          <div className="connector-local-account__copy">
+            <small>本地账户</small>
+            <strong>{localAccount.name}</strong>
+            <span title={localAccount.email}>{localAccount.email}</span>
+          </div>
+        </div>
+      ) : (
+        <p className="gateway-channel-endpoint" title={connection.profile.accountId}>{connection.profile.displayName}</p>
+      )}
       <div className="gateway-channel-metrics">
         <span><LockKeyhole size={13} />{connectorAuthLabels[connection.authType]}</span>
-        <span>{connection.default ? "默认连接" : "命名连接"}</span>
+        <span
+          className={accountBound ? "connector-external-account" : undefined}
+          title={accountBound ? connection.profile.displayName : undefined}
+        >
+          {accountBound ? `外部账号：${connection.profile.displayName}` : connection.default ? "默认连接" : "命名连接"}
+        </span>
       </div>
       <div className="gateway-model-tags" aria-label="授权范围">
         {connection.profile.grantedScopes.slice(0, 3).map((scope) => <span key={scope}>{scope}</span>)}
@@ -757,10 +778,16 @@ export function ConnectorManager({
                   <div><dt>连接名称</dt><dd className="is-mono">{details.connection.connectionName}</dd></div>
                   <div><dt>认证方式</dt><dd>{connectorAuthLabels[details.connection.authType]}</dd></div>
                   <div><dt>使用范围</dt><dd>{details.connection.accessMode === "no_auth" ? "无需认证" : details.connection.accessMode === "account_bound" ? "用户绑定" : "全局使用"}</dd></div>
+                  {details.connection.localAccount ? (
+                    <>
+                      <div><dt>本地账户</dt><dd>{details.connection.localAccount.name}</dd></div>
+                      <div><dt>本地邮箱</dt><dd className="is-mono">{details.connection.localAccount.email}</dd></div>
+                    </>
+                  ) : null}
                   <div><dt>连接类型</dt><dd>{details.connection.default ? "默认连接" : "命名连接"}</dd></div>
-                  <div><dt>账号名称</dt><dd>{details.connection.profile.displayName}</dd></div>
+                  <div><dt>外部账号名称</dt><dd>{details.connection.profile.displayName}</dd></div>
                   <div><dt>凭据状态</dt><dd>{details.connection.virtual ? "无需凭据" : details.connection.configured ? "服务端已保存" : "未配置"}</dd></div>
-                  <div className="is-wide"><dt>账号 ID</dt><dd className="is-mono">{details.connection.profile.accountId}</dd></div>
+                  <div className="is-wide"><dt>外部账号 ID</dt><dd className="is-mono">{details.connection.profile.accountId}</dd></div>
                 </dl>
                 {details.provider?.description ? <p className="resource-detail-description">{details.provider.description}</p> : null}
                 <div className="resource-detail-filter-groups">

@@ -100,6 +100,8 @@ type EmployeeConnectorBindingRow = QueryResultRow & {
   platform: EnterpriseIntegrationPlatform;
   service: string;
   connection_name: string;
+  principal_email: string;
+  principal_name: string;
   status: EmployeeConnectorBindingStatus;
   display_name: string | null;
   account_id: string | null;
@@ -682,18 +684,27 @@ export async function listClassifiedConnectorConnections(): Promise<ConnectorCon
   await ensureSchema();
   const [snapshot, bindings] = await Promise.all([
     listConnectorConnections(),
-    getPool().query<Pick<EmployeeConnectorBindingRow, "service" | "connection_name">>(`
-      SELECT service, connection_name
+    getPool().query<Pick<
+      EmployeeConnectorBindingRow,
+      "service" | "connection_name" | "principal_email" | "principal_name"
+    >>(`
+      SELECT service, connection_name, principal_email, principal_name
       FROM employee_connector_bindings
       WHERE status <> 'revoked'
     `),
   ]);
-  const accountBoundConnectionKeys = new Set(
-    bindings.rows.map((binding) => connectorConnectionKey(binding.service, binding.connection_name)),
+  const localAccountsByConnectionKey = new Map(
+    bindings.rows.map((binding) => [
+      connectorConnectionKey(binding.service, binding.connection_name),
+      {
+        name: binding.principal_name,
+        email: binding.principal_email,
+      },
+    ]),
   );
   return {
     ...snapshot,
-    connections: classifyConnectorConnections(snapshot.connections, accountBoundConnectionKeys),
+    connections: classifyConnectorConnections(snapshot.connections, localAccountsByConnectionKey),
   };
 }
 

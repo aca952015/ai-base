@@ -75,6 +75,11 @@ export type ConnectorProvidersPage = {
   authTypes: ConnectorAuthType[];
 };
 
+export type ConnectorLocalAccount = {
+  name: string;
+  email: string;
+};
+
 export type ConnectorConnection = {
   id: string;
   service: string;
@@ -89,6 +94,7 @@ export type ConnectorConnection = {
     displayName: string;
     grantedScopes: string[];
   };
+  localAccount?: ConnectorLocalAccount;
 };
 
 export type ConnectorConnectionsSnapshot = {
@@ -136,16 +142,20 @@ export function connectorConnectionKey(service: string, connectionName: string) 
 
 export function classifyConnectorConnections(
   connections: ConnectorConnection[],
-  accountBoundConnectionKeys: ReadonlySet<string>,
+  localAccountsByConnectionKey: ReadonlyMap<string, ConnectorLocalAccount>,
 ) {
-  return connections.map((connection) => ({
-    ...connection,
-    accessMode: connection.authType === "no_auth"
-      ? "no_auth" as const
-      : accountBoundConnectionKeys.has(connectorConnectionKey(connection.service, connection.connectionName))
-        ? "account_bound" as const
-        : "global" as const,
-  }));
+  return connections.map((connection) => {
+    const localAccount = localAccountsByConnectionKey.get(
+      connectorConnectionKey(connection.service, connection.connectionName),
+    );
+    if (connection.authType === "no_auth") {
+      return { ...connection, accessMode: "no_auth" as const, localAccount: undefined };
+    }
+    if (localAccount) {
+      return { ...connection, accessMode: "account_bound" as const, localAccount };
+    }
+    return { ...connection, accessMode: "global" as const, localAccount: undefined };
+  });
 }
 
 export const connectorAuthLabels: Record<ConnectorAuthType, string> = {

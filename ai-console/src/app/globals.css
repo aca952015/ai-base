@@ -773,6 +773,52 @@ svg { flex: 0 0 auto; }
 .connector-access-filter button.is-active { color: var(--model-tag-ink); background: var(--model-tag-surface); box-shadow: inset 0 0 0 1px var(--model-tag-border); }
 .connector-access-filter button span { color: inherit; font-family: "SFMono-Regular", Consolas, monospace; font-size: calc(8.5px + var(--font-size-step)); font-weight: 600; opacity: .82; }
 .connector-card-grid .gateway-channel-tile { min-height: 226px; }
+.connector-local-account {
+  display: grid;
+  min-height: 60px;
+  margin: 14px 0 10px;
+  padding: 9px 10px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+}
+.connector-local-account__avatar {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  color: #d5ebff;
+  background: var(--blue-soft);
+  border: 1px solid var(--model-tag-border);
+  border-radius: 9px;
+  font-size: calc(8px + var(--font-size-step));
+  font-weight: 800;
+  place-items: center;
+}
+.connector-local-account__copy { display: grid; min-width: 0; gap: 1px; }
+.connector-local-account__copy small {
+  color: var(--ink-faint);
+  font-size: calc(7.5px + var(--font-size-step));
+  font-weight: 700;
+}
+.connector-local-account__copy strong,
+.connector-local-account__copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.connector-local-account__copy strong { color: var(--ink); font-size: calc(9.5px + var(--font-size-step)); }
+.connector-local-account__copy span { color: var(--ink-faint); font-size: calc(8px + var(--font-size-step)); }
+.gateway-channel-metrics .connector-external-account {
+  display: block;
+  min-width: 0;
+  max-width: 58%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .connector-empty-group { display: grid; min-height: 150px; padding: 24px; color: var(--ink-faint); background: var(--surface-muted); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); place-content: center; justify-items: center; gap: 5px; }
 .connector-empty-group > svg { color: var(--blue); }
 .connector-empty-group strong { color: var(--ink-soft); font-size: calc(10.5px + var(--font-size-step)); }

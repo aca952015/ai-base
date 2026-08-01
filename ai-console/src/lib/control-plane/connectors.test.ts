@@ -79,7 +79,10 @@ describe("connector access classification", () => {
 
     const classified = classifyConnectorConnections(
       connections,
-      new Set(["feishu\0usr_employee"]),
+      new Map([["feishu\0usr_employee", {
+        name: "张三",
+        email: "zhangsan@example.com",
+      }]]),
     );
 
     expect(classified.map((connection) => connection.accessMode)).toEqual([
@@ -87,5 +90,11 @@ describe("connector access classification", () => {
       "account_bound",
       "global",
     ]);
+    expect(classified[1].localAccount).toEqual({
+      name: "张三",
+      email: "zhangsan@example.com",
+    });
+    expect(classified[0].localAccount).toBeUndefined();
+    expect(classified[2].localAccount).toBeUndefined();
   });
 });
