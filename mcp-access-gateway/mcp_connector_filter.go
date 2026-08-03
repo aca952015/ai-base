@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -15,6 +17,10 @@ var protectedOpenConnectorTools = map[string]struct{}{
 	"execute_action":   {},
 	"get_action_guide": {},
 	"list_connections": {},
+}
+
+var hardDeniedConnectorActions = map[string]struct{}{
+	"wecom_bot.call_tool": {},
 }
 
 type mcpRequestFilterResult struct {
@@ -100,14 +106,55 @@ func (g *mcpGateway) filterSingleConnectorCall(
 			),
 		}
 	}
+	if _, denied := hardDeniedConnectorActions[strings.TrimSpace(actionID)]; denied {
+		auditConnectorDecision(caller, service, "", actionID, "deny", "system_hard_deny")
+		return mcpRequestFilterResult{
+			handled: true,
+			localResponse: connectorToolErrorResponse(
+				request["id"],
+				toolError{
+					code:    "action_not_authorized",
+					message: "This Action is blocked by the AI Base system security policy",
+				},
+			),
+		}
+	}
 
-	binding, err := g.resolver.resolve(ctx, caller, service)
+	requestedConnectionName, _ := arguments["connectionName"].(string)
+	requestedConnectionName = strings.TrimSpace(requestedConnectionName)
+	if strings.EqualFold(requestedConnectionName, "default") {
+		requestedConnectionName = ""
+	}
+	binding, err := g.resolver.resolve(
+		ctx,
+		caller,
+		service,
+		requestedConnectionName,
+		strings.TrimSpace(actionID),
+	)
 	if err != nil {
+		auditConnectorDecision(caller, service, requestedConnectionName, actionID, "deny", resolverToolError(err).code)
 		return mcpRequestFilterResult{
 			handled:       true,
 			localResponse: connectorToolErrorResponse(request["id"], resolverToolError(err)),
 		}
 	}
+	if binding.AccessMode == "controlled_shared" {
+		if !binding.ActionRestricted || !containsString(binding.AllowedActionIDs, strings.TrimSpace(actionID)) {
+			auditConnectorDecision(caller, service, binding.ConnectionName, actionID, "deny", "action_not_authorized")
+			return mcpRequestFilterResult{
+				handled: true,
+				localResponse: connectorToolErrorResponse(
+					request["id"],
+					toolError{
+						code:    "action_not_authorized",
+						message: "The authenticated employee is not authorized to execute this Connector Action",
+					},
+				),
+			}
+		}
+	}
+	auditConnectorDecision(caller, service, binding.ConnectionName, actionID, "allow", binding.AccessMode)
 
 	// The authenticated employee-to-connector mapping is authoritative. Public
 	// no-auth providers intentionally use their virtual default connection;
@@ -128,6 +175,36 @@ func (g *mcpGateway) filterSingleConnectorCall(
 		}
 	}
 	return mcpRequestFilterResult{body: updated}
+}
+
+func auditConnectorDecision(
+	caller identity,
+	service string,
+	connectionName string,
+	actionID string,
+	decision string,
+	reason string,
+) {
+	fingerprint := sha256.Sum256([]byte(caller.issuer + "\x00" + caller.subject))
+	slog.Info(
+		"connector authorization decision",
+		"principal", fmt.Sprintf("%x", fingerprint[:8]),
+		"client_id", caller.clientID,
+		"service", service,
+		"connection", connectionName,
+		"action", actionID,
+		"decision", decision,
+		"reason", reason,
+	)
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func protectedConnectorToolCall(request map[string]any) (string, map[string]any, bool) {
@@ -241,14 +318,29 @@ type toolError struct {
 
 func resolverToolError(err error) toolError {
 	switch {
+	case errors.Is(err, errConnectorActionNotAuthorized):
+		return toolError{
+			code:    "action_not_authorized",
+			message: "The authenticated employee is not authorized to execute this Connector Action",
+		}
+	case errors.Is(err, errConnectorSelectionRequired):
+		return toolError{
+			code:    "connector_selection_required",
+			message: "More than one authorized Connector is available. Call list_connections and provide an authorized connectionName.",
+		}
+	case errors.Is(err, errConnectorNotAuthorized):
+		return toolError{
+			code:    "connector_not_authorized",
+			message: "The authenticated employee is not authorized to use the requested Connector",
+		}
 	case errors.Is(err, errConnectorBindingNotFound):
 		return toolError{
-			code:    "connector_binding_required",
-			message: "No active personal connector is available for this employee and service. Open AI Base > Account binding, bind or reauthorize the corresponding enterprise account, then retry. Do not request credentials or use a shared/default connection.",
+			code:    "connector_authorization_required",
+			message: "No authorized Connector is available for this employee and service. Bind a personal account or ask an administrator to grant a controlled shared Connector, then retry. Do not request credentials.",
 			remediation: map[string]any{
-				"action": "open_account_binding",
-				"path":   "/account",
-				"label":  "AI Base 账号绑定",
+				"action": "open_connector_access",
+				"path":   "/connectors",
+				"label":  "AI Base Connector 授权",
 			},
 		}
 	case errors.Is(err, errInvalidConnectorBinding):
@@ -278,6 +370,12 @@ func connectorListResponse(id any, bindings []connectorBinding) map[string]any {
 		}
 		if binding.AuthType != "" {
 			connection["authType"] = binding.AuthType
+		}
+		if binding.AccessMode != "" {
+			connection["accessMode"] = binding.AccessMode
+		}
+		if binding.ActionRestricted {
+			connection["allowedActionIds"] = binding.AllowedActionIDs
 		}
 		profile := binding.Profile
 		if profile == nil && binding.DisplayName != "" {

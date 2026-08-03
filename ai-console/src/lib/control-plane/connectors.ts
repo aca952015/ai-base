@@ -1,5 +1,5 @@
 export type ConnectorAuthType = "no_auth" | "api_key" | "custom_credential" | "oauth2";
-export type ConnectorAccessMode = "no_auth" | "account_bound" | "global";
+export type ConnectorAccessMode = "no_auth" | "account_bound" | "controlled_shared" | "global";
 
 export type ConnectorCredentialField = {
   key: string;
@@ -80,6 +80,13 @@ export type ConnectorLocalAccount = {
   email: string;
 };
 
+export type ConnectorSharedAccess = {
+  resourceId: string;
+  displayName: string;
+  securityDomain: string;
+  grantCount: number;
+};
+
 export type ConnectorConnection = {
   id: string;
   service: string;
@@ -95,6 +102,7 @@ export type ConnectorConnection = {
     grantedScopes: string[];
   };
   localAccount?: ConnectorLocalAccount;
+  sharedAccess?: ConnectorSharedAccess;
 };
 
 export type ConnectorConnectionsSnapshot = {
@@ -143,18 +151,22 @@ export function connectorConnectionKey(service: string, connectionName: string) 
 export function classifyConnectorConnections(
   connections: ConnectorConnection[],
   localAccountsByConnectionKey: ReadonlyMap<string, ConnectorLocalAccount>,
+  sharedAccessByConnectionKey: ReadonlyMap<string, ConnectorSharedAccess> = new Map(),
 ) {
   return connections.map((connection) => {
-    const localAccount = localAccountsByConnectionKey.get(
-      connectorConnectionKey(connection.service, connection.connectionName),
-    );
+    const key = connectorConnectionKey(connection.service, connection.connectionName);
+    const localAccount = localAccountsByConnectionKey.get(key);
+    const sharedAccess = sharedAccessByConnectionKey.get(key);
     if (connection.authType === "no_auth") {
-      return { ...connection, accessMode: "no_auth" as const, localAccount: undefined };
+      return { ...connection, accessMode: "no_auth" as const, localAccount: undefined, sharedAccess: undefined };
     }
     if (localAccount) {
-      return { ...connection, accessMode: "account_bound" as const, localAccount };
+      return { ...connection, accessMode: "account_bound" as const, localAccount, sharedAccess: undefined };
     }
-    return { ...connection, accessMode: "global" as const, localAccount: undefined };
+    if (sharedAccess) {
+      return { ...connection, accessMode: "controlled_shared" as const, localAccount: undefined, sharedAccess };
+    }
+    return { ...connection, accessMode: "global" as const, localAccount: undefined, sharedAccess: undefined };
   });
 }
 

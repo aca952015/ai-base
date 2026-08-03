@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   ChevronRight,
   ExternalLink,
-  Globe2,
   KeyRound,
   LockKeyhole,
   Pencil,
@@ -15,6 +14,7 @@ import {
   Search,
   ShieldCheck,
   Trash2,
+  UsersRound,
   UserRound,
   X,
 } from "lucide-react";
@@ -36,6 +36,10 @@ import {
   type ConnectorProviderSummary,
   type ConnectorProvidersPage,
 } from "@/lib/control-plane/connectors";
+import type {
+  SharedConnectorAccessSnapshot,
+  SharedConnectorResource,
+} from "@/lib/control-plane/connector-access";
 
 type RequestState = "idle" | "loading" | "saving" | "saved" | "error";
 
@@ -58,6 +62,20 @@ type ConnectorDetailsState = {
   connection: ConnectorConnection;
   provider?: ConnectorProviderDetail;
   loading: boolean;
+  error?: string;
+};
+
+type SharedAccessEditorState = {
+  connection: ConnectorConnection;
+  resource?: SharedConnectorResource;
+  displayName: string;
+  securityDomain: string;
+  principals: string;
+  actionIds: string[];
+  provider?: ConnectorProviderDetail;
+  hardDeniedActionIds: string[];
+  loading: boolean;
+  saving: boolean;
   error?: string;
 };
 
@@ -131,6 +149,7 @@ function ConnectorCard({
   onView,
   onEdit,
   onDisconnect,
+  onManageAccess,
 }: {
   connection: ConnectorConnection;
   provider?: ConnectorProviderSummary;
@@ -138,13 +157,17 @@ function ConnectorCard({
   onView: (connection: ConnectorConnection) => void;
   onEdit: (connection: ConnectorConnection) => void;
   onDisconnect: (connection: ConnectorConnection) => void;
+  onManageAccess: (connection: ConnectorConnection) => void;
 }) {
   const accountBound = connection.accessMode === "account_bound";
+  const controlledShared = connection.accessMode === "controlled_shared";
   const accessLabel = connection.accessMode === "no_auth"
     ? "无需认证"
     : accountBound
       ? "用户绑定"
-      : "全局使用";
+      : controlledShared
+        ? "受控共享"
+        : "全局使用";
   const localAccount = connection.localAccount;
   const localAccountInitials = (localAccount?.name || localAccount?.email || "AI")
     .trim()
@@ -199,9 +222,12 @@ function ConnectorCard({
           ? <span className="gateway-managed-lock"><ShieldCheck size={14} />无需配置</span>
           : accountBound
             ? <span className="gateway-managed-lock"><UserRound size={14} />员工专属连接</span>
-            : <span className="gateway-managed-lock"><CheckCircle2 size={14} />凭据已保存</span>}
-        {connection.accessMode === "global" ? <button className="button button--secondary" type="button" onClick={() => onEdit(connection)}><Pencil size={14} />编辑</button> : null}
-        {connection.accessMode === "global" ? <button className="gateway-remove-button" type="button" onClick={() => onDisconnect(connection)} disabled={deleting} aria-label={`断开${connection.connectionName}`}><Trash2 size={15} /></button> : null}
+            : controlledShared
+              ? <span className="gateway-managed-lock"><UsersRound size={14} />{connection.sharedAccess?.grantCount || 0} 条授权</span>
+              : <span className="gateway-managed-lock"><CheckCircle2 size={14} />凭据已保存</span>}
+        {connection.accessMode === "global" || controlledShared ? <button className="button button--secondary" type="button" onClick={() => onManageAccess(connection)}><ShieldCheck size={14} />授权</button> : null}
+        {connection.accessMode === "global" || controlledShared ? <button className="button button--secondary" type="button" onClick={() => onEdit(connection)}><Pencil size={14} />编辑</button> : null}
+        {connection.accessMode === "global" || controlledShared ? <button className="gateway-remove-button" type="button" onClick={() => onDisconnect(connection)} disabled={deleting} aria-label={`断开${connection.connectionName}`}><Trash2 size={15} /></button> : null}
       </div>
     </article>
   );
@@ -230,6 +256,7 @@ export function ConnectorManager({
   const [providerLoading, setProviderLoading] = useState(false);
   const [editor, setEditor] = useState<EditorState>();
   const [details, setDetails] = useState<ConnectorDetailsState>();
+  const [accessEditor, setAccessEditor] = useState<SharedAccessEditorState>();
   const [detailsActionView, setDetailsActionView] = useState<ConnectorActionView>("authorized");
   const [accessFilter, setAccessFilter] = useState<ConnectorAccessFilter>("all");
   const [state, setState] = useState<RequestState>(initialError ? "error" : "idle");
@@ -254,16 +281,22 @@ export function ConnectorManager({
     () => connections.filter((connection) => connection.accessMode === "global"),
     [connections],
   );
+  const controlledSharedConnections = useMemo(
+    () => connections.filter((connection) => connection.accessMode === "controlled_shared"),
+    [connections],
+  );
   const detailActions = details?.provider?.actions ?? [];
   const authorizedDetailActions = details
     ? detailActions.filter((action) => connectorActionIsAuthorized(details.connection, action))
     : [];
   const visibleDetailActions = detailsActionView === "authorized" ? authorizedDetailActions : detailActions;
   const selectingProvider = Boolean(editor && !editor.provider && !editor.loadingProvider);
-  const drawerOpen = Boolean(editor || details);
+  const drawerOpen = Boolean(editor || details || accessEditor);
   const drawerFocusKey = editor
     ? `editor:${editor.original?.id || editor.provider?.service || "new"}`
-    : details ? `details:${details.connection.id}` : undefined;
+    : details
+      ? `details:${details.connection.id}`
+      : accessEditor ? `access:${accessEditor.connection.id}` : undefined;
 
   const closeEditor = useCallback(() => {
     setEditor(undefined);
@@ -273,10 +306,12 @@ export function ConnectorManager({
   }, []);
 
   const closeDetails = useCallback(() => setDetails(undefined), []);
+  const closeAccessEditor = useCallback(() => setAccessEditor(undefined), []);
   const closeActiveDrawer = useCallback(() => {
     closeEditor();
     closeDetails();
-  }, [closeDetails, closeEditor]);
+    closeAccessEditor();
+  }, [closeAccessEditor, closeDetails, closeEditor]);
 
   useEffect(() => () => {
     if (oauthWatcherRef.current) clearInterval(oauthWatcherRef.current);
@@ -604,6 +639,11 @@ export function ConnectorManager({
     setState("loading");
     setMessage(`正在断开 ${connection.connectionName}…`);
     try {
+      if (connection.sharedAccess?.resourceId) {
+        await fetchJson(`/api/connector-access/shared-resources/${encodeURIComponent(connection.sharedAccess.resourceId)}`, {
+          method: "DELETE",
+        });
+      }
       await fetchJson(`/api/open-connector/connections/${encodeURIComponent(connection.service)}`, {
         method: "DELETE",
         headers: { "content-type": "application/json" },
@@ -640,23 +680,154 @@ export function ConnectorManager({
     }
   }
 
+  async function manageSharedAccess(connection: ConnectorConnection) {
+    closeEditor();
+    closeDetails();
+    setAccessEditor({
+      connection,
+      displayName: connection.sharedAccess?.displayName || connection.profile.displayName,
+      securityDomain: connection.sharedAccess?.securityDomain || "general",
+      principals: "",
+      actionIds: [],
+      hardDeniedActionIds: [],
+      loading: true,
+      saving: false,
+    });
+    try {
+      const [snapshot, provider] = await Promise.all([
+        fetchJson<SharedConnectorAccessSnapshot>("/api/connector-access/shared-resources"),
+        fetchJson<ConnectorProviderDetail>(`/api/open-connector/providers/${encodeURIComponent(connection.service)}`),
+      ]);
+      const resource = snapshot.resources.find((candidate) => (
+        candidate.service === connection.service
+        && candidate.connectionName === connection.connectionName
+      ));
+      const principals = resource?.grants.map((grant) => (
+        grant.principalType === "group"
+          ? `group:${grant.groupName || ""}`
+          : `user:${grant.principalEmail || grant.principalSubject || ""}`
+      )).filter((value) => !value.endsWith(":")) || [];
+      const actionIds = Array.from(new Set(resource?.grants.flatMap((grant) => grant.actionIds) || []));
+      setAccessEditor((current) => current?.connection.id === connection.id ? {
+        ...current,
+        resource,
+        displayName: resource?.displayName || current.displayName,
+        securityDomain: resource?.securityDomain || current.securityDomain,
+        principals: principals.join("\n"),
+        actionIds,
+        provider,
+        hardDeniedActionIds: snapshot.hardDeniedActionIds,
+        loading: false,
+      } : current);
+    } catch (error) {
+      setAccessEditor((current) => current?.connection.id === connection.id ? {
+        ...current,
+        loading: false,
+        error: error instanceof Error ? error.message : "读取共享授权失败",
+      } : current);
+    }
+  }
+
+  function patchAccessEditor(patch: Partial<SharedAccessEditorState>) {
+    setAccessEditor((current) => current ? { ...current, ...patch, error: undefined } : current);
+  }
+
+  function toggleSharedAction(actionId: string) {
+    if (!accessEditor || accessEditor.hardDeniedActionIds.includes(actionId)) return;
+    const selected = new Set(accessEditor.actionIds);
+    if (selected.has(actionId)) selected.delete(actionId);
+    else selected.add(actionId);
+    patchAccessEditor({ actionIds: Array.from(selected) });
+  }
+
+  async function saveSharedAccess() {
+    if (!accessEditor?.provider) return;
+    const principalLines = accessEditor.principals
+      .split(/\r?\n|,/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (principalLines.length && !accessEditor.actionIds.length) {
+      patchAccessEditor({ error: "至少为授权对象选择一个 Action" });
+      return;
+    }
+    let grants;
+    try {
+      grants = principalLines.map((line) => {
+        const [prefix, ...rest] = line.split(":");
+        const value = rest.join(":").trim();
+        if ((prefix !== "user" && prefix !== "group") || !value) {
+          throw new Error(`授权对象 ${line} 格式无效，请使用 user:邮箱 或 group:群组`);
+        }
+        return prefix === "group"
+          ? { principalType: "group", groupName: value, actionIds: accessEditor.actionIds }
+          : value.includes("@")
+            ? { principalType: "user", principalEmail: value, actionIds: accessEditor.actionIds }
+            : { principalType: "user", principalSubject: value, actionIds: accessEditor.actionIds };
+      });
+    } catch (error) {
+      patchAccessEditor({ error: error instanceof Error ? error.message : "授权对象格式无效" });
+      return;
+    }
+    patchAccessEditor({ saving: true });
+    try {
+      await fetchJson("/api/connector-access/shared-resources", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          service: accessEditor.connection.service,
+          connectionName: accessEditor.connection.connectionName,
+          displayName: accessEditor.displayName,
+          securityDomain: accessEditor.securityDomain,
+          enabled: true,
+          grants,
+        }),
+      });
+      await reloadConnections();
+      closeAccessEditor();
+      setState("saved");
+      setMessage("受控共享授权已保存并立即生效");
+    } catch (error) {
+      setAccessEditor((current) => current ? {
+        ...current,
+        saving: false,
+        error: error instanceof Error ? error.message : "保存共享授权失败",
+      } : current);
+    }
+  }
+
+  async function removeSharedAccess() {
+    if (!accessEditor?.resource || !window.confirm("确认移除受控共享策略？连接凭据仍保留在 OpenConnector。")) return;
+    patchAccessEditor({ saving: true });
+    try {
+      await fetchJson(`/api/connector-access/shared-resources/${encodeURIComponent(accessEditor.resource.id)}`, {
+        method: "DELETE",
+      });
+      await reloadConnections();
+      closeAccessEditor();
+      setState("saved");
+      setMessage("受控共享策略已移除，连接恢复为全局配置状态");
+    } catch (error) {
+      setAccessEditor((current) => current ? {
+        ...current,
+        saving: false,
+        error: error instanceof Error ? error.message : "移除共享授权失败",
+      } : current);
+    }
+  }
+
   const selectedAuth = authDefinition(editor?.provider, editor?.authType);
   const selectedFields = connectionFields(selectedAuth);
   const oauthFields = selectedAuth?.type === "oauth2" ? selectedAuth.clientConfigFields : [];
+  const sharedAccessActions = accessEditor?.provider?.actions || [];
 
   return (
     <>
-      <section className="model-gateway-summary connector-summary" aria-label="连接器摘要">
-        <article><span><ShieldCheck size={17} /></span><div><strong>{noAuthConnections.length}</strong><small>个无需认证连接</small></div></article>
-        <article><span><UserRound size={17} /></span><div><strong>{accountBoundConnections.length}</strong><small>个用户绑定连接</small></div></article>
-        <article><span><Globe2 size={17} /></span><div><strong>{globalConnections.length}</strong><small>个全局连接</small></div></article>
-      </section>
-
       <nav className="connector-access-filter" aria-label="连接器使用范围筛选">
         {([
           ["all", "全部", connections.length],
           ["no_auth", "无需认证", noAuthConnections.length],
           ["account_bound", "用户绑定", accountBoundConnections.length],
+          ["controlled_shared", "受控共享", controlledSharedConnections.length],
           ["global", "全局使用", globalConnections.length],
         ] as const).map(([value, label, count]) => (
           <button
@@ -690,6 +861,7 @@ export function ConnectorManager({
               onView={viewConnector}
               onEdit={editConnector}
               onDisconnect={disconnect}
+              onManageAccess={manageSharedAccess}
               key={connection.id}
             />
           ))}
@@ -720,6 +892,7 @@ export function ConnectorManager({
               onView={viewConnector}
               onEdit={editConnector}
               onDisconnect={disconnect}
+              onManageAccess={manageSharedAccess}
               key={connection.id}
             />
           ))}
@@ -728,6 +901,37 @@ export function ConnectorManager({
               <UserRound size={20} />
               <strong>暂无用户绑定的 Connector</strong>
               <span>员工完成账号绑定后会自动显示在这里。</span>
+            </div>
+          ) : null}
+        </div>
+      </section> : null}
+
+      {accessFilter === "all" || accessFilter === "controlled_shared" ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-controlled-shared-title">
+        <header className="portal-group__header">
+          <div>
+            <h2 id="connector-controlled-shared-title">受控共享</h2>
+            <p>企业共享凭据由 OpenConnector 保存，AI Base 按员工或群组限制可用 Action。</p>
+          </div>
+          <span className="gateway-channel-state is-managed">{controlledSharedConnections.length} 个 Connector</span>
+        </header>
+        <div className="gateway-channel-grid connector-card-grid">
+          {controlledSharedConnections.map((connection) => (
+            <ConnectorCard
+              connection={connection}
+              provider={providerByService.get(connection.service)}
+              deleting={deletingId === connection.id}
+              onView={viewConnector}
+              onEdit={editConnector}
+              onDisconnect={disconnect}
+              onManageAccess={manageSharedAccess}
+              key={connection.id}
+            />
+          ))}
+          {controlledSharedConnections.length === 0 ? (
+            <div className="connector-empty-group">
+              <UsersRound size={20} />
+              <strong>暂无受控共享 Connector</strong>
+              <span>在全局连接卡片中点击“授权”，即可限制员工、群组和 Action。</span>
             </div>
           ) : null}
         </div>
@@ -753,6 +957,7 @@ export function ConnectorManager({
               onView={viewConnector}
               onEdit={editConnector}
               onDisconnect={disconnect}
+              onManageAccess={manageSharedAccess}
               key={connection.id}
             />
           ))}
@@ -761,6 +966,62 @@ export function ConnectorManager({
           </button>
         </div>
       </section> : null}
+
+      {accessEditor ? createPortal(
+        <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !accessEditor.saving) closeAccessEditor(); }}>
+          <aside className="gateway-channel-drawer connector-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="shared-access-title">
+            <div className="gateway-channel-editor__header">
+              <div>
+                <span className="card-kicker">受控共享</span>
+                <h3 id="shared-access-title">{accessEditor.connection.profile.displayName}</h3>
+                <p>员工只能看到获授权的具名连接，并且只能执行勾选的 Action。凭据仍由 OpenConnector 管理。</p>
+              </div>
+              <button type="button" data-drawer-autofocus onClick={closeAccessEditor} disabled={accessEditor.saving} aria-label="关闭共享授权"><X size={17} /></button>
+            </div>
+            <div className="gateway-channel-drawer__body connector-shared-access">
+              {accessEditor.loading ? (
+                <div className="gateway-mcp-tools-state"><RefreshCw className="is-spinning" size={18} /><strong>正在读取授权策略</strong></div>
+              ) : (
+                <>
+                  <section className="resource-detail-section">
+                    <div className="resource-detail-section__header"><strong>连接策略</strong><span>{accessEditor.connection.service} / {accessEditor.connection.connectionName}</span></div>
+                    <div className="gateway-channel-fields connector-fields">
+                      <label className="field-label"><span>显示名称</span><input value={accessEditor.displayName} onChange={(event) => patchAccessEditor({ displayName: event.target.value })} /></label>
+                      <label className="field-label"><span>安全域</span><input value={accessEditor.securityDomain} onChange={(event) => patchAccessEditor({ securityDomain: event.target.value })} placeholder="general / sales / hr" /></label>
+                      <label className="field-label connector-field--wide"><span>授权对象</span><textarea rows={5} value={accessEditor.principals} onChange={(event) => patchAccessEditor({ principals: event.target.value })} placeholder={"每行一个，例如：\nuser:employee01@company.com\ngroup:sales"} /><small className="connector-field-help">员工使用 user:邮箱或可信 Subject；群组使用 group:OIDC 群组名。</small></label>
+                    </div>
+                  </section>
+                  <section className="resource-detail-section">
+                    <div className="resource-detail-section__header"><strong>允许的 Actions</strong><span>{accessEditor.actionIds.length}/{sharedAccessActions.length} 已选择</span></div>
+                    <div className="connector-shared-action-list">
+                      {sharedAccessActions.map((action) => {
+                        const hardDenied = accessEditor.hardDeniedActionIds.includes(action.id);
+                        return (
+                          <label className={hardDenied ? "is-denied" : ""} key={action.id}>
+                            <input type="checkbox" checked={accessEditor.actionIds.includes(action.id)} disabled={hardDenied || accessEditor.saving} onChange={() => toggleSharedAction(action.id)} />
+                            <span><strong>{action.id}</strong><small>{hardDenied ? "系统安全策略禁止授权" : action.description || "暂无说明"}</small></span>
+                          </label>
+                        );
+                      })}
+                      {sharedAccessActions.length === 0 ? <div className="resource-detail-empty">该 Connector 没有公开 Action，不能配置共享授权。</div> : null}
+                    </div>
+                  </section>
+                  {accessEditor.error ? <p className="gateway-channel-message is-error" role="alert">{accessEditor.error}</p> : null}
+                </>
+              )}
+            </div>
+            <div className="gateway-channel-editor__footer">
+              {accessEditor.resource ? <button className="button button--secondary" type="button" onClick={removeSharedAccess} disabled={accessEditor.saving}>移除策略</button> : null}
+              <button className="button button--secondary" type="button" onClick={closeAccessEditor} disabled={accessEditor.saving}>取消</button>
+              <button className="button button--primary" type="button" onClick={saveSharedAccess} disabled={accessEditor.loading || accessEditor.saving || !accessEditor.provider}>
+                {accessEditor.saving ? <RefreshCw className="is-spinning" size={14} /> : <Save size={14} />}
+                {accessEditor.saving ? "保存中" : "保存授权"}
+              </button>
+            </div>
+          </aside>
+        </div>,
+        document.body,
+      ) : null}
 
       {details ? createPortal(
         <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeDetails(); }}>
@@ -777,7 +1038,7 @@ export function ConnectorManager({
                   <div><dt>Service ID</dt><dd className="is-mono">{details.connection.service}</dd></div>
                   <div><dt>连接名称</dt><dd className="is-mono">{details.connection.connectionName}</dd></div>
                   <div><dt>认证方式</dt><dd>{connectorAuthLabels[details.connection.authType]}</dd></div>
-                  <div><dt>使用范围</dt><dd>{details.connection.accessMode === "no_auth" ? "无需认证" : details.connection.accessMode === "account_bound" ? "用户绑定" : "全局使用"}</dd></div>
+                  <div><dt>使用范围</dt><dd>{details.connection.accessMode === "no_auth" ? "无需认证" : details.connection.accessMode === "account_bound" ? "用户绑定" : details.connection.accessMode === "controlled_shared" ? "受控共享" : "全局使用"}</dd></div>
                   {details.connection.localAccount ? (
                     <>
                       <div><dt>本地账户</dt><dd>{details.connection.localAccount.name}</dd></div>

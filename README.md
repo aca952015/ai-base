@@ -172,8 +172,10 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - API Key 与 Client Secret 只提交到 Console 服务端，不在读取接口和编辑表单中回显；
 - OAuth 在独立窗口完成，Console 确认 OpenConnector 已生成连接后才展示新卡片；
 - OpenConnector 自带的免认证连接以只读系统卡片展示。
+- 管理员可以把具名凭据连接设置为“受控共享”，按员工账号、OIDC Subject 或用户组授权，并限制可调用的 Action；
+- 受控共享策略只在 AI Base 的 PostgreSQL 与 MCP Access Gateway 中生效，OpenConnector 仍负责保存凭据和执行 Action，不修改上游代码。
 
-新增或编辑只有在 OpenConnector 校验并保存成功后才会更新卡片列表。Action 调试、运行令牌和策略仍在 OpenConnector 专业管理界面完成。
+新增或编辑只有在 OpenConnector 校验并保存成功后才会更新卡片列表。受控共享连接必须使用非 `default` 的具名连接；MCP 网关根据已经验证的员工 OIDC 身份选择连接并校验 Action 白名单，客户端提交的连接名不能越权。高风险通用调用 `wecom_bot.call_tool` 固定拒绝共享授权，企微共享能力应按具体 Action 开放。
 
 ### 集成管理
 
@@ -198,6 +200,7 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `GET /api/open-connector/providers`、`GET /api/open-connector/providers/:service`：搜索 Connector 并读取动态认证 Schema。
 - `GET/PUT/DELETE /api/open-connector/connections`：读取安全摘要，并在服务端创建、更新或删除真实连接。
 - `GET/PUT /api/open-connector/oauth-configs/:service`、`POST /api/open-connector/oauth-authorizations`：管理 OAuth Client 配置并启动授权。
+- `GET/PUT /api/connector-access/shared-resources`、`DELETE /api/connector-access/shared-resources/:id`：管理具名 Connector 的受控共享资源、身份授权和 Action 白名单。
 - `GET/POST /api/integrations`、`PUT/DELETE /api/integrations/:id`：读取并管理飞书、企微和钉钉应用凭据。
 - `POST /api/integrations/:id/activate`：将应用设为平台唯一启用配置，并同步支持的 OAuth Client。
 - `GET /api/account/integrations`、`POST/DELETE /api/account/integrations/:platform/authorize`：读取、发起或解除当前员工个人绑定。

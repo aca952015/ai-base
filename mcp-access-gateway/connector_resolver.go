@@ -15,22 +15,29 @@ import (
 
 var (
 	errConnectorBindingNotFound     = errors.New("connector binding not found")
+	errConnectorNotAuthorized       = errors.New("connector not authorized")
+	errConnectorActionNotAuthorized = errors.New("connector action not authorized")
+	errConnectorSelectionRequired   = errors.New("connector selection required")
 	errConnectorResolverUnavailable = errors.New("connector binding resolver unavailable")
 	errInvalidConnectorBinding      = errors.New("invalid connector binding")
 )
 
 type connectorBinding struct {
-	ID             string         `json:"id,omitempty"`
-	Service        string         `json:"service"`
-	ConnectionName string         `json:"connectionName"`
-	AuthType       string         `json:"authType,omitempty"`
-	DisplayName    string         `json:"displayName,omitempty"`
-	Profile        map[string]any `json:"profile,omitempty"`
-	Public         bool           `json:"public,omitempty"`
+	ID               string         `json:"id,omitempty"`
+	Service          string         `json:"service"`
+	ConnectionName   string         `json:"connectionName"`
+	AuthType         string         `json:"authType,omitempty"`
+	DisplayName      string         `json:"displayName,omitempty"`
+	Profile          map[string]any `json:"profile,omitempty"`
+	Public           bool           `json:"public,omitempty"`
+	AccessMode       string         `json:"accessMode,omitempty"`
+	ActionRestricted bool           `json:"actionRestricted,omitempty"`
+	AllowedActionIDs []string       `json:"allowedActionIds,omitempty"`
+	PolicyIDs        []string       `json:"policyIds,omitempty"`
 }
 
 type connectorBindingResolver interface {
-	resolve(context.Context, identity, string) (connectorBinding, error)
+	resolve(context.Context, identity, string, string, string) (connectorBinding, error)
 	list(context.Context, identity) ([]connectorBinding, error)
 }
 
@@ -54,8 +61,10 @@ func (r *httpConnectorBindingResolver) resolve(
 	ctx context.Context,
 	caller identity,
 	service string,
+	requestedConnectionName string,
+	actionID string,
 ) (connectorBinding, error) {
-	payload, err := r.request(ctx, caller, service)
+	payload, err := r.request(ctx, caller, service, requestedConnectionName, actionID)
 	if err != nil {
 		return connectorBinding{}, err
 	}
@@ -89,7 +98,7 @@ func (r *httpConnectorBindingResolver) list(
 	ctx context.Context,
 	caller identity,
 ) ([]connectorBinding, error) {
-	payload, err := r.request(ctx, caller, "")
+	payload, err := r.request(ctx, caller, "", "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +129,7 @@ func (r *httpConnectorBindingResolver) list(
 }
 
 func validNamedConnection(value string) bool {
-	if value == "" || len(value) > 64 || strings.EqualFold(value, "default") {
+	if value == "" || len(value) > 128 || strings.EqualFold(value, "default") {
 		return false
 	}
 	for index, character := range value {
@@ -139,16 +148,22 @@ func (r *httpConnectorBindingResolver) request(
 	ctx context.Context,
 	caller identity,
 	service string,
+	requestedConnectionName string,
+	actionID string,
 ) (json.RawMessage, error) {
 	if r.endpoint == nil || r.token == "" {
 		return nil, errConnectorResolverUnavailable
 	}
 
-	body, err := json.Marshal(map[string]string{
-		"issuer":  caller.issuer,
-		"subject": caller.subject,
-		"email":   strings.ToLower(strings.TrimSpace(caller.email)),
-		"service": service,
+	body, err := json.Marshal(map[string]any{
+		"issuer":                  caller.issuer,
+		"subject":                 caller.subject,
+		"email":                   strings.ToLower(strings.TrimSpace(caller.email)),
+		"groups":                  caller.groups,
+		"clientId":                caller.clientID,
+		"service":                 service,
+		"requestedConnectionName": strings.TrimSpace(requestedConnectionName),
+		"actionId":                strings.TrimSpace(actionID),
 	})
 	if err != nil {
 		return nil, errConnectorResolverUnavailable
@@ -168,8 +183,25 @@ func (r *httpConnectorBindingResolver) request(
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode == http.StatusNotFound {
-		return nil, errConnectorBindingNotFound
+	if response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusConflict {
+		payload, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+		var failure struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(payload, &failure)
+		switch failure.Code {
+		case "action_not_authorized":
+			return nil, errConnectorActionNotAuthorized
+		case "connector_selection_required":
+			return nil, errConnectorSelectionRequired
+		case "connector_not_authorized":
+			return nil, errConnectorNotAuthorized
+		default:
+			if response.StatusCode == http.StatusNotFound {
+				return nil, errConnectorBindingNotFound
+			}
+			return nil, errConnectorNotAuthorized
+		}
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 8<<10))

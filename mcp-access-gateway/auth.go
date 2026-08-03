@@ -24,6 +24,7 @@ type identity struct {
 	clientID    string
 	displayName string
 	email       string
+	groups      []string
 }
 
 type tokenVerifier interface {
@@ -67,6 +68,7 @@ func (v *oidcTokenVerifier) verify(ctx context.Context, rawToken string) (identi
 		ClientID        string      `json:"client_id"`
 		Email           string      `json:"email"`
 		Name            string      `json:"name"`
+		Groups          []string    `json:"groups"`
 		Scope           interface{} `json:"scope"`
 		Scopes          interface{} `json:"scp"`
 	}
@@ -95,6 +97,7 @@ func (v *oidcTokenVerifier) verify(ctx context.Context, rawToken string) (identi
 		clientID:    clientID,
 		displayName: claims.Name,
 		email:       claims.Email,
+		groups:      append([]string(nil), claims.Groups...),
 	}, nil
 }
 

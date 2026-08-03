@@ -24,18 +24,27 @@ type fakeConnectorResolver struct {
 }
 
 type resolverCall struct {
-	caller  identity
-	service string
+	caller                  identity
+	service                 string
+	requestedConnectionName string
+	actionID                string
 }
 
 func (r *fakeConnectorResolver) resolve(
 	_ context.Context,
 	caller identity,
 	service string,
+	requestedConnectionName string,
+	actionID string,
 ) (connectorBinding, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.resolveCalls = append(r.resolveCalls, resolverCall{caller: caller, service: service})
+	r.resolveCalls = append(r.resolveCalls, resolverCall{
+		caller:                  caller,
+		service:                 service,
+		requestedConnectionName: requestedConnectionName,
+		actionID:                actionID,
+	})
 	return r.binding, r.resolveErr
 }
 
@@ -122,7 +131,9 @@ func TestConnectorToolCallInjectsIdentityBoundConnection(t *testing.T) {
 	for _, call := range resolver.resolveCalls {
 		if call.caller.issuer != alice.issuer ||
 			call.caller.subject != alice.subject ||
-			call.service != "feishu" {
+			call.service != "feishu" ||
+			call.requestedConnectionName != "" ||
+			call.actionID != "feishu.search_bitable_records" {
 			t.Fatalf("resolver received wrong identity or service: %#v", call)
 		}
 	}
@@ -264,7 +275,7 @@ func TestConnectorResolutionFailuresFailClosed(t *testing.T) {
 		{
 			name:         "employee has no binding",
 			resolverErr:  errConnectorBindingNotFound,
-			expectedCode: "connector_binding_required",
+			expectedCode: "connector_authorization_required",
 		},
 		{
 			name:         "resolver unavailable",
@@ -325,13 +336,103 @@ func TestConnectorResolutionFailuresFailClosed(t *testing.T) {
 				t.Fatalf("unexpected fail-closed response: %s", payload)
 			}
 			if errors.Is(test.resolverErr, errConnectorBindingNotFound) {
-				if !strings.Contains(string(payload), "open_account_binding") ||
-					!strings.Contains(string(payload), "/account") ||
+				if !strings.Contains(string(payload), "open_connector_access") ||
+					!strings.Contains(string(payload), "/connectors") ||
 					strings.Contains(string(payload), "Connector configuration") {
 					t.Fatalf("binding error must direct employees to account binding: %s", payload)
 				}
 			}
 		})
+	}
+}
+
+func TestHardDeniedConnectorActionNeverReachesResolverOrUpstream(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	resolver := &fakeConnectorResolver{
+		binding: connectorBinding{Service: "wecom_bot", ConnectionName: "wecom_sales_bot"},
+	}
+	gateway := newMCPGatewayWithResolver(
+		testConfig(t, upstream.URL+"/mcp"),
+		fakeVerifier{identities: map[string]identity{
+			"alice-token": {issuer: "https://id.example", subject: "alice"},
+		}},
+		resolver,
+	)
+	server := httptest.NewServer(gateway.routes())
+	defer server.Close()
+
+	response := authenticatedMCPRequest(t, server.URL, "alice-token", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "execute_action",
+			"arguments": map[string]any{
+				"actionId":       "wecom_bot.call_tool",
+				"connectionName": "wecom_sales_bot",
+			},
+		},
+	})
+	defer response.Body.Close()
+	payload, _ := io.ReadAll(response.Body)
+	if upstreamCalls.Load() != 0 || len(resolver.resolveCalls) != 0 {
+		t.Fatalf("hard-denied action must stop before resolver/upstream")
+	}
+	if !strings.Contains(string(payload), "action_not_authorized") {
+		t.Fatalf("unexpected hard-deny response: %s", payload)
+	}
+}
+
+func TestControlledSharedPolicyIsEnforcedAgainAtGateway(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	resolver := &fakeConnectorResolver{binding: connectorBinding{
+		Service:          "wecom_bot",
+		ConnectionName:   "wecom_sales_bot",
+		AccessMode:       "controlled_shared",
+		ActionRestricted: true,
+		AllowedActionIDs: []string{"wecom_bot.get_userlist"},
+	}}
+	gateway := newMCPGatewayWithResolver(
+		testConfig(t, upstream.URL+"/mcp"),
+		fakeVerifier{identities: map[string]identity{
+			"alice-token": {issuer: "https://id.example", subject: "alice"},
+		}},
+		resolver,
+	)
+	server := httptest.NewServer(gateway.routes())
+	defer server.Close()
+
+	response := authenticatedMCPRequest(t, server.URL, "alice-token", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "execute_action",
+			"arguments": map[string]any{
+				"actionId":       "wecom_bot.send_message",
+				"connectionName": "wecom_sales_bot",
+			},
+		},
+	})
+	defer response.Body.Close()
+	payload, _ := io.ReadAll(response.Body)
+	if upstreamCalls.Load() != 0 {
+		t.Fatalf("action outside the resolver policy must not reach upstream")
+	}
+	if !strings.Contains(string(payload), "action_not_authorized") {
+		t.Fatalf("unexpected policy response: %s", payload)
 	}
 }
 

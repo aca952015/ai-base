@@ -35,13 +35,23 @@ export async function POST(request: Request) {
       issuer: typeof input.issuer === "string" ? input.issuer : "",
       subject: typeof input.subject === "string" ? input.subject : "",
       email: typeof input.email === "string" ? input.email : undefined,
+      groups: Array.isArray(input.groups)
+        ? input.groups.filter((group): group is string => typeof group === "string")
+        : undefined,
+      clientId: typeof input.clientId === "string" ? input.clientId : undefined,
       service: typeof input.service === "string" ? input.service : undefined,
+      requestedConnectionName: typeof input.requestedConnectionName === "string"
+        ? input.requestedConnectionName
+        : undefined,
+      actionId: typeof input.actionId === "string" ? input.actionId : undefined,
     }));
   } catch (error) {
     const known = error instanceof IntegrationStoreError || error instanceof OpenConnectorError;
     if (!known) console.error("Connector binding resolution failed", error);
     return NextResponse.json({
       error: known ? error.message : "Connector binding resolution failed",
+      ...(error instanceof IntegrationStoreError && error.code ? { code: error.code } : {}),
+      ...(error instanceof IntegrationStoreError && error.details ? { details: error.details } : {}),
     }, { status: known ? error.status : 500 });
   }
 }

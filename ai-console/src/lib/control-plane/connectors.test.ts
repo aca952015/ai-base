@@ -59,7 +59,7 @@ describe("connector action authorization", () => {
 });
 
 describe("connector access classification", () => {
-  it("separates no-auth, employee-bound, and global connections", () => {
+  it("separates no-auth, employee-bound, controlled-shared, and global connections", () => {
     const connections: ConnectorConnection[] = [
       {
         ...oauthConnection,
@@ -74,6 +74,13 @@ describe("connector access classification", () => {
         id: "feishu/usr_employee",
         connectionName: "usr_employee",
       },
+      {
+        ...oauthConnection,
+        id: "wecom_bot/wecom_sales_bot",
+        service: "wecom_bot",
+        connectionName: "wecom_sales_bot",
+        authType: "custom_credential",
+      },
       oauthConnection,
     ];
 
@@ -83,11 +90,18 @@ describe("connector access classification", () => {
         name: "张三",
         email: "zhangsan@example.com",
       }]]),
+      new Map([["wecom_bot\0wecom_sales_bot", {
+        resourceId: "resource-1",
+        displayName: "销售机器人",
+        securityDomain: "sales",
+        grantCount: 2,
+      }]]),
     );
 
     expect(classified.map((connection) => connection.accessMode)).toEqual([
       "no_auth",
       "account_bound",
+      "controlled_shared",
       "global",
     ]);
     expect(classified[1].localAccount).toEqual({
@@ -95,6 +109,12 @@ describe("connector access classification", () => {
       email: "zhangsan@example.com",
     });
     expect(classified[0].localAccount).toBeUndefined();
-    expect(classified[2].localAccount).toBeUndefined();
+    expect(classified[2].sharedAccess).toEqual({
+      resourceId: "resource-1",
+      displayName: "销售机器人",
+      securityDomain: "sales",
+      grantCount: 2,
+    });
+    expect(classified[3].localAccount).toBeUndefined();
   });
 });

@@ -110,6 +110,15 @@ type EmployeeConnectorBindingRow = QueryResultRow & {
   updated_at: Date | string;
 };
 
+type SharedConnectorGrantResolutionRow = QueryResultRow & {
+  resource_id: string;
+  service: string;
+  connection_name: string;
+  display_name: string;
+  action_ids: unknown;
+  grant_id: string;
+};
+
 declare global {
   var aiBaseIntegrationPool: Pool | undefined;
   var aiBaseIntegrationSchemaPromise: Promise<void> | undefined;
@@ -117,11 +126,15 @@ declare global {
 
 export class IntegrationStoreError extends Error {
   readonly status: number;
+  readonly code?: string;
+  readonly details?: Record<string, unknown>;
 
-  constructor(message: string, status = 500) {
+  constructor(message: string, status = 500, code?: string, details?: Record<string, unknown>) {
     super(message);
     this.name = "IntegrationStoreError";
     this.status = status;
+    this.code = code;
+    this.details = details;
   }
 }
 
@@ -131,7 +144,7 @@ function databaseUrl() {
   return value;
 }
 
-function getPool() {
+export function getPool() {
   if (!globalThis.aiBaseIntegrationPool) {
     globalThis.aiBaseIntegrationPool = new Pool({
       connectionString: databaseUrl(),
@@ -143,7 +156,7 @@ function getPool() {
   return globalThis.aiBaseIntegrationPool;
 }
 
-async function ensureSchema() {
+export async function ensureSchema() {
   if (!globalThis.aiBaseIntegrationSchemaPromise) {
     globalThis.aiBaseIntegrationSchemaPromise = getPool().query(`
       CREATE TABLE IF NOT EXISTS integration_applications (
@@ -217,7 +230,49 @@ async function ensureSchema() {
         UNIQUE (service, connection_name)
       );
       CREATE INDEX IF NOT EXISTS employee_connector_bindings_principal_idx
-        ON employee_connector_bindings(principal_issuer, principal_subject, status)
+        ON employee_connector_bindings(principal_issuer, principal_subject, status);
+      CREATE TABLE IF NOT EXISTS shared_connector_resources (
+        id UUID PRIMARY KEY,
+        service TEXT NOT NULL,
+        connection_name TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        security_domain TEXT NOT NULL DEFAULT 'general',
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (service, connection_name)
+      );
+      CREATE TABLE IF NOT EXISTS shared_connector_grants (
+        id UUID PRIMARY KEY,
+        resource_id UUID NOT NULL REFERENCES shared_connector_resources(id) ON DELETE CASCADE,
+        principal_type TEXT NOT NULL CHECK (principal_type IN ('user', 'group')),
+        principal_issuer TEXT NOT NULL,
+        principal_subject TEXT,
+        principal_email TEXT,
+        group_name TEXT,
+        action_ids JSONB NOT NULL DEFAULT '[]'::JSONB,
+        starts_at TIMESTAMPTZ,
+        expires_at TIMESTAMPTZ,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (
+          (principal_type = 'user' AND (principal_subject IS NOT NULL OR principal_email IS NOT NULL))
+          OR (principal_type = 'group' AND group_name IS NOT NULL)
+        )
+      );
+      CREATE INDEX IF NOT EXISTS shared_connector_grants_resource_idx
+        ON shared_connector_grants(resource_id, enabled);
+      CREATE INDEX IF NOT EXISTS shared_connector_grants_user_idx
+        ON shared_connector_grants(principal_issuer, principal_subject, enabled)
+        WHERE principal_type = 'user';
+      CREATE INDEX IF NOT EXISTS shared_connector_grants_group_idx
+        ON shared_connector_grants(principal_issuer, group_name, enabled)
+        WHERE principal_type = 'group'
     `).then(() => undefined).catch((error: unknown) => {
       globalThis.aiBaseIntegrationSchemaPromise = undefined;
       throw error;
@@ -682,7 +737,7 @@ export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promis
 
 export async function listClassifiedConnectorConnections(): Promise<ConnectorConnectionsSnapshot> {
   await ensureSchema();
-  const [snapshot, bindings] = await Promise.all([
+  const [snapshot, bindings, sharedResources] = await Promise.all([
     listConnectorConnections(),
     getPool().query<Pick<
       EmployeeConnectorBindingRow,
@@ -691,6 +746,23 @@ export async function listClassifiedConnectorConnections(): Promise<ConnectorCon
       SELECT service, connection_name, principal_email, principal_name
       FROM employee_connector_bindings
       WHERE status <> 'revoked'
+    `),
+    getPool().query<{
+      id: string;
+      service: string;
+      connection_name: string;
+      display_name: string;
+      security_domain: string;
+      grant_count: string;
+    }>(`
+      SELECT resource.id, resource.service, resource.connection_name,
+             resource.display_name, resource.security_domain,
+             COUNT(grant_row.id)::TEXT AS grant_count
+      FROM shared_connector_resources AS resource
+      LEFT JOIN shared_connector_grants AS grant_row
+        ON grant_row.resource_id = resource.id AND grant_row.enabled
+      WHERE resource.enabled
+      GROUP BY resource.id
     `),
   ]);
   const localAccountsByConnectionKey = new Map(
@@ -702,9 +774,24 @@ export async function listClassifiedConnectorConnections(): Promise<ConnectorCon
       },
     ]),
   );
+  const sharedAccessByConnectionKey = new Map(
+    sharedResources.rows.map((resource) => [
+      connectorConnectionKey(resource.service, resource.connection_name),
+      {
+        resourceId: resource.id,
+        displayName: resource.display_name,
+        securityDomain: resource.security_domain,
+        grantCount: Number.parseInt(resource.grant_count, 10) || 0,
+      },
+    ]),
+  );
   return {
     ...snapshot,
-    connections: classifyConnectorConnections(snapshot.connections, localAccountsByConnectionKey),
+    connections: classifyConnectorConnections(
+      snapshot.connections,
+      localAccountsByConnectionKey,
+      sharedAccessByConnectionKey,
+    ),
   };
 }
 
@@ -840,7 +927,11 @@ export async function resolveEmployeeConnectorBindings(input: {
   issuer: string;
   subject: string;
   email?: string;
+  groups?: string[];
+  clientId?: string;
   service?: string;
+  requestedConnectionName?: string;
+  actionId?: string;
 }) {
   await ensureSchema();
   const issuer = requiredValue(input.issuer, "Issuer", 2_048);
@@ -849,6 +940,19 @@ export async function resolveEmployeeConnectorBindings(input: {
     ? requiredValue(input.email.trim().toLowerCase(), "Email", 320)
     : undefined;
   const service = input.service ? requiredValue(input.service, "Service", 128) : undefined;
+  const requestedConnectionValue = input.requestedConnectionName
+    ? requiredValue(input.requestedConnectionName, "Connection name", 128)
+    : undefined;
+  const requestedConnectionName = requestedConnectionValue?.toLowerCase() === "default"
+    ? undefined
+    : requestedConnectionValue;
+  const actionId = input.actionId ? requiredValue(input.actionId, "Action ID", 384) : undefined;
+  const groups = Array.from(new Set(
+    (Array.isArray(input.groups) ? input.groups : [])
+      .filter((group): group is string => typeof group === "string" && Boolean(group.trim()))
+      .map((group) => group.trim().toLowerCase())
+      .slice(0, 256),
+  ));
   let result = await getPool().query<EmployeeConnectorBindingRow>(`
     SELECT id, application_id, platform, service, connection_name, status,
            display_name, account_id, error_message, connected_at, updated_at
@@ -880,7 +984,44 @@ export async function resolveEmployeeConnectorBindings(input: {
     }
   }
 
-  const snapshot = await listConnectorConnections();
+  const [snapshot, sharedRows] = await Promise.all([
+    listConnectorConnections(),
+    getPool().query<SharedConnectorGrantResolutionRow>(`
+      SELECT resource.id AS resource_id, resource.service, resource.connection_name,
+             resource.display_name, grant_row.action_ids, grant_row.id AS grant_id
+      FROM shared_connector_resources AS resource
+      JOIN shared_connector_grants AS grant_row ON grant_row.resource_id = resource.id
+      WHERE resource.enabled AND grant_row.enabled
+        AND NOT EXISTS (
+          SELECT 1 FROM employee_connector_bindings AS personal_binding
+          WHERE personal_binding.service = resource.service
+            AND personal_binding.connection_name = resource.connection_name
+            AND personal_binding.status <> 'revoked'
+        )
+        AND (grant_row.starts_at IS NULL OR grant_row.starts_at <= NOW())
+        AND (grant_row.expires_at IS NULL OR grant_row.expires_at > NOW())
+        AND grant_row.principal_issuer = $1
+        AND ($4::TEXT IS NULL OR resource.service = $4)
+        AND (
+          (
+            grant_row.principal_type = 'user'
+            AND (
+              grant_row.principal_subject = $2
+              OR (
+                grant_row.principal_subject IS NULL
+                AND $3::TEXT IS NOT NULL
+                AND LOWER(grant_row.principal_email) = $3
+              )
+            )
+          )
+          OR (
+            grant_row.principal_type = 'group'
+            AND LOWER(grant_row.group_name) = ANY($5::TEXT[])
+          )
+        )
+      ORDER BY resource.service, resource.connection_name, grant_row.created_at
+    `, [issuer, subject, email || null, service || null, groups]),
+  ]);
   const valid = new Map(
     snapshot.connections
       .filter((connection) => connection.configured)
@@ -893,9 +1034,50 @@ export async function resolveEmployeeConnectorBindings(input: {
       connectionName: row.connection_name,
       displayName: current.profile.displayName,
       public: false,
+      accessMode: "account_bound",
+      actionRestricted: false,
     }] : [];
   });
-  const boundServices = new Set(boundConnections.map((connection) => connection.service));
+  const sharedByConnection = new Map<string, {
+    id: string;
+    service: string;
+    connectionName: string;
+    displayName: string;
+    public: false;
+    accessMode: "controlled_shared";
+    actionRestricted: true;
+    allowedActionIds: Set<string>;
+    policyIds: string[];
+  }>();
+  for (const row of sharedRows.rows) {
+    const currentConnection = valid.get(`${row.service}\0${row.connection_name}`);
+    if (!currentConnection) continue;
+    const key = `${row.service}\0${row.connection_name}`;
+    const current = sharedByConnection.get(key) || {
+      id: row.resource_id,
+      service: row.service,
+      connectionName: row.connection_name,
+      displayName: row.display_name || currentConnection.profile.displayName,
+      public: false as const,
+      accessMode: "controlled_shared" as const,
+      actionRestricted: true as const,
+      allowedActionIds: new Set<string>(),
+      policyIds: [],
+    };
+    for (const candidate of Array.isArray(row.action_ids) ? row.action_ids : []) {
+      if (typeof candidate === "string" && candidate.trim()) current.allowedActionIds.add(candidate.trim());
+    }
+    current.policyIds.push(row.grant_id);
+    sharedByConnection.set(key, current);
+  }
+  const sharedConnections = Array.from(sharedByConnection.values()).map((connection) => ({
+    ...connection,
+    allowedActionIds: Array.from(connection.allowedActionIds).sort(),
+  }));
+  const boundServices = new Set([
+    ...boundConnections.map((connection) => connection.service),
+    ...sharedConnections.map((connection) => connection.service),
+  ]);
   const publicConnections = snapshot.connections
     .filter((connection) => (
       connection.configured
@@ -908,19 +1090,59 @@ export async function resolveEmployeeConnectorBindings(input: {
       connectionName: "default",
       displayName: connection.profile.displayName,
       public: true,
+      accessMode: "no_auth",
+      actionRestricted: false,
     }));
-  const connections = [...boundConnections, ...publicConnections];
+  const connections = [...boundConnections, ...sharedConnections, ...publicConnections];
 
-  if (service && !connections[0]) {
-    const publicConnection = publicConnections.find((connection) => connection.service === service);
-    if (publicConnection) return publicConnection;
-    throw new IntegrationStoreError("当前员工没有可用的个人 Connector", 404);
-  }
   if (service) {
-    const connection = connections.find((item) => item.service === service);
-    if (!connection) throw new IntegrationStoreError("当前员工没有可用的个人 Connector", 404);
-    return connection;
+    const serviceConnections = connections.filter((item) => item.service === service);
+    if (!serviceConnections.length) {
+      throw new IntegrationStoreError(
+        "当前员工没有获授权的 Connector",
+        404,
+        "connector_not_authorized",
+      );
+    }
+    let candidates = serviceConnections;
+    if (requestedConnectionName) {
+      candidates = candidates.filter((connection) => connection.connectionName === requestedConnectionName);
+      if (!candidates.length) {
+        throw new IntegrationStoreError(
+          "当前员工无权使用请求的 Connector",
+          403,
+          "connector_not_authorized",
+        );
+      }
+    }
+    if (actionId) {
+      candidates = candidates.filter((connection) => (
+        !connection.actionRestricted
+        || (
+          "allowedActionIds" in connection
+          && Array.isArray(connection.allowedActionIds)
+          && connection.allowedActionIds.includes(actionId)
+        )
+      ));
+      if (!candidates.length) {
+        throw new IntegrationStoreError(
+          "当前员工无权执行请求的 Action",
+          403,
+          "action_not_authorized",
+        );
+      }
+    }
+    if (candidates.length > 1) {
+      throw new IntegrationStoreError(
+        "当前服务存在多个可用 Connector，请明确指定连接名称",
+        409,
+        "connector_selection_required",
+        { connectionNames: candidates.map((connection) => connection.connectionName) },
+      );
+    }
+    return candidates[0];
   }
+  void input.clientId;
   return { connections };
 }
 

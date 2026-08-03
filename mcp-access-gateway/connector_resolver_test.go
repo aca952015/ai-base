@@ -11,12 +11,12 @@ import (
 )
 
 func TestHTTPConnectorResolverSendsOpaqueIdentityAndToken(t *testing.T) {
-	var requests []map[string]string
+	var requests []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer internal-resolver-token" {
 			t.Errorf("unexpected authorization header: %q", r.Header.Get("Authorization"))
 		}
-		var request map[string]string
+		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
@@ -50,12 +50,20 @@ func TestHTTPConnectorResolverSendsOpaqueIdentityAndToken(t *testing.T) {
 		client:   server.Client(),
 	}
 	caller := identity{
-		issuer:  "https://broker.example/oauth",
-		subject: "opaque-broker-subject",
-		email:   "Employee@Example.com",
+		issuer:   "https://broker.example/oauth",
+		subject:  "opaque-broker-subject",
+		email:    "Employee@Example.com",
+		clientID: "workbuddy",
+		groups:   []string{"sales", "employees"},
 	}
 
-	binding, err := resolver.resolve(context.Background(), caller, "feishu")
+	binding, err := resolver.resolve(
+		context.Background(),
+		caller,
+		"feishu",
+		"employee_feishu",
+		"feishu.search_bitable_records",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +87,13 @@ func TestHTTPConnectorResolverSendsOpaqueIdentityAndToken(t *testing.T) {
 		}
 		if request["email"] != "employee@example.com" {
 			t.Fatalf("resolver must forward the verified normalized email: %#v", request)
+		}
+		if request["clientId"] != "workbuddy" {
+			t.Fatalf("resolver must forward the verified client id: %#v", request)
+		}
+		groups, ok := request["groups"].([]any)
+		if !ok || len(groups) != 2 || groups[0] != "sales" {
+			t.Fatalf("resolver must forward verified groups: %#v", request)
 		}
 	}
 	if requests[0]["service"] != "feishu" || requests[1]["service"] != "" {
@@ -106,6 +121,8 @@ func TestHTTPConnectorResolverRejectsDefaultAndFailsClosed(t *testing.T) {
 			context.Background(),
 			identity{issuer: "https://id.example", subject: "alice"},
 			"feishu",
+			"",
+			"",
 		)
 		if !errors.Is(err, errInvalidConnectorBinding) {
 			t.Fatalf("expected invalid binding, got %v", err)
@@ -126,6 +143,8 @@ func TestHTTPConnectorResolverRejectsDefaultAndFailsClosed(t *testing.T) {
 			context.Background(),
 			identity{issuer: "https://id.example", subject: "alice"},
 			"feishu",
+			"",
+			"",
 		)
 		if !errors.Is(err, errConnectorBindingNotFound) {
 			t.Fatalf("expected binding not found, got %v", err)
@@ -153,12 +172,47 @@ func TestHTTPConnectorResolverAcceptsExplicitPublicNoAuthConnection(t *testing.T
 		context.Background(),
 		identity{issuer: "https://id.example", subject: "alice"},
 		"linux_do",
+		"",
+		"linux_do.get_hot_topics",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !binding.Public || binding.ConnectionName != "default" {
 		t.Fatalf("unexpected public binding: %#v", binding)
+	}
+}
+
+func TestHTTPConnectorResolverMapsPolicyDecisions(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   int
+		code     string
+		expected error
+	}{
+		{name: "connector denied", status: http.StatusForbidden, code: "connector_not_authorized", expected: errConnectorNotAuthorized},
+		{name: "action denied", status: http.StatusForbidden, code: "action_not_authorized", expected: errConnectorActionNotAuthorized},
+		{name: "selection required", status: http.StatusConflict, code: "connector_selection_required", expected: errConnectorSelectionRequired},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, test.status, map[string]string{"code": test.code})
+			}))
+			defer server.Close()
+			endpoint, _ := url.Parse(server.URL)
+			resolver := &httpConnectorBindingResolver{endpoint: endpoint, token: "token", client: server.Client()}
+			_, err := resolver.resolve(
+				context.Background(),
+				identity{issuer: "https://id.example", subject: "alice"},
+				"wecom_bot",
+				"wecom_sales_bot",
+				"wecom_bot.send_message",
+			)
+			if !errors.Is(err, test.expected) {
+				t.Fatalf("expected %v, got %v", test.expected, err)
+			}
+		})
 	}
 }
 
