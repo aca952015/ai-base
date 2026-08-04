@@ -66,24 +66,21 @@ Dex 中的 `ai-base-pomerium` 客户端需要同时登记 `https://authenticate.
 - “企业 ID（CorpID）”填写企业微信管理后台的企业 ID；
 - “App Secret”填写该自建应用的 Secret；
 - 自建应用的可见范围应包含允许登录 AI Base 的员工；
-- 企业微信后台把可信域名和网页授权回调配置为 `WECOM_AUTH_CALLBACK_URL` 使用的稳定 HTTPS 域名；正式公网部署可直接使用本地网关，开发机/内网部署则推荐使用同级独立项目 [`../ai-auth-relay`](../ai-auth-relay/README.md) 承接公网回调；
+- 在“系统设置 / 企业微信认证”中维护 AI Base 公开认证入口、企业邮箱域和回调方式；企业微信后台把可信域名与网页授权回调配置为页面展示的“当前生效回调”；正式公网部署可直接使用本地网关，开发机/内网部署则可使用独立公网回调中继；
 - 不使用 Relay 时，将下载的 `WW_verify_*.txt` 原文件放入 `deploy/global-gateway/wecom-verification/`；使用 Relay 时，按其 README 配置校验文件名与内容；
 - 工作台应用主页指向 AI Console 的 `/auth/wework`；该入口不展示认证方式选择页，认证完成后直接进入 `/account`。
 
-桥接服务通过内网接口从 Console 读取启用应用，Secret 不返回浏览器。内网接口和 Dex 上游客户端分别使用独立密钥：
+桥接服务在每次新登录时通过内网接口读取 Console 中的公开路由设置与启用应用，保存后无需重启；Secret 不返回浏览器。只有内部接口 Token、Dex 上游客户端密钥和身份拓扑仍属于启动信任根：
 
 ```dotenv
 WECOM_AUTH_BRIDGE_CONFIG_TOKEN=replace-with-a-long-random-internal-token
 WECOM_OIDC_CLIENT_SECRET=replace-with-a-random-dex-upstream-client-secret
-WECOM_EMAIL_DOMAIN=bluetron.cn
-WECOM_AUTH_PUBLIC_BASE_URL=https://ai.example.com/wecom-oidc
-WECOM_AUTH_CALLBACK_URL=https://auth.example.com/callbacks/wecom
 WECOM_DEX_REDIRECT_URI=https://id.example.com/dex/callback
 ```
 
-相邻 `local-oidc` 的 Dex 配置已包含 `wecom` OIDC Connector，本地桥接客户端密钥必须与 AI Base 的 `WECOM_OIDC_CLIENT_SECRET` 相同。正式环境需把桥接 `issuer`、公开授权地址和 Dex 回调统一替换为稳定 HTTPS 地址。不使用 Relay 时，本机 `127.0.0.1` 只能验证协议与容器链路，不能作为企业微信登记的公网回调域名。
+相邻 `local-oidc` 的 Dex 配置已包含 `wecom` OIDC Connector，本地桥接客户端密钥必须与 AI Base 的 `WECOM_OIDC_CLIENT_SECRET` 相同。正式环境需把桥接 `issuer` 和 Dex 回调统一替换为部署对应的稳定地址。OIDC Client Secret、内部配置 Token、签名密钥、issuer/client 绑定不能移入登录后的管理页面，否则会形成认证自举死锁并扩大信任根暴露面。
 
-本地开发可把 `WECOM_AUTH_PUBLIC_BASE_URL` 保持为浏览器可访问的 AI Base 地址，同时把 `WECOM_AUTH_CALLBACK_URL` 单独指向 Vercel 上的 `ai-auth-relay`。Relay 不持有企微 Secret 或用户身份，只对白名单参数做 provider 校验，再由当前浏览器跳回固定的本地 `/wecom-oidc/callback`；因此运行 AI Base 的地址必须能被发起登录的浏览器访问。留空 `WECOM_AUTH_CALLBACK_URL` 时，桥接继续使用 `${WECOM_AUTH_PUBLIC_BASE_URL}/callback`，兼容原有直连部署。
+系统设置默认使用 `http://127.0.0.1:8080/wecom-oidc` 并直接回调其 `/callback`，仅适合本机验证。使用公网中继时，把“回调方式”改为“通过公网认证中继”并填写稳定 HTTPS 回调地址；中继仍不持有企微 Secret 或用户身份，只把白名单参数交还浏览器，因此页面中的 AI Base 公开认证入口必须能被发起登录的浏览器访问。
 
 外部 Dex 的 Connector 配置如下；`redirectURI` 必须是 Dex 自身 issuer 下的 `/callback`：
 
@@ -102,7 +99,7 @@ connectors:
       scopes: [profile, email, groups, offline_access]
 ```
 
-桥接服务的 Access Token 默认 1 小时，Dex 上游 Refresh Token 使用持久卷保存、90 天滑动续期；刷新凭据只保存 SHA-256 哈希。企业微信通讯录权限允许时使用成员企业邮箱；读取受限或邮箱域不匹配时，按 `UserID@WECOM_EMAIL_DOMAIN` 生成稳定企业登录邮箱，以满足现有 Pomerium 域策略。
+桥接服务的 Access Token 默认 1 小时，Dex 上游 Refresh Token 使用持久卷保存、90 天滑动续期；刷新凭据只保存 SHA-256 哈希。企业微信通讯录权限允许时使用成员企业邮箱；读取受限或邮箱域不匹配时，按系统设置中的企业邮箱域生成 `UserID@<domain>` 稳定登录邮箱。修改该域时还应同步检查 Pomerium 的邮箱域策略。
 
 OpenConnector 的管理请求由独立内部代理注入 Admin Token，Token 不进入浏览器。OpenConnector 不再映射宿主机端口；管理入口经 Pomerium，Agent 功能流量经全局网关 `/connector`，分别使用 Admin Token 与 Runtime Token。
 
@@ -253,7 +250,8 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `GET/PUT /api/connector-access/shared-resources`、`DELETE /api/connector-access/shared-resources/:id`：管理具名 Connector 的受控共享资源、身份授权和 Action 白名单。
 - `GET/POST /api/integrations`、`PUT/DELETE /api/integrations/:id`：读取并管理飞书、企微和钉钉应用凭据。
 - `POST /api/integrations/:id/activate`：将应用设为平台唯一启用配置，并同步支持的 OAuth Client。
-- `GET /api/internal/wecom-auth/config`：仅供桥接容器以内网 Bearer Token 读取启用的企微 CorpID 与 Secret，不由全局网关代理。
+- `GET/PUT /api/settings/wecom-auth`：仅管理员读取或保存企微公开认证入口、回调方式和企业邮箱域。
+- `GET /api/internal/wecom-auth/config`：仅供桥接容器以内网 Bearer Token 读取企微运行设置以及启用的 CorpID 与 Secret，不由全局网关代理。
 - `GET /api/account/integrations`、`POST/DELETE /api/account/integrations/:platform/authorize`：读取、发起或解除当前员工个人绑定。
 
 OpenConnector Token、模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 保存在服务端。Console 只读取 LightRAG 文档状态，不返回知识正文。

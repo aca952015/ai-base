@@ -24,13 +24,13 @@ func main() {
 		os.Exit(1)
 	}
 	httpClient := &http.Client{Timeout: 10 * time.Second}
-	credentials := &remoteCredentialProvider{
+	authConfiguration := &remoteAuthConfigurationProvider{
 		url:    cfg.integrationConfigURL,
 		token:  cfg.integrationConfigToken,
 		client: httpClient,
 	}
 	wecom := &wecomClient{apiBase: cfg.apiBaseURL, client: httpClient}
-	application := newProvider(cfg, credentials, wecom, signingKey, refreshTokens)
+	application := newProvider(cfg, authConfiguration, wecom, signingKey, refreshTokens)
 	server := &http.Server{
 		Addr:              cfg.listenAddress,
 		Handler:           application.routes(),
@@ -44,8 +44,7 @@ func main() {
 		"starting WeCom auth bridge",
 		"address", cfg.listenAddress,
 		"issuer", cfg.issuer,
-		"public_base_url", cfg.publicBaseURL,
-		"callback_url", cfg.publicCallbackURL,
+		"configuration_url", cfg.integrationConfigURL,
 	)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("WeCom auth bridge stopped", "error", err)

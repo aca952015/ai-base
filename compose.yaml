@@ -209,14 +209,11 @@ services:
     environment:
       WECOM_AUTH_LISTEN_ADDRESS: ":8082"
       WECOM_AUTH_ISSUER: ${WECOM_AUTH_ISSUER:-http://wecom-auth-bridge:8082}
-      WECOM_AUTH_PUBLIC_BASE_URL: ${WECOM_AUTH_PUBLIC_BASE_URL:-http://127.0.0.1:8080/wecom-oidc}
-      WECOM_AUTH_CALLBACK_URL: ${WECOM_AUTH_CALLBACK_URL:-}
       WECOM_OIDC_CLIENT_ID: ${WECOM_OIDC_CLIENT_ID:-ai-base-dex}
       WECOM_OIDC_CLIENT_SECRET: ${WECOM_OIDC_CLIENT_SECRET:-local-wecom-oidc-client-secret-change-me}
       WECOM_DEX_REDIRECT_URI: ${WECOM_DEX_REDIRECT_URI:-http://dex.localtest.me:5556/dex/callback}
       WECOM_INTEGRATION_CONFIG_URL: http://ai-console:3000/api/internal/wecom-auth/config
       WECOM_AUTH_BRIDGE_CONFIG_TOKEN: ${WECOM_AUTH_BRIDGE_CONFIG_TOKEN:-local-wecom-config-token-change-me}
-      WECOM_EMAIL_DOMAIN: ${WECOM_EMAIL_DOMAIN:-bluetron.cn}
       WECOM_OIDC_SIGNING_KEY_PATH: /data/signing-key.pem
       WECOM_OIDC_REFRESH_STORE_PATH: /data/refresh-grants.json
       WECOM_OIDC_ACCESS_TOKEN_LIFETIME: ${WECOM_OIDC_ACCESS_TOKEN_LIFETIME:-1h}

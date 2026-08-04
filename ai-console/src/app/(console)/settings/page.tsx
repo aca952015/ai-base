@@ -1,11 +1,11 @@
-import { ChevronRight, KeyRound, LockKeyhole, NotebookTabs, Router, ServerCog, ShieldCheck, TriangleAlert } from "lucide-react";
+import { ChevronRight, KeyRound, LockKeyhole, MessageSquareLock, NotebookTabs, Router, ServerCog, ShieldCheck, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/page-header";
 import { SectionCard } from "@/components/section-card";
 import { SettingsForm } from "@/components/settings-form";
 import { getComponentData } from "@/lib/server/component-data";
-import { readConfig } from "@/lib/server/config";
+import { getWeComAuthenticationSnapshot, readConfig } from "@/lib/server/config";
 import { readGatewayMcpServers } from "@/lib/server/gateway-config";
 
 export const dynamic = "force-dynamic";
@@ -17,10 +17,12 @@ function SecretState({ ready, readyLabel = "已验证" }: { ready: boolean; read
 }
 
 export default async function SettingsPage() {
+  const config = await readConfig();
   const [data, mcpSnapshot] = await Promise.all([
-    getComponentData(await readConfig()),
+    getComponentData(config),
     readGatewayMcpServers(),
   ]);
+  const wecomAuth = getWeComAuthenticationSnapshot(config);
   const connectorApiReady = !data.errors.openConnector;
   const runtimeTokenConfigured = Boolean(process.env.OPEN_CONNECTOR_RUNTIME_TOKEN);
   const oidcConfigured = process.env.OIDC_ENABLED === "true";
@@ -38,9 +40,15 @@ export default async function SettingsPage() {
             <span className="settings-subpage-row__status">{data.knowledge.pipelineBusy ? "索引处理中" : `${data.knowledge.documentCount} 篇文档`}</span>
             <ChevronRight size={18} />
           </Link>
+          <Link className="settings-subpage-row" href="/settings/wecom-auth">
+            <span className="settings-subpage-row__icon is-green"><MessageSquareLock size={19} /></span>
+            <span className="settings-subpage-row__copy"><strong>企业微信认证</strong><small>公开入口、回调方式与员工邮箱域</small></span>
+            <span className="settings-subpage-row__status">{wecomAuth.callbackMode === "relay" ? "公网中继" : "直接回调"}</span>
+            <ChevronRight size={18} />
+          </Link>
         </div>
       </SectionCard>
-      <div className="settings-notice" role="note"><ServerCog size={19} aria-hidden="true" /><div><strong>配置应用边界</strong><p>基础端点保存在 Console；组件二级设置会明确标注是否直接应用。LightRAG 保存后会自动重新加载，敏感变量仍建议由 SOPS + age 管理。</p></div></div>
+      <div className="settings-notice" role="note"><ServerCog size={19} aria-hidden="true" /><div><strong>配置应用边界</strong><p>基础端点和非敏感运行参数保存在 Console；组件二级设置会明确标注生效时机。内部 Token、OIDC Client Secret 与签名密钥仍由部署密钥管理。</p></div></div>
       <SectionCard title="基础设置与服务端点" description="停用能力后，健康检查会标记为“尚未配置”，而不是误报服务故障。"><SettingsForm /></SectionCard>
       <div className="dashboard-grid dashboard-grid--equal">
         <SectionCard title="真实配置状态" description="只展示 API 可用性和配置计数，不读取或回显原始值。">

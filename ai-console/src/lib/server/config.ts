@@ -7,12 +7,22 @@ import type {
   ConsoleConfig,
   ServiceConfig,
   ServiceId,
+  WeComAuthenticationSettings,
+  WeComAuthenticationSnapshot,
 } from "../control-plane/types";
 
 const CONFIG_FILE_NAME = "config.json";
 const MAX_MONTHLY_BUDGET = 1_000_000_000;
 const MAX_DISPLAY_NAME_LENGTH = 100;
 const MAX_NOTES_LENGTH = 2_000;
+const MAX_URL_LENGTH = 2_048;
+const MAX_EMAIL_DOMAIN_LENGTH = 253;
+
+export const DEFAULT_WECOM_AUTHENTICATION_SETTINGS: WeComAuthenticationSettings = {
+  publicBaseUrl: "http://127.0.0.1:8080/wecom-oidc",
+  callbackMode: "direct",
+  emailDomain: "bluetron.cn",
+};
 
 type JsonObject = Record<string, unknown>;
 
@@ -20,6 +30,9 @@ export type ConfigPatch = Partial<
   Pick<ConsoleConfig, "environment" | "currency" | "monthlyBudget">
 > & {
   services?: Partial<Record<ServiceId, Partial<ServiceConfig>>>;
+  authentication?: {
+    wecom: WeComAuthenticationSettings;
+  };
 };
 
 export type ValidationResult =
@@ -44,6 +57,116 @@ function validateOptionalString(
   if (value !== undefined && (typeof value !== "string" || value.length > maxLength)) {
     errors.push(`${field} must be a string of at most ${maxLength} characters`);
   }
+}
+
+function normalizeHttpUrl(
+  value: unknown,
+  field: string,
+  errors: string[],
+  options: { httpsOnly?: boolean } = {},
+) {
+  const label = field === "publicBaseUrl" ? "AI Base 公开认证入口" : "公网中继回调地址";
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_URL_LENGTH) {
+    errors.push(`${label}必须是非空 URL，且不超过 ${MAX_URL_LENGTH} 个字符`);
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (
+      !["http:", "https:"].includes(parsed.protocol)
+      || (options.httpsOnly && parsed.protocol !== "https:")
+      || parsed.username
+      || parsed.password
+      || parsed.search
+      || parsed.hash
+    ) {
+      throw new Error("unsupported URL");
+    }
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    errors.push(`${label}必须是绝对 ${options.httpsOnly ? "HTTPS" : "HTTP(S)"} 地址，且不能包含账号、查询参数或片段`);
+    return undefined;
+  }
+}
+
+function normalizeEmailDomain(value: unknown, errors: string[]) {
+  if (typeof value !== "string") {
+    errors.push("企业邮箱域必须是 DNS 域名");
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized.length === 0
+    || normalized.length > MAX_EMAIL_DOMAIN_LENGTH
+    || !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(normalized)
+  ) {
+    errors.push("企业邮箱域必须是有效的 DNS 域名");
+    return undefined;
+  }
+  return normalized;
+}
+
+export type WeComAuthenticationValidationResult =
+  | { ok: true; value: WeComAuthenticationSettings }
+  | { ok: false; errors: string[] };
+
+export function validateWeComAuthenticationSettings(
+  input: unknown,
+): WeComAuthenticationValidationResult {
+  if (!isObject(input)) {
+    return { ok: false, errors: ["request body must be a JSON object"] };
+  }
+  const errors = unknownKeys(input, [
+    "publicBaseUrl",
+    "callbackMode",
+    "relayCallbackUrl",
+    "emailDomain",
+  ]).map((key) => `unsupported field: ${key}`);
+  const publicBaseUrl = normalizeHttpUrl(input.publicBaseUrl, "publicBaseUrl", errors);
+  const callbackMode = input.callbackMode;
+  if (callbackMode !== "direct" && callbackMode !== "relay") {
+    errors.push("回调方式必须是直接回调或公网中继");
+  }
+  let relayCallbackUrl: string | undefined;
+  if (callbackMode === "relay") {
+    relayCallbackUrl = normalizeHttpUrl(
+      input.relayCallbackUrl,
+      "relayCallbackUrl",
+      errors,
+    );
+  } else if (
+    input.relayCallbackUrl !== undefined
+    && (typeof input.relayCallbackUrl !== "string" || input.relayCallbackUrl.length > MAX_URL_LENGTH)
+  ) {
+    errors.push(`公网中继回调地址不能超过 ${MAX_URL_LENGTH} 个字符`);
+  }
+  const emailDomain = normalizeEmailDomain(input.emailDomain, errors);
+  if (errors.length || !publicBaseUrl || !emailDomain || (callbackMode !== "direct" && callbackMode !== "relay")) {
+    return { ok: false, errors };
+  }
+  return {
+    ok: true,
+    value: {
+      publicBaseUrl,
+      callbackMode,
+      ...(callbackMode === "relay" && relayCallbackUrl ? { relayCallbackUrl } : {}),
+      emailDomain,
+    },
+  };
+}
+
+export function resolveWeComCallbackUrl(settings: WeComAuthenticationSettings) {
+  return settings.callbackMode === "relay" && settings.relayCallbackUrl
+    ? settings.relayCallbackUrl
+    : `${settings.publicBaseUrl}/callback`;
+}
+
+export function getWeComAuthenticationSnapshot(config: ConsoleConfig): WeComAuthenticationSnapshot {
+  return {
+    ...config.authentication.wecom,
+    effectiveCallbackUrl: resolveWeComCallbackUrl(config.authentication.wecom),
+    updatedAt: config.updatedAt,
+  };
 }
 
 export function validateConfigPatch(input: unknown): ValidationResult {
@@ -143,6 +266,9 @@ export function createDefaultConfig(now = new Date()): ConsoleConfig {
     services: Object.fromEntries(
       serviceCatalog.map((service) => [service.id, { enabled: true }]),
     ),
+    authentication: {
+      wecom: { ...DEFAULT_WECOM_AUTHENTICATION_SETTINGS },
+    },
     updatedAt: now.toISOString(),
   };
 }
@@ -202,7 +328,15 @@ function migrateLegacyConfig(config: ConsoleConfig): ConsoleConfig {
   for (const service of serviceCatalog) {
     services[service.id] ??= { enabled: true };
   }
-  return { ...config, services } as ConsoleConfig;
+  const legacyConfig = config as ConsoleConfig & {
+    authentication?: Partial<ConsoleConfig["authentication"]>;
+  };
+  const authentication = {
+    wecom: legacyConfig.authentication?.wecom
+      ? { ...legacyConfig.authentication.wecom }
+      : { ...DEFAULT_WECOM_AUTHENTICATION_SETTINGS },
+  };
+  return { ...config, services, authentication } as ConsoleConfig;
 }
 
 export async function readConfig(): Promise<ConsoleConfig> {
@@ -227,4 +361,11 @@ export async function updateConfig(patch: ConfigPatch) {
   const config = applyConfigPatch(await readConfig(), patch);
   await writeConfigFile(config);
   return config;
+}
+
+export async function updateWeComAuthenticationSettings(
+  settings: WeComAuthenticationSettings,
+) {
+  const config = await updateConfig({ authentication: { wecom: settings } });
+  return getWeComAuthenticationSnapshot(config);
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,13 +14,17 @@ import (
 	"time"
 )
 
-type staticCredentialProvider struct {
-	credential integrationCredential
-	err        error
+type staticAuthConfigurationProvider struct {
+	configuration wecomAuthConfiguration
+	err           error
 }
 
-func (p staticCredentialProvider) Credential(context.Context) (integrationCredential, error) {
-	return p.credential, p.err
+func (p staticAuthConfigurationProvider) Runtime(context.Context) (wecomRuntimeConfig, error) {
+	return p.configuration.Runtime, p.err
+}
+
+func (p staticAuthConfigurationProvider) Configuration(context.Context) (wecomAuthConfiguration, error) {
+	return p.configuration, p.err
 }
 
 func testProvider(t *testing.T, apiBase, authorizationURL string) *provider {
@@ -27,14 +32,9 @@ func testProvider(t *testing.T, apiBase, authorizationURL string) *provider {
 	directory := t.TempDir()
 	cfg := config{
 		issuer:               "http://wecom-auth-bridge:8082",
-		publicBaseURL:        "https://auth.example.com/wecom-oidc",
-		publicCallbackURL:    "https://auth.example.com/wecom-oidc/callback",
-		publicCookiePath:     "/wecom-oidc",
-		secureCookie:         true,
 		clientID:             "ai-base-dex",
 		clientSecret:         "test-client-secret-with-enough-bytes",
 		dexRedirectURI:       "https://dex.example.com/dex/callback",
-		emailDomain:          "example.com",
 		authorizationURL:     authorizationURL,
 		apiBaseURL:           apiBase,
 		signingKeyPath:       filepath.Join(directory, "signing.pem"),
@@ -53,7 +53,16 @@ func testProvider(t *testing.T, apiBase, authorizationURL string) *provider {
 	}
 	return newProvider(
 		cfg,
-		staticCredentialProvider{credential: integrationCredential{CorpID: "ww-corp", AppSecret: "app-secret"}},
+		staticAuthConfigurationProvider{configuration: wecomAuthConfiguration{
+			Runtime: wecomRuntimeConfig{
+				PublicBaseURL:     "https://auth.example.com/wecom-oidc",
+				PublicCallbackURL: "https://auth.example.com/wecom-oidc/callback",
+				EmailDomain:       "example.com",
+				CookiePath:        "/wecom-oidc",
+				SecureCookie:      true,
+			},
+			Application: integrationCredential{CorpID: "ww-corp", AppSecret: "app-secret"},
+		}},
 		&wecomClient{apiBase: apiBase, client: http.DefaultClient},
 		signingKey,
 		refresh,
@@ -75,11 +84,22 @@ func TestDiscoveryUsesPublicAuthorizationAndInternalBackchannel(t *testing.T) {
 	if discovery["issuer"] != provider.cfg.issuer {
 		t.Fatalf("issuer = %v", discovery["issuer"])
 	}
-	if discovery["authorization_endpoint"] != provider.cfg.publicBaseURL+"/authorize" {
+	if discovery["authorization_endpoint"] != "https://auth.example.com/wecom-oidc/authorize" {
 		t.Fatalf("authorization endpoint = %v", discovery["authorization_endpoint"])
 	}
 	if discovery["token_endpoint"] != provider.cfg.issuer+"/token" {
 		t.Fatalf("token endpoint = %v", discovery["token_endpoint"])
+	}
+}
+
+func TestReadinessRequiresConsoleRuntimeAndActiveIntegration(t *testing.T) {
+	provider := testProvider(t, "https://qyapi.weixin.qq.com", "https://open.weixin.qq.com/connect/oauth2/authorize")
+	provider.configuration = staticAuthConfigurationProvider{err: errors.New("configuration unavailable")}
+	request := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	response := httptest.NewRecorder()
+	provider.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 
@@ -126,7 +146,7 @@ func TestEndToEndAuthorizationCodeAndRefreshFlow(t *testing.T) {
 	if wecomLocation.Query().Get("appid") != "ww-corp" || wecomLocation.Query().Get("scope") != "snsapi_base" {
 		t.Fatalf("unexpected WeCom redirect: %s", wecomLocation.String())
 	}
-	if wecomLocation.Query().Get("redirect_uri") != provider.cfg.publicCallbackURL {
+	if wecomLocation.Query().Get("redirect_uri") != "https://auth.example.com/wecom-oidc/callback" {
 		t.Fatalf("redirect URI = %q", wecomLocation.Query().Get("redirect_uri"))
 	}
 	state := wecomLocation.Query().Get("state")

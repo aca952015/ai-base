@@ -24,6 +24,9 @@ type authorizationRequest struct {
 	Scope               string
 	CodeChallenge       string
 	CodeChallengeMethod string
+	CookiePath          string
+	SecureCookie        bool
+	EmailDomain         string
 	CreatedAt           time.Time
 }
 
@@ -46,27 +49,27 @@ type accessGrant struct {
 }
 
 type provider struct {
-	cfg         config
-	credentials credentialProvider
-	wecom       *wecomClient
-	signer      *signer
-	refresh     *refreshStore
-	mu          sync.Mutex
-	pending     map[string]authorizationRequest
-	codes       map[string]authorizationGrant
-	access      map[string]accessGrant
+	cfg           config
+	configuration authConfigurationProvider
+	wecom         *wecomClient
+	signer        *signer
+	refresh       *refreshStore
+	mu            sync.Mutex
+	pending       map[string]authorizationRequest
+	codes         map[string]authorizationGrant
+	access        map[string]accessGrant
 }
 
-func newProvider(cfg config, credentials credentialProvider, wecom *wecomClient, signer *signer, refresh *refreshStore) *provider {
+func newProvider(cfg config, configuration authConfigurationProvider, wecom *wecomClient, signer *signer, refresh *refreshStore) *provider {
 	return &provider{
-		cfg:         cfg,
-		credentials: credentials,
-		wecom:       wecom,
-		signer:      signer,
-		refresh:     refresh,
-		pending:     make(map[string]authorizationRequest),
-		codes:       make(map[string]authorizationGrant),
-		access:      make(map[string]accessGrant),
+		cfg:           cfg,
+		configuration: configuration,
+		wecom:         wecom,
+		signer:        signer,
+		refresh:       refresh,
+		pending:       make(map[string]authorizationRequest),
+		codes:         make(map[string]authorizationGrant),
+		access:        make(map[string]accessGrant),
 	}
 }
 
@@ -80,14 +83,20 @@ func (p *provider) routes() http.Handler {
 	mux.HandleFunc("POST /userinfo", p.userinfo)
 	mux.HandleFunc("GET /jwks", p.jwks)
 	mux.HandleFunc("GET /health", p.health)
-	mux.HandleFunc("GET /ready", p.health)
+	mux.HandleFunc("GET /ready", p.ready)
 	return securityHeaders(mux)
 }
 
-func (p *provider) discovery(w http.ResponseWriter, _ *http.Request) {
+func (p *provider) discovery(w http.ResponseWriter, r *http.Request) {
+	runtime, err := p.configuration.Runtime(r.Context())
+	if err != nil {
+		slog.Warn("WeCom runtime configuration unavailable", "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "WeCom authentication configuration is unavailable"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"issuer":                                p.cfg.issuer,
-		"authorization_endpoint":                p.cfg.publicBaseURL + "/authorize",
+		"authorization_endpoint":                runtime.PublicBaseURL + "/authorize",
 		"token_endpoint":                        p.cfg.issuer + "/token",
 		"userinfo_endpoint":                     p.cfg.issuer + "/userinfo",
 		"jwks_uri":                              p.cfg.issuer + "/jwks",
@@ -125,7 +134,7 @@ func (p *provider) authorize(w http.ResponseWriter, r *http.Request) {
 		p.redirectOAuthError(w, r, redirectURI, query.Get("state"), "invalid_request", "only S256 PKCE is supported")
 		return
 	}
-	credential, err := p.credentials.Credential(r.Context())
+	authConfig, err := p.configuration.Configuration(r.Context())
 	if err != nil {
 		slog.Warn("WeCom integration unavailable", "error", err)
 		writeOAuthPage(w, http.StatusServiceUnavailable, "企业微信应用尚未配置或当前不可用，请联系管理员检查 AI Base 集成管理")
@@ -146,15 +155,18 @@ func (p *provider) authorize(w http.ResponseWriter, r *http.Request) {
 		Scope:               strings.Join(scopes, " "),
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: method,
+		CookiePath:          authConfig.Runtime.CookiePath,
+		SecureCookie:        authConfig.Runtime.SecureCookie,
+		EmailDomain:         authConfig.Runtime.EmailDomain,
 		CreatedAt:           time.Now(),
 	}
 	p.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookieName,
 		Value:    internalState,
-		Path:     p.cfg.publicCookiePath,
+		Path:     authConfig.Runtime.CookiePath,
 		HttpOnly: true,
-		Secure:   p.cfg.secureCookie,
+		Secure:   authConfig.Runtime.SecureCookie,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(p.cfg.requestLifetime.Seconds()),
 	})
@@ -164,8 +176,8 @@ func (p *provider) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	wecomQuery := authorizeURL.Query()
-	wecomQuery.Set("appid", credential.CorpID)
-	wecomQuery.Set("redirect_uri", p.cfg.publicCallbackURL)
+	wecomQuery.Set("appid", authConfig.Application.CorpID)
+	wecomQuery.Set("redirect_uri", authConfig.Runtime.PublicCallbackURL)
 	wecomQuery.Set("response_type", "code")
 	wecomQuery.Set("scope", "snsapi_base")
 	wecomQuery.Set("state", internalState)
@@ -185,8 +197,13 @@ func (p *provider) callback(w http.ResponseWriter, r *http.Request) {
 	request, ok := p.pending[state]
 	delete(p.pending, state)
 	p.mu.Unlock()
-	clearStateCookie(w, p.cfg)
-	if !ok || time.Since(request.CreatedAt) > p.cfg.requestLifetime {
+	if !ok {
+		clearStateCookie(w, "/", false)
+		writeOAuthPage(w, http.StatusBadRequest, "认证请求已经过期，请重新登录")
+		return
+	}
+	clearStateCookie(w, request.CookiePath, request.SecureCookie)
+	if time.Since(request.CreatedAt) > p.cfg.requestLifetime {
 		writeOAuthPage(w, http.StatusBadRequest, "认证请求已经过期，请重新登录")
 		return
 	}
@@ -199,12 +216,12 @@ func (p *provider) callback(w http.ResponseWriter, r *http.Request) {
 		p.redirectOAuthError(w, r, request.RedirectURI, request.State, "access_denied", "WeCom authorization did not return a code")
 		return
 	}
-	credential, err := p.credentials.Credential(r.Context())
+	authConfig, err := p.configuration.Configuration(r.Context())
 	if err != nil {
 		writeOAuthPage(w, http.StatusServiceUnavailable, "企业微信应用配置当前不可用，请重新登录")
 		return
 	}
-	user, err := p.wecom.exchange(r.Context(), credential, code, p.cfg.emailDomain)
+	user, err := p.wecom.exchange(r.Context(), authConfig.Application, code, request.EmailDomain)
 	if err != nil {
 		slog.Warn("WeCom authorization exchange failed", "error", err)
 		writeOAuthPage(w, http.StatusBadGateway, "企业微信身份校验失败，请重新登录或联系管理员")
@@ -372,6 +389,15 @@ func (p *provider) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "service": "wecom-auth-bridge"})
 }
 
+func (p *provider) ready(w http.ResponseWriter, r *http.Request) {
+	if _, err := p.configuration.Configuration(r.Context()); err != nil {
+		slog.Warn("WeCom authentication bridge not ready", "error", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "service": "wecom-auth-bridge"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "service": "wecom-auth-bridge"})
+}
+
 func (p *provider) validClient(clientID, clientSecret string) bool {
 	return subtle.ConstantTimeCompare([]byte(clientID), []byte(p.cfg.clientID)) == 1 &&
 		subtle.ConstantTimeCompare([]byte(clientSecret), []byte(p.cfg.clientSecret)) == 1
@@ -437,13 +463,13 @@ func contains(values []string, wanted string) bool {
 	return false
 }
 
-func clearStateCookie(w http.ResponseWriter, cfg config) {
+func clearStateCookie(w http.ResponseWriter, cookiePath string, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     stateCookieName,
 		Value:    "",
-		Path:     cfg.publicCookiePath,
+		Path:     cookiePath,
 		HttpOnly: true,
-		Secure:   cfg.secureCookie,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})

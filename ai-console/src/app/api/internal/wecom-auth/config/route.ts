@@ -6,6 +6,7 @@ import {
   getActiveIntegrationCredential,
   IntegrationStoreError,
 } from "@/lib/server/integrations";
+import { getWeComAuthenticationSnapshot, readConfig } from "@/lib/server/config";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,10 +26,17 @@ export async function GET(request: Request) {
   if (!authorized(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const runtime = getWeComAuthenticationSnapshot(await readConfig());
   try {
     const application = await getActiveIntegrationCredential("wecom");
     return NextResponse.json({
       configured: true,
+      runtime: {
+        publicBaseUrl: runtime.publicBaseUrl,
+        publicCallbackUrl: runtime.effectiveCallbackUrl,
+        emailDomain: runtime.emailDomain,
+        updatedAt: runtime.updatedAt,
+      },
       application: {
         id: application.id,
         name: application.name,
@@ -46,6 +54,12 @@ export async function GET(request: Request) {
     if (!known) console.error("WeCom auth configuration lookup failed", error);
     return NextResponse.json({
       configured: false,
+      runtime: {
+        publicBaseUrl: runtime.publicBaseUrl,
+        publicCallbackUrl: runtime.effectiveCallbackUrl,
+        emailDomain: runtime.emailDomain,
+        updatedAt: runtime.updatedAt,
+      },
       error: known ? error.message : "WeCom auth configuration lookup failed",
     }, {
       status: known ? error.status : 500,

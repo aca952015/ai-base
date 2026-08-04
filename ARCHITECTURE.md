@@ -47,7 +47,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 出口 DNS | AdGuard dnsproxy | 为 Envoy AI Gateway 与 Open Connector 提供分流解析；公网域名走 DoH，企业内网域名走本机 DNS | 不映射宿主机端口，不通过关闭 SSRF 校验兼容 Fake-IP |
 | Agent Runtime | FastAPI + `pydantic-ai-slim` | Agent 运行、结构化输出、身份上下文、业务策略 | 不保存外部 SaaS 密钥 |
 | MCP 访问网关 | Go + `net/http` + OAuth/OIDC | 面向兼容 OAuth 的 MCP 客户端提供发现、DCR、PKCE、员工登录、MCP 鉴权、身份绑定会话和访问策略 | Dex 仅作登录上游；不注册 MCP 上游、不向 Envoy 透传员工 Token、不执行 Agent |
-| 企业微信认证桥接 | Go 标准库 + OIDC | 将企业微信网页授权的企业 UserID 转换为 Dex 可消费的标准 OIDC 身份 | 不替代 Dex、不读取 OpenConnector Token；只通过内网读取 Console 中启用的企微应用凭据 |
+| 企业微信认证桥接 | Go 标准库 + OIDC | 将企业微信网页授权的企业 UserID 转换为 Dex 可消费的标准 OIDC 身份 | 不替代 Dex、不读取 OpenConnector Token；只通过内网读取 Console 中的企微应用凭据与管理员认证路由设置 |
 | 持久工作流 | DBOS | 审批、队列、定时和恢复 | 复用 PostgreSQL，不加消息队列 |
 | AI 网关 | Envoy AI Gateway standalone | OpenAI 兼容模型入口；内部 MCP 注册、聚合、工具路由与过滤 | MCP API 不直接暴露；Console 生成 `AIGatewayRoute` 与 `MCPRoute` 原生资源 |
 | 内部工具 | 官方 MCP SDK + 薄注册层 | JSON Schema、版本、作用域、风险等级、幂等和审计 | MCP 是协议，不当作安全沙箱 |
@@ -93,7 +93,9 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 
 个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，解析器只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
 
-企业微信不是标准 OIDC Provider。独立 `wecom-auth-bridge` 使用 `snsapi_base` 获取企业 UserID，派生稳定 Subject，并作为 Dex 的 OIDC Connector 上游；Pomerium 与 MCP OAuth Broker 仍只信任 Dex。企微 CorpID 与 Secret 由 Console 集成管理加密保存，桥接服务通过独立 Bearer Token 的 Compose 内网接口按需读取，浏览器与 Dex 均不接触 Secret。桥接 Access Token 短期有效，Refresh Token 哈希保存在独立 Volume 并按 90 天滑动续期。企业微信工作台使用 `/auth/wework` 独立入口：Caddy 将其导向专用 Pomerium 实例，该实例只为 Dex 添加 `connector_id=wecom`，因此跳过登录方式选择；普通 Console 登录入口与其他认证方式保持不变。
+企业微信不是标准 OIDC Provider。独立 `wecom-auth-bridge` 使用 `snsapi_base` 获取企业 UserID，派生稳定 Subject，并作为 Dex 的 OIDC Connector 上游；Pomerium 与 MCP OAuth Broker 仍只信任 Dex。企微 CorpID 与 Secret 由 Console 集成管理加密保存；公开认证入口、直接/中继回调方式和企业邮箱域由管理员在 `/settings/wecom-auth` 保存到 Console 数据卷。桥接服务通过独立 Bearer Token 的 Compose 内网接口按请求读取两类配置且不缓存，因此新登录立即使用最新设置；配置缺失、无启用应用或内部接口失败时关闭失败。浏览器与 Dex 均不接触 Secret。桥接 Access Token 短期有效，Refresh Token 哈希保存在独立 Volume 并按 90 天滑动续期。企业微信工作台使用 `/auth/wework` 独立入口：Caddy 将其导向专用 Pomerium 实例，该实例只为 Dex 添加 `connector_id=wecom`，因此跳过登录方式选择；普通 Console 登录入口与其他认证方式保持不变。
+
+`WECOM_AUTH_BRIDGE_CONFIG_TOKEN`、`WECOM_OIDC_CLIENT_SECRET`、OIDC issuer/client 绑定与签名密钥属于认证启动信任根，继续由部署密钥提供，不能依赖登录后的 Console 页面。`WECOM_AUTH_PUBLIC_BASE_URL`、`WECOM_AUTH_CALLBACK_URL` 与 `WECOM_EMAIL_DOMAIN` 不再作为 bridge 环境变量；系统设置默认值只支持 loopback 本机验证，正式部署由已认证管理员改为可达地址。
 
 同级独立项目 `ai-auth-relay` 是可选公网边缘，不属于 AI Base Compose，也不是身份提供方。它用 provider adapter 约束公开回调字段和固定本地目标；当前首个 adapter 为企业微信。浏览器先从本地 `/wecom-oidc/authorize` 获得一次性 state 与 HttpOnly Cookie，企微回到 Relay 后，Relay 将白名单字段经 302 带回固定的本地 callback，再由 `wecom-auth-bridge` 完成 Cookie/state 校验和 code 消费。Relay 不保存 CorpID、Secret、身份或 Token，不依赖 Vercel 到本地的永久长连接；浏览器无法访问本地目标时链路关闭失败。
 
@@ -137,13 +139,14 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 - 普通员工通过账号绑定页面发起受支持平台的个人 OAuth；OpenConnector 保存个人 Token，PostgreSQL 保存 OIDC 主体到命名连接的映射，当前上游只有飞书支持用户 OAuth；
 - 通过单独修订文件触发网关进程重载，Key 以文件替换方式注入生成过程，不写入路由 YAML 或浏览器响应；
 - 通过系统设置的 LightRAG 二级页面选择网关已发布模型并管理切片、摘要和并发参数；保存后由内部配置控制面完成原子更新、健康等待与失败回滚；
+- 通过系统设置的企业微信认证二级页面维护公开入口、回调方式和企业邮箱域；bridge 每次新登录从受保护内网接口读取并立即应用，启动信任根不进入浏览器配置；
 - 服务端聚合全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、LightRAG、RAG MCP、Jaeger 与 Promptfoo 的真实运行摘要；
 - JSON 配置读取、字段白名单校验和原子写入；
 - HTTP/TCP 服务健康探测；
 - “同步知识”调用 LightRAG 扫描接口并触发真实索引；评测仍由按需 profile 执行；
 - 未接入或无结果的能力显示“未配置”或真实空状态，不以演示数据补齐。
 
-聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token、大模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 仅存在于服务端环境；集成管理 API 只返回应用 ID、平台、App ID 和时间戳。Console 通过 LightRAG API 读取文档状态、大小与切片数，不读取知识正文；网关请求/响应、外部凭证与 Jaeger Span 日志均不进入浏览器响应。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
+聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token、大模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 仅存在于服务端环境；集成管理 API 只返回应用 ID、平台、App ID 和时间戳。企业微信公开入口、回调 URL 与邮箱域是管理员可见的非敏感设置，普通员工无页面或 API 权限。Console 通过 LightRAG API 读取文档状态、大小与切片数，不读取知识正文；网关请求/响应、外部凭证与 Jaeger Span 日志均不进入浏览器响应。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
 
 Portal 负责发现、导航和常用配置治理，专业组件负责 Action 调试、运行策略等深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 

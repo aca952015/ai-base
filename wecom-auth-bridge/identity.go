@@ -25,67 +25,117 @@ type integrationCredential struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+type wecomRuntimeConfig struct {
+	PublicBaseURL     string `json:"publicBaseUrl"`
+	PublicCallbackURL string `json:"publicCallbackUrl"`
+	EmailDomain       string `json:"emailDomain"`
+	UpdatedAt         string `json:"updatedAt"`
+	CookiePath        string `json:"-"`
+	SecureCookie      bool   `json:"-"`
+}
+
+type wecomAuthConfiguration struct {
+	Runtime     wecomRuntimeConfig
+	Application integrationCredential
+}
+
 type integrationConfigResponse struct {
 	Configured  bool                  `json:"configured"`
+	Runtime     wecomRuntimeConfig    `json:"runtime"`
 	Application integrationCredential `json:"application"`
 	Error       string                `json:"error"`
 }
 
-type credentialProvider interface {
-	Credential(context.Context) (integrationCredential, error)
+type authConfigurationProvider interface {
+	Runtime(context.Context) (wecomRuntimeConfig, error)
+	Configuration(context.Context) (wecomAuthConfiguration, error)
 }
 
-type remoteCredentialProvider struct {
-	url     string
-	token   string
-	client  *http.Client
-	mu      sync.Mutex
-	cached  integrationCredential
-	expires time.Time
+type remoteAuthConfigurationProvider struct {
+	url    string
+	token  string
+	client *http.Client
 }
 
-func (p *remoteCredentialProvider) Credential(ctx context.Context) (integrationCredential, error) {
-	p.mu.Lock()
-	if p.cached.CorpID != "" && time.Now().Before(p.expires) {
-		credential := p.cached
-		p.mu.Unlock()
-		return credential, nil
-	}
-	p.mu.Unlock()
-
+func (p *remoteAuthConfigurationProvider) fetch(ctx context.Context) (integrationConfigResponse, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url, nil)
 	if err != nil {
-		return integrationCredential{}, err
+		return integrationConfigResponse{}, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+p.token)
 	req.Header.Set("Accept", "application/json")
 	response, err := p.client.Do(req)
 	if err != nil {
-		return integrationCredential{}, fmt.Errorf("read active WeCom integration: %w", err)
+		return integrationConfigResponse{}, 0, fmt.Errorf("read WeCom authentication configuration: %w", err)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return integrationCredential{}, err
+		return integrationConfigResponse{}, response.StatusCode, err
 	}
 	var payload integrationConfigResponse
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return integrationCredential{}, errors.New("AI Console returned invalid integration configuration")
+		return integrationConfigResponse{}, response.StatusCode, errors.New("AI Console returned invalid WeCom authentication configuration")
 	}
-	if response.StatusCode != http.StatusOK || !payload.Configured {
+	runtime, err := validateWeComRuntimeConfig(payload.Runtime)
+	if err != nil {
+		return integrationConfigResponse{}, response.StatusCode, err
+	}
+	payload.Runtime = runtime
+	return payload, response.StatusCode, nil
+}
+
+func (p *remoteAuthConfigurationProvider) Runtime(ctx context.Context) (wecomRuntimeConfig, error) {
+	payload, _, err := p.fetch(ctx)
+	if err != nil {
+		return wecomRuntimeConfig{}, err
+	}
+	return payload.Runtime, nil
+}
+
+func (p *remoteAuthConfigurationProvider) Configuration(ctx context.Context) (wecomAuthConfiguration, error) {
+	payload, status, err := p.fetch(ctx)
+	if err != nil {
+		return wecomAuthConfiguration{}, err
+	}
+	if status != http.StatusOK || !payload.Configured {
 		if payload.Error == "" {
 			payload.Error = "WeCom integration is not configured"
 		}
-		return integrationCredential{}, errors.New(payload.Error)
+		return wecomAuthConfiguration{}, errors.New(payload.Error)
 	}
 	if strings.TrimSpace(payload.Application.CorpID) == "" || strings.TrimSpace(payload.Application.AppSecret) == "" {
-		return integrationCredential{}, errors.New("active WeCom integration is incomplete")
+		return wecomAuthConfiguration{}, errors.New("active WeCom integration is incomplete")
 	}
-	p.mu.Lock()
-	p.cached = payload.Application
-	p.expires = time.Now().Add(2 * time.Minute)
-	p.mu.Unlock()
-	return payload.Application, nil
+	return wecomAuthConfiguration{Runtime: payload.Runtime, Application: payload.Application}, nil
+}
+
+func validateWeComRuntimeConfig(runtime wecomRuntimeConfig) (wecomRuntimeConfig, error) {
+	parsedPublic, err := url.Parse(strings.TrimSpace(runtime.PublicBaseURL))
+	if err != nil || parsedPublic.Scheme == "" || parsedPublic.Host == "" ||
+		(parsedPublic.Scheme != "http" && parsedPublic.Scheme != "https") ||
+		parsedPublic.User != nil || parsedPublic.RawQuery != "" || parsedPublic.Fragment != "" {
+		return wecomRuntimeConfig{}, errors.New("AI Console returned an invalid WeCom public base URL")
+	}
+	parsedCallback, err := url.Parse(strings.TrimSpace(runtime.PublicCallbackURL))
+	if err != nil || parsedCallback.Scheme == "" || parsedCallback.Host == "" ||
+		(parsedCallback.Scheme != "http" && parsedCallback.Scheme != "https") ||
+		parsedCallback.User != nil || parsedCallback.RawQuery != "" || parsedCallback.Fragment != "" {
+		return wecomRuntimeConfig{}, errors.New("AI Console returned an invalid WeCom callback URL")
+	}
+	emailDomain := strings.ToLower(strings.TrimSpace(runtime.EmailDomain))
+	if len(emailDomain) == 0 || len(emailDomain) > 253 || !regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`).MatchString(emailDomain) {
+		return wecomRuntimeConfig{}, errors.New("AI Console returned an invalid WeCom email domain")
+	}
+	runtime.PublicBaseURL = strings.TrimRight(parsedPublic.String(), "/")
+	runtime.PublicCallbackURL = strings.TrimRight(parsedCallback.String(), "/")
+	runtime.EmailDomain = emailDomain
+	runtime.CookiePath = strings.TrimRight(parsedPublic.EscapedPath(), "/")
+	if runtime.CookiePath == "" {
+		runtime.CookiePath = "/"
+	}
+	runtime.SecureCookie = parsedPublic.Scheme == "https"
+	return runtime, nil
 }
 
 type identity struct {

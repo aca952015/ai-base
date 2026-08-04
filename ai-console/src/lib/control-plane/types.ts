@@ -54,6 +54,18 @@ export type ServiceConfig = {
   notes?: string;
 };
 
+export type WeComAuthenticationSettings = {
+  publicBaseUrl: string;
+  callbackMode: "direct" | "relay";
+  relayCallbackUrl?: string;
+  emailDomain: string;
+};
+
+export type WeComAuthenticationSnapshot = WeComAuthenticationSettings & {
+  effectiveCallbackUrl: string;
+  updatedAt: string;
+};
+
 export type ServiceSnapshot = ServiceDefinition & {
   status: ServiceStatus;
   endpoint?: string;
@@ -68,6 +80,9 @@ export type ConsoleConfig = {
   currency: "CNY" | "USD";
   monthlyBudget: number;
   services: Partial<Record<ServiceId, ServiceConfig>>;
+  authentication: {
+    wecom: WeComAuthenticationSettings;
+  };
   updatedAt: string;
 };
 
