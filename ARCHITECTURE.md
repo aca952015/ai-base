@@ -9,10 +9,16 @@
 ## 推荐拓扑
 
 ```text
-独立企业 OIDC / 本地 Dex
-   │                    │ 员工登录
-   │                    ▼
-Pomerium ── AI Console / Component Portal (Next.js)
+企业微信工作台 ── /auth/wework ── 专用 Pomerium ──┐
+普通浏览器入口 ─────────────────── 普通 Pomerium ──┤
+                                                   ▼
+                                       独立企业 OIDC / 本地 Dex
+                                                   │ wecom connector
+                                                   ▼
+                                        WeCom Auth Bridge ── 企业微信
+                                                   │ 认证完成
+                                                   ▼
+                                  AI Console / Component Portal (Next.js)
    │              │ 配置、健康检查、运行摘要
    │              ▼
    │      全局能力网关 (Caddy :8080)
@@ -41,6 +47,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 出口 DNS | AdGuard dnsproxy | 为 Envoy AI Gateway 与 Open Connector 提供分流解析；公网域名走 DoH，企业内网域名走本机 DNS | 不映射宿主机端口，不通过关闭 SSRF 校验兼容 Fake-IP |
 | Agent Runtime | FastAPI + `pydantic-ai-slim` | Agent 运行、结构化输出、身份上下文、业务策略 | 不保存外部 SaaS 密钥 |
 | MCP 访问网关 | Go + `net/http` + OAuth/OIDC | 面向兼容 OAuth 的 MCP 客户端提供发现、DCR、PKCE、员工登录、MCP 鉴权、身份绑定会话和访问策略 | Dex 仅作登录上游；不注册 MCP 上游、不向 Envoy 透传员工 Token、不执行 Agent |
+| 企业微信认证桥接 | Go 标准库 + OIDC | 将企业微信网页授权的企业 UserID 转换为 Dex 可消费的标准 OIDC 身份 | 不替代 Dex、不读取 OpenConnector Token；只通过内网读取 Console 中启用的企微应用凭据 |
 | 持久工作流 | DBOS | 审批、队列、定时和恢复 | 复用 PostgreSQL，不加消息队列 |
 | AI 网关 | Envoy AI Gateway standalone | OpenAI 兼容模型入口；内部 MCP 注册、聚合、工具路由与过滤 | MCP API 不直接暴露；Console 生成 `AIGatewayRoute` 与 `MCPRoute` 原生资源 |
 | 内部工具 | 官方 MCP SDK + 薄注册层 | JSON Schema、版本、作用域、风险等级、幂等和审计 | MCP 是协议，不当作安全沙箱 |
@@ -74,7 +81,7 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 
 - OAuth Broker 面向兼容 OAuth 的 MCP 客户端提供 RFC 8414 发现、动态客户端注册、Authorization Code + S256 PKCE、Token 与 JWKS；
 - Broker 通过独立 OIDC Client 将员工登录委托给 Dex/企业 IdP，并校验 state、nonce 与上游 PKCE；
-- Access Token 保持 1 小时短有效期；Refresh Token 默认 90 天滑动有效、每次使用后轮换，服务端只将 Token 哈希原子持久化到 `mcp-auth-data`，因此员工设备休眠和网关重启不会中断长期登录；
+- Access Token 保持 1 小时短有效期；Refresh Token 默认 90 天滑动有效，服务端只将 Token 哈希原子持久化到 `mcp-auth-data`，因此员工设备休眠和网关重启不会中断长期登录；
 - 网关在内存中保留最近 24 小时的成功鉴权客户端摘要，按员工 Subject、Issuer 与 OAuth Client 绑定聚合；Console 通过独立管理令牌读取，外部能力网关不暴露该管理端点；
 - 每个 MCP 请求都验证 Broker JWT Access Token 的 issuer、audience、有效期和必需 scope；
 - 保护 OpenConnector 的 `execute_action`、`get_action_guide` 与 `list_connections`：网关按 `issuer + subject` 查询员工绑定，覆盖客户端连接名，并在本地过滤连接列表；
@@ -86,6 +93,8 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 
 个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，解析器只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
 
+企业微信不是标准 OIDC Provider。独立 `wecom-auth-bridge` 使用 `snsapi_base` 获取企业 UserID，派生稳定 Subject，并作为 Dex 的 OIDC Connector 上游；Pomerium 与 MCP OAuth Broker 仍只信任 Dex。企微 CorpID 与 Secret 由 Console 集成管理加密保存，桥接服务通过独立 Bearer Token 的 Compose 内网接口按需读取，浏览器与 Dex 均不接触 Secret。桥接 Access Token 短期有效，Refresh Token 哈希保存在独立 Volume 并按 90 天滑动续期。企业微信工作台使用 `/auth/wework` 独立入口：Caddy 将其导向专用 Pomerium 实例，该实例只为 Dex 添加 `connector_id=wecom`，因此跳过登录方式选择；普通 Console 登录入口与其他认证方式保持不变。
+
 ## 出口 DNS 与 SSRF
 
 宿主机代理启用 Fake-IP 时，Docker 默认 DNS 可能把公网域名解析到 `198.18.0.0/15` 或 ULA。Open Connector 会按 SSRF 策略拒绝这些保留地址，因此 Envoy AI Gateway 与 Open Connector 共用内部 `egress-dns`：公网查询通过 DNS-over-HTTPS 获取真实地址，`AI_BASE_INTERNAL_DNS_ZONE` 指定的企业内网域名则分流到 Docker 继承的本机 DNS，默认值为 `bluetron.cn`。
@@ -94,7 +103,7 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 
 ## 全局能力网关边界
 
-全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 转发 Envoy 模型接口，`/mcp` 转发 MCP Access Gateway，`/rag` 转发 LightRAG，`/runtime`、`/connector`、`/knowledge`、`/jaeger`、`/promptfoo` 与 `/otel` 在转发前移除能力前缀；工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。
+全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 转发 Envoy 模型接口，`/mcp` 转发 MCP Access Gateway，`/rag` 转发 LightRAG，`/runtime`、`/connector`、`/knowledge`、`/jaeger`、`/promptfoo` 与 `/otel` 在转发前移除能力前缀；`/wecom-oidc/authorize` 与 `/wecom-oidc/callback` 是企业微信浏览器认证的唯一公开桥接端点，Token、UserInfo 与 JWKS 只供 Dex 通过 Compose 内网调用；工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。
 
 Envoy AI Gateway、AI Console、Agent Runtime、Open Connector、LightRAG、Jaeger、Promptfoo、PostgreSQL 和 Pomerium 均不直接暴露宿主机端口。PostgreSQL 只允许 Compose 内部访问；Open Connector 与 AI Console 管理入口经过 Pomerium，其余 HTTP 工具均由全局网关反向代理。
 
@@ -136,7 +145,7 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 
 Portal 负责发现、导航和常用配置治理，专业组件负责 Action 调试、运行策略等深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 
-默认 Compose 启动 AI Console、Caddy 全局网关、Go MCP Access Gateway、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、LightRAG、独立 RAG MCP、PostgreSQL/pgvector/AGE、Jaeger 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium 与 MCP Access Gateway 使用环境变量连接外部 OIDC。只有全局网关映射 loopback 宿主机端口。
+默认 Compose 启动 AI Console、Caddy 全局网关、Go MCP Access Gateway、WeCom Auth Bridge、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、LightRAG、独立 RAG MCP、PostgreSQL/pgvector/AGE、Jaeger 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium、MCP Access Gateway 与企业微信桥接均通过 Dex 统一员工身份。只有全局网关映射 loopback 宿主机端口。
 
 下一阶段可补充 LightRAG 的企业 ACL、Promptfoo 结果导出、发布审批与审计表；不在当前浏览器控制台中添加容器管理权限。
 

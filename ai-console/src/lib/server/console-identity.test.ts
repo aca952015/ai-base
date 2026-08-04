@@ -103,6 +103,10 @@ describe("console identity", () => {
       audience: "ai-console.example.com",
       now,
     }).sub).toBe("employee-42");
+    expect(verifyPomeriumAssertion(token.assertion, token.publicKey, {
+      audience: ["wework.example.com", "ai-console.example.com"],
+      now,
+    }).sub).toBe("employee-42");
     const [header, payload, signature] = token.assertion.split(".");
     const tamperedSignature = `${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
     expect(() => verifyPomeriumAssertion(`${header}.${payload}.${tamperedSignature}`, token.publicKey, {

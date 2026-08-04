@@ -300,11 +300,11 @@ export function IntegrationManager({
                     />
                   </label>
                   <label className="field-label gateway-channel-field--wide">
-                    <span>App ID</span>
+                    <span>{editor.platform === "wecom" ? "企业 ID（CorpID）" : "App ID"}</span>
                     <input
                       value={editor.appId}
                       onChange={(event) => setEditor((current) => current ? { ...current, appId: event.target.value } : current)}
-                      placeholder="填写开放平台应用的 App ID"
+                      placeholder={editor.platform === "wecom" ? "填写企业微信的 CorpID" : "填写开放平台应用的 App ID"}
                       autoComplete="off"
                     />
                   </label>

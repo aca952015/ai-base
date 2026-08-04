@@ -15,7 +15,7 @@ services:
       AI_CONSOLE_ADMIN_EMAILS: ${AI_CONSOLE_ADMIN_EMAILS:-admin@bluetron.cn}
       AI_CONSOLE_DEV_IDENTITY_ENABLED: ${AI_CONSOLE_DEV_IDENTITY_ENABLED:-false}
       POMERIUM_JWT_PUBLIC_KEY_PATH: /run/secrets/pomerium-signing-public.pem
-      POMERIUM_JWT_AUDIENCE: ai-console.localhost.pomerium.io
+      POMERIUM_JWT_AUDIENCE: ai-console.localhost.pomerium.io,wework.localhost.pomerium.io
       GLOBAL_GATEWAY_URL: http://global-gateway:8080
       MCP_ACCESS_GATEWAY_URL: http://mcp-access-gateway:8081
       MCP_ADMIN_TOKEN: ${MCP_ADMIN_TOKEN:-local-mcp-admin-token-change-me}
@@ -27,6 +27,7 @@ services:
       OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
       OPEN_CONNECTOR_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:-local-admin-token-change-me}
       MCP_CONNECTOR_BINDING_RESOLVER_TOKEN: ${MCP_CONNECTOR_BINDING_RESOLVER_TOKEN:-local-connector-binding-resolver-token-change-me}
+      WECOM_AUTH_BRIDGE_CONFIG_TOKEN: ${WECOM_AUTH_BRIDGE_CONFIG_TOKEN:-local-wecom-config-token-change-me}
       MCP_OIDC_ISSUER: ${MCP_OIDC_ISSUER:-http://127.0.0.1:8080/oauth}
       MCP_LOGIN_OIDC_ISSUER: ${MCP_LOGIN_OIDC_ISSUER:-http://dex.localtest.me:5556/dex}
       LIGHTRAG_URL: http://global-gateway:8080/rag
@@ -198,6 +199,36 @@ services:
       retries: 10
       start_period: 10s
 
+  wecom-auth-bridge:
+    image: ai-base/wecom-auth-bridge
+    build:
+      context: ./wecom-auth-bridge
+    restart: unless-stopped
+    expose:
+      - "8082"
+    environment:
+      WECOM_AUTH_LISTEN_ADDRESS: ":8082"
+      WECOM_AUTH_ISSUER: ${WECOM_AUTH_ISSUER:-http://wecom-auth-bridge:8082}
+      WECOM_AUTH_PUBLIC_BASE_URL: ${WECOM_AUTH_PUBLIC_BASE_URL:-http://127.0.0.1:8080/wecom-oidc}
+      WECOM_OIDC_CLIENT_ID: ${WECOM_OIDC_CLIENT_ID:-ai-base-dex}
+      WECOM_OIDC_CLIENT_SECRET: ${WECOM_OIDC_CLIENT_SECRET:-local-wecom-oidc-client-secret-change-me}
+      WECOM_DEX_REDIRECT_URI: ${WECOM_DEX_REDIRECT_URI:-http://dex.localtest.me:5556/dex/callback}
+      WECOM_INTEGRATION_CONFIG_URL: http://ai-console:3000/api/internal/wecom-auth/config
+      WECOM_AUTH_BRIDGE_CONFIG_TOKEN: ${WECOM_AUTH_BRIDGE_CONFIG_TOKEN:-local-wecom-config-token-change-me}
+      WECOM_EMAIL_DOMAIN: ${WECOM_EMAIL_DOMAIN:-bluetron.cn}
+      WECOM_OIDC_SIGNING_KEY_PATH: /data/signing-key.pem
+      WECOM_OIDC_REFRESH_STORE_PATH: /data/refresh-grants.json
+      WECOM_OIDC_ACCESS_TOKEN_LIFETIME: ${WECOM_OIDC_ACCESS_TOKEN_LIFETIME:-1h}
+      WECOM_OIDC_REFRESH_TOKEN_LIFETIME: ${WECOM_OIDC_REFRESH_TOKEN_LIFETIME:-2160h}
+    volumes:
+      - wecom-auth-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document", "/dev/null", "http://127.0.0.1:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   global-gateway:
     image: caddy:2.11.4-alpine
     restart: unless-stopped
@@ -208,10 +239,13 @@ services:
       LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-local-lightrag-api-key-change-me}
     volumes:
       - ./deploy/global-gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/global-gateway/wecom-verification:/srv/wecom-verification:ro
     depends_on:
       llm-gateway:
         condition: service_healthy
       mcp-access-gateway:
+        condition: service_healthy
+      wecom-auth-bridge:
         condition: service_healthy
       open-connector:
         condition: service_started
@@ -457,9 +491,29 @@ services:
       open-connector-admin-proxy:
         condition: service_healthy
 
+  pomerium-wework:
+    image: pomerium/pomerium:v0.32.7
+    restart: unless-stopped
+    expose:
+      - "443"
+    environment:
+      IDP_PROVIDER: oidc
+      IDP_PROVIDER_URL: ${POMERIUM_IDP_PROVIDER_URL:-http://dex.localtest.me:5556/dex}
+      IDP_CLIENT_ID: ${POMERIUM_IDP_CLIENT_ID:-ai-base-pomerium}
+      IDP_CLIENT_SECRET: ${POMERIUM_IDP_CLIENT_SECRET:-replace-with-the-external-oidc-client-secret}
+      COOKIE_SECRET: ${POMERIUM_COOKIE_SECRET:-f3w8vZzhlwLw1DIXoCaILrswiMeDabDaRcyH6JBMwoc=}
+      SHARED_SECRET: ${POMERIUM_SHARED_SECRET:-tq+Rx6zdR8G7iv9SFdiCS1dBGVnug94N+WyOSx1QyCM=}
+    volumes:
+      - ./deploy/pomerium/wework-config.example.yaml:/pomerium/config.yaml:ro
+      - ./deploy/pomerium/dev-signing-key.pem:/run/secrets/pomerium-signing-key.pem:ro
+    depends_on:
+      ai-console:
+        condition: service_healthy
+
 volumes:
   console-data:
   mcp-auth-data:
+  wecom-auth-data:
   open-connector-data:
   lightrag-data:
   lightrag-config:

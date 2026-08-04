@@ -601,6 +601,41 @@ async function applicationWithSecret(id: string) {
   return row;
 }
 
+export type ActiveIntegrationCredential = {
+  id: string;
+  platform: EnterpriseIntegrationPlatform;
+  name: string;
+  appId: string;
+  appSecret: string;
+  updatedAt: string;
+};
+
+export async function getActiveIntegrationCredential(
+  platform: EnterpriseIntegrationPlatform,
+): Promise<ActiveIntegrationCredential> {
+  await ensureSchema();
+  const safePlatform = normalizePlatform(platform);
+  const result = await getPool().query<IntegrationApplicationRow>(`
+    SELECT id, platform, app_name, app_id, note, action_ids, active,
+           app_secret_ciphertext, created_at, updated_at
+    FROM integration_applications
+    WHERE platform = $1 AND active
+    LIMIT 1
+  `, [safePlatform]);
+  const row = result.rows[0];
+  if (!row?.app_secret_ciphertext) {
+    throw new IntegrationStoreError(`${platformDefinition(safePlatform).displayName}尚未启用应用配置`, 404);
+  }
+  return {
+    id: row.id,
+    platform: row.platform,
+    name: row.app_name,
+    appId: row.app_id,
+    appSecret: decryptIntegrationSecret(row.app_secret_ciphertext),
+    updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
 async function syncApplicationOAuthClient(row: IntegrationApplicationRow) {
   const definition = platformDefinitions.find((item) => item.platform === row.platform);
   if (!definition?.service || !definition.supportsPersonalOAuth || !row.app_secret_ciphertext) return;

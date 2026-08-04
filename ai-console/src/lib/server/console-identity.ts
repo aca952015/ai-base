@@ -87,7 +87,7 @@ export function verifyPomeriumAssertion(
   assertion: string,
   publicKey: string,
   options: {
-    audience?: string;
+    audience?: string | string[];
     issuer?: string;
     now?: number;
   } = {},
@@ -117,8 +117,13 @@ export function verifyPomeriumAssertion(
   if (!expiresAt || expiresAt <= now - 30 || (notBefore !== undefined && notBefore > now + 30)) {
     throw new ConsoleAuthError("Pomerium 身份断言已过期或尚未生效");
   }
-  if (options.audience && !audienceClaim(claims.aud).includes(options.audience)) {
-    throw new ConsoleAuthError("Pomerium 身份断言 Audience 不匹配");
+  if (options.audience) {
+    const expectedAudiences = Array.isArray(options.audience)
+      ? options.audience
+      : [options.audience];
+    if (!expectedAudiences.some((audience) => audienceClaim(claims.aud).includes(audience))) {
+      throw new ConsoleAuthError("Pomerium 身份断言 Audience 不匹配");
+    }
   }
   if (options.issuer && stringClaim(claims.iss)?.replace(/\/$/, "") !== options.issuer.replace(/\/$/, "")) {
     throw new ConsoleAuthError("Pomerium 身份断言 Issuer 不匹配");
@@ -200,8 +205,12 @@ export async function getConsoleIdentity() {
     const publicKey = await readFile(publicKeyPath, "utf8").catch(() => {
       throw new ConsoleAuthError("无法读取 Pomerium JWT 公钥", 503);
     });
+    const audiences = (process.env.POMERIUM_JWT_AUDIENCE || "")
+      .split(",")
+      .map((audience) => audience.trim())
+      .filter(Boolean);
     verifyPomeriumAssertion(assertion, publicKey, {
-      audience: process.env.POMERIUM_JWT_AUDIENCE?.trim() || undefined,
+      audience: audiences.length ? audiences : undefined,
       issuer: process.env.POMERIUM_JWT_ISSUER?.trim() || undefined,
     });
   }
