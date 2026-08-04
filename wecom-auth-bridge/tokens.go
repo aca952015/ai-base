@@ -220,6 +220,14 @@ func randomToken(size int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buffer), nil
 }
 
+func randomState() (string, error) {
+	buffer := make([]byte, 32)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", buffer), nil
+}
+
 func tokenHash(raw string) string {
 	digest := sha256.Sum256([]byte(raw))
 	return base64.RawURLEncoding.EncodeToString(digest[:])

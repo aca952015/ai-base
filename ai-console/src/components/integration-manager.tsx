@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Bot,
   Building2,
   CheckCircle2,
   ClipboardPaste,
@@ -44,6 +45,7 @@ type EditorState = {
 const platformIcons = {
   feishu: MessageSquareShare,
   wecom: Building2,
+  wecom_bot: Bot,
   dingtalk: ShieldCheck,
 } satisfies Record<EnterpriseIntegrationPlatform, typeof MessageSquareShare>;
 
@@ -239,7 +241,7 @@ export function IntegrationManager({
   async function activateApplication(application: IntegrationApplication) {
     if (application.active || state === "activating") return;
     setState("activating");
-    setMessage(`正在启用 ${application.name} 并同步 OAuth 客户端…`);
+    setMessage(`正在启用 ${application.name}…`);
     try {
       await fetchJson(`/api/integrations/${encodeURIComponent(application.id)}/activate`, {
         method: "POST",
@@ -286,7 +288,7 @@ export function IntegrationManager({
             <div className="gateway-channel-drawer__body integration-editor-body">
               <section className="resource-detail-section integration-credential-form">
                 <div className="resource-detail-section__header">
-                  <strong>{platformGroup(editor.platform)?.displayName}开放平台应用</strong>
+                  <strong>{platformGroup(editor.platform)?.displayName}配置</strong>
                   <span>{editor.mode === "create" ? "新增" : "编辑"}</span>
                 </div>
                 <div className="gateway-channel-fields connector-fields integration-form-fields">
@@ -300,21 +302,21 @@ export function IntegrationManager({
                     />
                   </label>
                   <label className="field-label gateway-channel-field--wide">
-                    <span>{editor.platform === "wecom" ? "企业 ID（CorpID）" : "App ID"}</span>
+                    <span>{editor.platform === "wecom" ? "企业 ID（CorpID）" : editor.platform === "wecom_bot" ? "Bot ID" : "App ID"}</span>
                     <input
                       value={editor.appId}
                       onChange={(event) => setEditor((current) => current ? { ...current, appId: event.target.value } : current)}
-                      placeholder={editor.platform === "wecom" ? "填写企业微信的 CorpID" : "填写开放平台应用的 App ID"}
+                      placeholder={editor.platform === "wecom" ? "填写企业微信的 CorpID" : editor.platform === "wecom_bot" ? "填写企微智能机器人的 Bot ID" : "填写开放平台应用的 App ID"}
                       autoComplete="off"
                     />
                   </label>
                   <label className="field-label gateway-channel-field--wide">
-                    <span>App Secret</span>
+                    <span>{editor.platform === "wecom_bot" ? "Bot Secret" : "App Secret"}</span>
                     <input
                       type="password"
                       value={editor.appSecret}
                       onChange={(event) => setEditor((current) => current ? { ...current, appSecret: event.target.value } : current)}
-                      placeholder={editor.mode === "edit" ? "留空表示保留当前 Secret" : "填写开放平台应用的 App Secret"}
+                      placeholder={editor.mode === "edit" ? "留空表示保留当前 Secret" : editor.platform === "wecom_bot" ? "填写企微智能机器人的 Secret" : "填写开放平台应用的 App Secret"}
                       autoComplete="new-password"
                     />
                   </label>
@@ -452,7 +454,9 @@ function IntegrationActionSelector({
         <span>{selected.size}/{group.actions.length} 已选择</span>
       </div>
       <p className="integration-action-help">
-        员工绑定账号时，仅申请已选 Action 所需的权限。修改后，已经绑定的员工需要重新授权才能生效。
+        {group.platform === "wecom_bot"
+          ? "员工绑定到个人 AI Base 账号后，仅能调用已选择的 Action。"
+          : "员工绑定账号时，仅申请已选 Action 所需的权限。修改后，已经绑定的员工需要重新授权才能生效。"}
       </p>
       <div className="integration-action-toolbar">
         <label className="connector-search-input integration-action-search">
@@ -524,33 +528,35 @@ function IntegrationActionSelector({
           </div>
         </div>
       ) : null}
-      <div className="integration-scope-summary">
-        <div>
-          <strong>{scopes.length}</strong>
-          <span>个 OAuth 权限</span>
+      {group.platform === "feishu" ? (
+        <div className="integration-scope-summary">
+          <div>
+            <strong>{scopes.length}</strong>
+            <span>个 OAuth 权限</span>
+          </div>
+          <div className="integration-scope-tags">
+            {scopes.map((scope) => (
+              <span
+                className={`integration-scope-tag${baseScopes.has(scope) ? " is-required" : ""}`}
+                title={baseScopes.has(scope) ? "系统基础权限，无法移除" : undefined}
+                key={scope}
+              >
+                <code>{scope}</code>
+                {!baseScopes.has(scope) ? (
+                  <button
+                    type="button"
+                    onClick={() => onReplace(removeActionsRequiringPermission(group.actions, selectedActionIds, scope))}
+                    aria-label={`移除权限 ${scope} 并取消相关 Action`}
+                    title={`移除 ${scope}`}
+                  >
+                    <X size={11} />
+                  </button>
+                ) : null}
+              </span>
+            ))}
+          </div>
         </div>
-        <div className="integration-scope-tags">
-          {scopes.map((scope) => (
-            <span
-              className={`integration-scope-tag${baseScopes.has(scope) ? " is-required" : ""}`}
-              title={baseScopes.has(scope) ? "系统基础权限，无法移除" : undefined}
-              key={scope}
-            >
-              <code>{scope}</code>
-              {!baseScopes.has(scope) ? (
-                <button
-                  type="button"
-                  onClick={() => onReplace(removeActionsRequiringPermission(group.actions, selectedActionIds, scope))}
-                  aria-label={`移除权限 ${scope} 并取消相关 Action`}
-                  title={`移除 ${scope}`}
-                >
-                  <X size={11} />
-                </button>
-              ) : null}
-            </span>
-          ))}
-        </div>
-      </div>
+      ) : null}
       <div className="integration-action-list">
         {filtered.map((action) => (
           <label className={selected.has(action.id) ? "is-selected" : ""} key={action.id}>

@@ -53,7 +53,16 @@ func loadConfig() (config, error) {
 	if err != nil || parsedPublic.Scheme == "" || parsedPublic.Host == "" {
 		return config{}, errors.New("WECOM_AUTH_PUBLIC_BASE_URL must be an absolute URL")
 	}
-	cfg.publicCallbackURL = cfg.publicBaseURL + "/callback"
+	cfg.publicCallbackURL = strings.TrimSpace(os.Getenv("WECOM_AUTH_CALLBACK_URL"))
+	if cfg.publicCallbackURL == "" {
+		cfg.publicCallbackURL = cfg.publicBaseURL + "/callback"
+	}
+	parsedCallback, err := url.Parse(cfg.publicCallbackURL)
+	if err != nil || parsedCallback.Scheme == "" || parsedCallback.Host == "" ||
+		(parsedCallback.Scheme != "http" && parsedCallback.Scheme != "https") ||
+		parsedCallback.User != nil || parsedCallback.RawQuery != "" || parsedCallback.Fragment != "" {
+		return config{}, errors.New("WECOM_AUTH_CALLBACK_URL must be an absolute HTTP(S) URL without credentials, query, or fragment")
+	}
 	cfg.publicCookiePath = strings.TrimRight(parsedPublic.EscapedPath(), "/")
 	if cfg.publicCookiePath == "" {
 		cfg.publicCookiePath = "/"

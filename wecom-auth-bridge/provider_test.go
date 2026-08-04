@@ -126,13 +126,23 @@ func TestEndToEndAuthorizationCodeAndRefreshFlow(t *testing.T) {
 	if wecomLocation.Query().Get("appid") != "ww-corp" || wecomLocation.Query().Get("scope") != "snsapi_base" {
 		t.Fatalf("unexpected WeCom redirect: %s", wecomLocation.String())
 	}
+	if wecomLocation.Query().Get("redirect_uri") != provider.cfg.publicCallbackURL {
+		t.Fatalf("redirect URI = %q", wecomLocation.Query().Get("redirect_uri"))
+	}
+	state := wecomLocation.Query().Get("state")
+	if len(state) != 64 || strings.Trim(state, "0123456789abcdef") != "" {
+		t.Fatalf("state must be 64 lowercase hexadecimal characters, got %q", state)
+	}
 	cookies := authorizeResponse.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Value != wecomLocation.Query().Get("state") {
+	if len(cookies) != 1 || cookies[0].Value != state {
 		t.Fatalf("state cookie does not match redirect state")
+	}
+	if !cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].SameSite != http.SameSiteLaxMode || cookies[0].Path != "/wecom-oidc" {
+		t.Fatalf("unexpected state cookie attributes: %#v", cookies[0])
 	}
 
 	callbackRequest := httptest.NewRequest(http.MethodGet, "/callback?"+url.Values{
-		"state": {wecomLocation.Query().Get("state")},
+		"state": {state},
 		"code":  {"wecom-code"},
 	}.Encode(), nil)
 	callbackRequest.AddCookie(cookies[0])

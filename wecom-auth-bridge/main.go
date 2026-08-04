@@ -40,7 +40,13 @@ func main() {
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    32 << 10,
 	}
-	slog.Info("starting WeCom auth bridge", "address", cfg.listenAddress, "issuer", cfg.issuer, "public_base_url", cfg.publicBaseURL)
+	slog.Info(
+		"starting WeCom auth bridge",
+		"address", cfg.listenAddress,
+		"issuer", cfg.issuer,
+		"public_base_url", cfg.publicBaseURL,
+		"callback_url", cfg.publicCallbackURL,
+	)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("WeCom auth bridge stopped", "error", err)
 		os.Exit(1)

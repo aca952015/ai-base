@@ -95,6 +95,8 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 
 企业微信不是标准 OIDC Provider。独立 `wecom-auth-bridge` 使用 `snsapi_base` 获取企业 UserID，派生稳定 Subject，并作为 Dex 的 OIDC Connector 上游；Pomerium 与 MCP OAuth Broker 仍只信任 Dex。企微 CorpID 与 Secret 由 Console 集成管理加密保存，桥接服务通过独立 Bearer Token 的 Compose 内网接口按需读取，浏览器与 Dex 均不接触 Secret。桥接 Access Token 短期有效，Refresh Token 哈希保存在独立 Volume 并按 90 天滑动续期。企业微信工作台使用 `/auth/wework` 独立入口：Caddy 将其导向专用 Pomerium 实例，该实例只为 Dex 添加 `connector_id=wecom`，因此跳过登录方式选择；普通 Console 登录入口与其他认证方式保持不变。
 
+同级独立项目 `ai-auth-relay` 是可选公网边缘，不属于 AI Base Compose，也不是身份提供方。它用 provider adapter 约束公开回调字段和固定本地目标；当前首个 adapter 为企业微信。浏览器先从本地 `/wecom-oidc/authorize` 获得一次性 state 与 HttpOnly Cookie，企微回到 Relay 后，Relay 将白名单字段经 302 带回固定的本地 callback，再由 `wecom-auth-bridge` 完成 Cookie/state 校验和 code 消费。Relay 不保存 CorpID、Secret、身份或 Token，不依赖 Vercel 到本地的永久长连接；浏览器无法访问本地目标时链路关闭失败。
+
 ## 出口 DNS 与 SSRF
 
 宿主机代理启用 Fake-IP 时，Docker 默认 DNS 可能把公网域名解析到 `198.18.0.0/15` 或 ULA。Open Connector 会按 SSRF 策略拒绝这些保留地址，因此 Envoy AI Gateway 与 Open Connector 共用内部 `egress-dns`：公网查询通过 DNS-over-HTTPS 获取真实地址，`AI_BASE_INTERNAL_DNS_ZONE` 指定的企业内网域名则分流到 Docker 继承的本机 DNS，默认值为 `bluetron.cn`。
@@ -103,7 +105,7 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 
 ## 全局能力网关边界
 
-全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 转发 Envoy 模型接口，`/mcp` 转发 MCP Access Gateway，`/rag` 转发 LightRAG，`/runtime`、`/connector`、`/knowledge`、`/jaeger`、`/promptfoo` 与 `/otel` 在转发前移除能力前缀；`/wecom-oidc/authorize` 与 `/wecom-oidc/callback` 是企业微信浏览器认证的唯一公开桥接端点，Token、UserInfo 与 JWKS 只供 Dex 通过 Compose 内网调用；工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。
+全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 转发 Envoy 模型接口，`/mcp` 转发 MCP Access Gateway，`/rag` 转发 LightRAG，`/runtime`、`/connector`、`/knowledge`、`/jaeger`、`/promptfoo` 与 `/otel` 在转发前移除能力前缀；`/wecom-oidc/authorize` 与 `/wecom-oidc/callback` 是企业微信浏览器认证在 AI Base 内部的唯一入口，公网 callback 可直达该入口，也可经同级 `ai-auth-relay` 由浏览器中继，Token、UserInfo 与 JWKS 始终只供 Dex 通过 Compose 内网调用；工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。
 
 Envoy AI Gateway、AI Console、Agent Runtime、Open Connector、LightRAG、Jaeger、Promptfoo、PostgreSQL 和 Pomerium 均不直接暴露宿主机端口。PostgreSQL 只允许 Compose 内部访问；Open Connector 与 AI Console 管理入口经过 Pomerium，其余 HTTP 工具均由全局网关反向代理。
 

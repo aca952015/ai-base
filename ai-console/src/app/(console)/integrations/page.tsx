@@ -27,6 +27,15 @@ const emptySnapshot: EnterpriseIntegrationsSnapshot = {
       applications: [],
     },
     {
+      platform: "wecom_bot",
+      displayName: "企微机器人",
+      description: "管理企微智能机器人，并由员工绑定到个人 AI Base 账号后使用。",
+      actions: [],
+      defaultActionIds: [],
+      oauthBaseScopes: [],
+      applications: [],
+    },
+    {
       platform: "dingtalk",
       displayName: "钉钉",
       description: "管理钉钉开放平台应用凭据。",

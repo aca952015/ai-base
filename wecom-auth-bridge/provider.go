@@ -131,7 +131,7 @@ func (p *provider) authorize(w http.ResponseWriter, r *http.Request) {
 		writeOAuthPage(w, http.StatusServiceUnavailable, "企业微信应用尚未配置或当前不可用，请联系管理员检查 AI Base 集成管理")
 		return
 	}
-	internalState, err := randomToken(32)
+	internalState, err := randomState()
 	if err != nil {
 		writeOAuthPage(w, http.StatusInternalServerError, "无法创建认证请求")
 		return

@@ -1,4 +1,6 @@
-export type EnterpriseIntegrationPlatform = "feishu" | "wecom" | "dingtalk";
+export type EnterpriseIntegrationPlatform = "feishu" | "wecom" | "wecom_bot" | "dingtalk";
+
+export type EmployeeIntegrationBindingMode = "oauth2" | "managed_credential" | "unsupported";
 
 export type IntegrationActionOption = {
   id: string;
@@ -147,7 +149,7 @@ export type EmployeeIntegrationApplication = Pick<
   "id" | "platform" | "name" | "appId" | "note" | "active"
 > & {
   platformDisplayName: string;
-  supportsPersonalOAuth: boolean;
+  bindingMode: EmployeeIntegrationBindingMode;
   binding?: EmployeeConnectorBinding;
 };
 

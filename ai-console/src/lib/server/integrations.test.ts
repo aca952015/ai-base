@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("enterprise integration store", () => {
-  it("always returns the three supported platform groups in a stable order", () => {
+  it("always returns the supported platform groups in a stable order", () => {
     const applications: IntegrationApplication[] = [
       {
         id: "019fd023-aec6-7cd0-8d43-29f9523a63bd",
@@ -71,11 +71,13 @@ describe("enterprise integration store", () => {
     expect(snapshot.groups.map((group) => group.platform)).toEqual([
       "feishu",
       "wecom",
+      "wecom_bot",
       "dingtalk",
     ]);
     expect(snapshot.groups[0].applications).toEqual([applications[1]]);
     expect(snapshot.groups[1].applications).toEqual([]);
-    expect(snapshot.groups[2].applications).toEqual([applications[0]]);
+    expect(snapshot.groups[2].applications).toEqual([]);
+    expect(snapshot.groups[3].applications).toEqual([applications[0]]);
     expect(snapshot.groups[0].actions.map((action) => action.id)).toEqual([
       "feishu.search_bitable_records",
     ]);
@@ -123,6 +125,18 @@ describe("enterprise integration store", () => {
       },
       {
         id: "019fd023-aec6-7cd0-8d43-29f9523a63c3",
+        platform: "wecom_bot",
+        name: "销售助手机器人",
+        appId: "wecom-bot-production",
+        note: "供销售员工绑定",
+        actionIds: ["wecom_bot.get_userlist"],
+        active: true,
+        secretConfigured: true,
+        createdAt: "2026-07-23T03:00:00.000Z",
+        updatedAt: "2026-07-23T03:00:00.000Z",
+      },
+      {
+        id: "019fd023-aec6-7cd0-8d43-29f9523a63c4",
         platform: "dingtalk",
         name: "钉钉审批应用",
         appId: "dingtalk-approval",
@@ -130,8 +144,8 @@ describe("enterprise integration store", () => {
         actionIds: [],
         active: true,
         secretConfigured: true,
-        createdAt: "2026-07-23T03:00:00.000Z",
-        updatedAt: "2026-07-23T03:00:00.000Z",
+        createdAt: "2026-07-23T04:00:00.000Z",
+        updatedAt: "2026-07-23T04:00:00.000Z",
       },
     ];
     const binding: EmployeeConnectorBinding = {
@@ -156,11 +170,19 @@ describe("enterprise integration store", () => {
       applications[0].id,
       applications[1].id,
       applications[2].id,
+      applications[3].id,
     ]);
     expect(snapshot.applications.map((application) => application.platformDisplayName)).toEqual([
       "飞书",
       "飞书",
+      "企微机器人",
       "钉钉",
+    ]);
+    expect(snapshot.applications.map((application) => application.bindingMode)).toEqual([
+      "oauth2",
+      "oauth2",
+      "managed_credential",
+      "unsupported",
     ]);
     expect(snapshot.applications[0].binding).toEqual(binding);
     expect(snapshot.applications[1].binding).toBeUndefined();

@@ -895,6 +895,7 @@ svg { flex: 0 0 auto; }
 .integration-add-card { padding: 14px; }
 .integration-icon--feishu { background: linear-gradient(145deg, #64d2ff, #0a84ff) !important; }
 .integration-icon--wecom { background: linear-gradient(145deg, #30d158, #17883a) !important; }
+.integration-icon--wecom_bot { background: linear-gradient(145deg, #5ac8fa, #0878d1) !important; }
 .integration-icon--dingtalk { background: linear-gradient(145deg, #5e5ce6, #3b3aa8) !important; }
 .integration-application-card .gateway-channel-tile__top { grid-template-columns: auto minmax(0, 1fr) auto; }
 .integration-active-badge,

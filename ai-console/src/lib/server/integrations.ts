@@ -23,6 +23,7 @@ import {
   deleteConnectorConnection,
   getConnectorProvider,
   listConnectorConnections,
+  saveConnectorConnection,
   saveConnectorOAuthConfig,
   startConnectorOAuthAuthorization,
 } from "./open-connector";
@@ -42,10 +43,20 @@ const FEISHU_DEFAULT_ACTION_IDS = [
   "feishu.list_bitable_fields",
   "feishu.search_bitable_records",
 ];
+const WECOM_BOT_WEBHOOK_ACTION_IDS = new Set([
+  "wecom_bot.send_text_message",
+  "wecom_bot.send_markdown_message",
+  "wecom_bot.send_markdown_v2_message",
+  "wecom_bot.send_image_message",
+  "wecom_bot.send_news_message",
+]);
+
+type EmployeeBindingMode = "oauth2" | "managed_credential" | "unsupported";
 
 type PlatformDefinition = Omit<EnterpriseIntegrationGroup, "applications"> & {
   service?: string;
-  supportsPersonalOAuth: boolean;
+  bindingMode: EmployeeBindingMode;
+  excludedActionIds?: ReadonlySet<string>;
 };
 
 const platformDefinitions: PlatformDefinition[] = [
@@ -54,7 +65,7 @@ const platformDefinitions: PlatformDefinition[] = [
     displayName: "飞书",
     description: "管理飞书开放平台应用凭据。",
     service: "feishu",
-    supportsPersonalOAuth: true,
+    bindingMode: "oauth2",
     actions: [],
     defaultActionIds: FEISHU_DEFAULT_ACTION_IDS,
     oauthBaseScopes: [],
@@ -63,7 +74,18 @@ const platformDefinitions: PlatformDefinition[] = [
     platform: "wecom",
     displayName: "企微",
     description: "管理企微自建应用凭据。",
-    supportsPersonalOAuth: false,
+    bindingMode: "unsupported",
+    actions: [],
+    defaultActionIds: [],
+    oauthBaseScopes: [],
+  },
+  {
+    platform: "wecom_bot",
+    displayName: "企微机器人",
+    description: "管理企微智能机器人，并由员工绑定到个人 AI Base 账号后使用。",
+    service: "wecom_bot",
+    bindingMode: "managed_credential",
+    excludedActionIds: WECOM_BOT_WEBHOOK_ACTION_IDS,
     actions: [],
     defaultActionIds: [],
     oauthBaseScopes: [],
@@ -72,7 +94,7 @@ const platformDefinitions: PlatformDefinition[] = [
     platform: "dingtalk",
     displayName: "钉钉",
     description: "管理钉钉开放平台应用凭据。",
-    supportsPersonalOAuth: false,
+    bindingMode: "unsupported",
     actions: [],
     defaultActionIds: [],
     oauthBaseScopes: [],
@@ -108,6 +130,7 @@ type EmployeeConnectorBindingRow = QueryResultRow & {
   error_message: string | null;
   connected_at: Date | string | null;
   updated_at: Date | string;
+  action_ids?: unknown;
 };
 
 type SharedConnectorGrantResolutionRow = QueryResultRow & {
@@ -161,7 +184,7 @@ export async function ensureSchema() {
     globalThis.aiBaseIntegrationSchemaPromise = getPool().query(`
       CREATE TABLE IF NOT EXISTS integration_applications (
         id UUID PRIMARY KEY,
-        platform TEXT NOT NULL CHECK (platform IN ('feishu', 'wecom', 'dingtalk')),
+        platform TEXT NOT NULL CHECK (platform IN ('feishu', 'wecom', 'wecom_bot', 'dingtalk')),
         app_name TEXT NOT NULL,
         app_id TEXT NOT NULL,
         note TEXT NOT NULL DEFAULT '',
@@ -172,6 +195,11 @@ export async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (platform, app_id)
       );
+      ALTER TABLE integration_applications
+        DROP CONSTRAINT IF EXISTS integration_applications_platform_check;
+      ALTER TABLE integration_applications
+        ADD CONSTRAINT integration_applications_platform_check
+        CHECK (platform IN ('feishu', 'wecom', 'wecom_bot', 'dingtalk'));
       ALTER TABLE integration_applications ADD COLUMN IF NOT EXISTS app_name TEXT;
       UPDATE integration_applications
       SET app_name = app_id
@@ -216,7 +244,7 @@ export async function ensureSchema() {
         principal_subject TEXT NOT NULL,
         principal_email TEXT NOT NULL,
         principal_name TEXT NOT NULL,
-        platform TEXT NOT NULL CHECK (platform IN ('feishu', 'wecom', 'dingtalk')),
+        platform TEXT NOT NULL CHECK (platform IN ('feishu', 'wecom', 'wecom_bot', 'dingtalk')),
         service TEXT NOT NULL,
         connection_name TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('pending', 'connected', 'error', 'revoked')),
@@ -229,6 +257,11 @@ export async function ensureSchema() {
         UNIQUE (principal_issuer, principal_subject, service),
         UNIQUE (service, connection_name)
       );
+      ALTER TABLE employee_connector_bindings
+        DROP CONSTRAINT IF EXISTS employee_connector_bindings_platform_check;
+      ALTER TABLE employee_connector_bindings
+        ADD CONSTRAINT employee_connector_bindings_platform_check
+        CHECK (platform IN ('feishu', 'wecom', 'wecom_bot', 'dingtalk'));
       CREATE INDEX IF NOT EXISTS employee_connector_bindings_principal_idx
         ON employee_connector_bindings(principal_issuer, principal_subject, status);
       CREATE TABLE IF NOT EXISTS shared_connector_resources (
@@ -327,7 +360,7 @@ export function decryptIntegrationSecret(payload: string) {
 
 function normalizePlatform(value: unknown): EnterpriseIntegrationPlatform {
   if (typeof value !== "string" || !allowedPlatforms.has(value as EnterpriseIntegrationPlatform)) {
-    throw new IntegrationStoreError("仅支持飞书、企微和钉钉应用", 400);
+    throw new IntegrationStoreError("仅支持飞书、企微、企微机器人和钉钉应用", 400);
   }
   return value as EnterpriseIntegrationPlatform;
 }
@@ -402,7 +435,10 @@ async function integrationActionCatalog(platform: EnterpriseIntegrationPlatform)
 
   const provider = await getConnectorProvider(definition.service);
   const actions = provider.actions
-    .filter((action) => action.execution?.catalogOnly !== true)
+    .filter((action) => (
+      action.execution?.catalogOnly !== true
+      && !definition.excludedActionIds?.has(action.id)
+    ))
     .map((action) => ({
       id: action.id,
       name: action.name,
@@ -638,7 +674,7 @@ export async function getActiveIntegrationCredential(
 
 async function syncApplicationOAuthClient(row: IntegrationApplicationRow) {
   const definition = platformDefinitions.find((item) => item.platform === row.platform);
-  if (!definition?.service || !definition.supportsPersonalOAuth || !row.app_secret_ciphertext) return;
+  if (!definition?.service || definition.bindingMode !== "oauth2" || !row.app_secret_ciphertext) return;
   await saveConnectorOAuthConfig(definition.service, {
     clientId: row.app_id,
     clientSecret: decryptIntegrationSecret(row.app_secret_ciphertext),
@@ -850,7 +886,7 @@ export function buildEmployeeIntegrationsSnapshot(
         note: application.note,
         active: application.active,
         platformDisplayName: definition.displayName,
-        supportsPersonalOAuth: definition.supportsPersonalOAuth,
+        bindingMode: definition.bindingMode,
         binding: bindingByApplication.get(application.id),
       })),
   );
@@ -874,14 +910,13 @@ export async function startEmployeeIntegrationAuthorization(
   await ensureSchema();
   const row = await applicationWithSecret(applicationId);
   const definition = platformDefinition(row.platform);
-  if (!definition.supportsPersonalOAuth || !definition.service) {
-    throw new IntegrationStoreError("当前 OpenConnector 版本暂不支持该平台的个人 OAuth", 409);
+  if (definition.bindingMode === "unsupported" || !definition.service) {
+    throw new IntegrationStoreError("当前集成类型暂不支持员工账号绑定", 409);
   }
   if (!row.active) {
     throw new IntegrationStoreError("管理员尚未启用该应用配置", 409);
   }
 
-  await syncApplicationOAuthClient(row);
   const actionIds = await normalizeIntegrationActionIds(
     row.platform,
     row.action_ids,
@@ -921,7 +956,40 @@ export async function startEmployeeIntegrationAuthorization(
   ]);
 
   try {
-    return await startConnectorOAuthAuthorization(definition.service, connectionName, actionIds);
+    if (definition.bindingMode === "oauth2") {
+      await syncApplicationOAuthClient(row);
+      return await startConnectorOAuthAuthorization(definition.service, connectionName, actionIds);
+    }
+
+    if (definition.platform !== "wecom_bot") {
+      throw new IntegrationStoreError("当前集成类型缺少账号绑定实现", 409);
+    }
+    const connection = await saveConnectorConnection(definition.service, {
+      connectionName,
+      authType: "custom_credential",
+      values: {
+        botId: row.app_id,
+        secret: decryptIntegrationSecret(row.app_secret_ciphertext!),
+      },
+    });
+    if (!connection) throw new IntegrationStoreError("OpenConnector 未返回有效的企微机器人连接", 502);
+    await getPool().query(`
+      UPDATE employee_connector_bindings
+      SET status = 'connected', display_name = $3, account_id = $4,
+          error_message = NULL, connected_at = NOW(), updated_at = NOW()
+      WHERE principal_issuer = $1 AND principal_subject = $2 AND service = $5
+    `, [
+      identity.principalIssuer,
+      identity.principalSubject,
+      connection.profile.displayName,
+      connection.profile.accountId,
+      definition.service,
+    ]);
+    return {
+      service: definition.service,
+      connectionName,
+      connected: true as const,
+    };
   } catch (error) {
     await getPool().query(`
       UPDATE employee_connector_bindings
@@ -930,7 +998,7 @@ export async function startEmployeeIntegrationAuthorization(
     `, [
       identity.principalIssuer,
       identity.principalSubject,
-      error instanceof Error ? error.message : "无法开始 OAuth 授权",
+      error instanceof Error ? error.message : "无法完成员工账号绑定",
       definition.service,
     ]);
     throw error;
@@ -989,12 +1057,16 @@ export async function resolveEmployeeConnectorBindings(input: {
       .slice(0, 256),
   ));
   let result = await getPool().query<EmployeeConnectorBindingRow>(`
-    SELECT id, application_id, platform, service, connection_name, status,
-           display_name, account_id, error_message, connected_at, updated_at
-    FROM employee_connector_bindings
-    WHERE principal_issuer = $1 AND principal_subject = $2 AND status = 'connected'
-      AND ($3::TEXT IS NULL OR service = $3)
-    ORDER BY service
+    SELECT binding.id, binding.application_id, binding.platform, binding.service,
+           binding.connection_name, binding.status, binding.display_name,
+           binding.account_id, binding.error_message, binding.connected_at,
+           binding.updated_at, application.action_ids
+    FROM employee_connector_bindings AS binding
+    JOIN integration_applications AS application ON application.id = binding.application_id
+    WHERE binding.principal_issuer = $1 AND binding.principal_subject = $2
+      AND binding.status = 'connected'
+      AND ($3::TEXT IS NULL OR binding.service = $3)
+    ORDER BY binding.service
   `, [issuer, subject, service || null]);
 
   // Pomerium and the MCP OAuth broker may expose different opaque subjects for
@@ -1003,12 +1075,16 @@ export async function resolveEmployeeConnectorBindings(input: {
   // resolver channel. Ambiguous matches fail closed.
   if (!result.rowCount && email) {
     result = await getPool().query<EmployeeConnectorBindingRow>(`
-      SELECT id, application_id, platform, service, connection_name, status,
-             display_name, account_id, error_message, connected_at, updated_at
-      FROM employee_connector_bindings
-      WHERE principal_issuer = $1 AND LOWER(principal_email) = $2 AND status = 'connected'
-        AND ($3::TEXT IS NULL OR service = $3)
-      ORDER BY service
+      SELECT binding.id, binding.application_id, binding.platform, binding.service,
+             binding.connection_name, binding.status, binding.display_name,
+             binding.account_id, binding.error_message, binding.connected_at,
+             binding.updated_at, application.action_ids
+      FROM employee_connector_bindings AS binding
+      JOIN integration_applications AS application ON application.id = binding.application_id
+      WHERE binding.principal_issuer = $1 AND LOWER(binding.principal_email) = $2
+        AND binding.status = 'connected'
+        AND ($3::TEXT IS NULL OR binding.service = $3)
+      ORDER BY binding.service
     `, [issuer, email, service || null]);
     const services = new Set<string>();
     for (const row of result.rows) {
@@ -1064,13 +1140,15 @@ export async function resolveEmployeeConnectorBindings(input: {
   );
   const boundConnections = result.rows.flatMap((row) => {
     const current = valid.get(`${row.service}\0${row.connection_name}`);
+    const allowedActionIds = storedActionIds(row.action_ids);
     return current ? [{
       service: row.service,
       connectionName: row.connection_name,
       displayName: current.profile.displayName,
       public: false,
       accessMode: "account_bound",
-      actionRestricted: false,
+      actionRestricted: true,
+      allowedActionIds,
     }] : [];
   });
   const sharedByConnection = new Map<string, {
