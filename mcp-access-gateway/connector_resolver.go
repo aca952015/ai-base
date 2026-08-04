@@ -160,6 +160,7 @@ func (r *httpConnectorBindingResolver) request(
 		"subject":                 caller.subject,
 		"email":                   strings.ToLower(strings.TrimSpace(caller.email)),
 		"groups":                  caller.groups,
+		"wecomUserIdHash":         caller.wecomUserIDHash,
 		"clientId":                caller.clientID,
 		"service":                 service,
 		"requestedConnectionName": strings.TrimSpace(requestedConnectionName),

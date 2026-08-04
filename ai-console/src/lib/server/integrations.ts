@@ -23,6 +23,7 @@ import {
   deleteConnectorConnection,
   getConnectorProvider,
   listConnectorConnections,
+  runConnectorAction,
   saveConnectorConnection,
   saveConnectorOAuthConfig,
   startConnectorOAuthAuthorization,
@@ -51,7 +52,7 @@ const WECOM_BOT_WEBHOOK_ACTION_IDS = new Set([
   "wecom_bot.send_news_message",
 ]);
 
-type EmployeeBindingMode = "oauth2" | "managed_credential" | "unsupported";
+type EmployeeBindingMode = "oauth2" | "unsupported";
 
 type PlatformDefinition = Omit<EnterpriseIntegrationGroup, "applications"> & {
   service?: string;
@@ -75,17 +76,6 @@ const platformDefinitions: PlatformDefinition[] = [
     displayName: "企微",
     description: "管理企微自建应用凭据。",
     bindingMode: "unsupported",
-    actions: [],
-    defaultActionIds: [],
-    oauthBaseScopes: [],
-  },
-  {
-    platform: "wecom_bot",
-    displayName: "企微机器人",
-    description: "管理企微智能机器人，并由员工绑定到个人 AI Base 账号后使用。",
-    service: "wecom_bot",
-    bindingMode: "managed_credential",
-    excludedActionIds: WECOM_BOT_WEBHOOK_ACTION_IDS,
     actions: [],
     defaultActionIds: [],
     oauthBaseScopes: [],
@@ -142,9 +132,19 @@ type SharedConnectorGrantResolutionRow = QueryResultRow & {
   grant_id: string;
 };
 
+type WeComVisibilityResourceRow = QueryResultRow & {
+  resource_id: string;
+  service: "wecom_bot";
+  connection_name: string;
+  display_name: string;
+  action_ids: unknown;
+};
+
 declare global {
   var aiBaseIntegrationPool: Pool | undefined;
   var aiBaseIntegrationSchemaPromise: Promise<void> | undefined;
+  var aiBaseWeComBotMigrationPromise: Promise<void> | undefined;
+  var aiBaseWeComVisibilityCache: Map<string, { expiresAt: number; userIdHashes: Set<string> }> | undefined;
 }
 
 export class IntegrationStoreError extends Error {
@@ -270,6 +270,9 @@ export async function ensureSchema() {
         connection_name TEXT NOT NULL,
         display_name TEXT NOT NULL,
         security_domain TEXT NOT NULL DEFAULT 'general',
+        authorization_mode TEXT NOT NULL DEFAULT 'manual'
+          CHECK (authorization_mode IN ('manual', 'wecom_visibility')),
+        action_ids JSONB NOT NULL DEFAULT '[]'::JSONB,
         enabled BOOLEAN NOT NULL DEFAULT TRUE,
         created_by TEXT NOT NULL,
         updated_by TEXT NOT NULL,
@@ -277,6 +280,15 @@ export async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE (service, connection_name)
       );
+      ALTER TABLE shared_connector_resources
+        ADD COLUMN IF NOT EXISTS authorization_mode TEXT NOT NULL DEFAULT 'manual';
+      ALTER TABLE shared_connector_resources
+        DROP CONSTRAINT IF EXISTS shared_connector_resources_authorization_mode_check;
+      ALTER TABLE shared_connector_resources
+        ADD CONSTRAINT shared_connector_resources_authorization_mode_check
+        CHECK (authorization_mode IN ('manual', 'wecom_visibility'));
+      ALTER TABLE shared_connector_resources
+        ADD COLUMN IF NOT EXISTS action_ids JSONB NOT NULL DEFAULT '[]'::JSONB;
       CREATE TABLE IF NOT EXISTS shared_connector_grants (
         id UUID PRIMARY KEY,
         resource_id UUID NOT NULL REFERENCES shared_connector_resources(id) ON DELETE CASCADE,
@@ -358,9 +370,109 @@ export function decryptIntegrationSecret(payload: string) {
   }
 }
 
+const WECOM_BOT_SYSTEM_ONLY_ACTION_IDS = new Set([
+  ...WECOM_BOT_WEBHOOK_ACTION_IDS,
+  "wecom_bot.call_tool",
+  "wecom_bot.get_userlist",
+]);
+
+function migratedWeComBotConnectionName(applicationId: string) {
+  return `wecom_bot_${applicationId.replaceAll("-", "")}`;
+}
+
+async function migrateLegacyWeComBotIntegrations() {
+  if (!globalThis.aiBaseWeComBotMigrationPromise) {
+    globalThis.aiBaseWeComBotMigrationPromise = (async () => {
+      const legacy = await getPool().query<IntegrationApplicationRow>(`
+        SELECT id, platform, app_name, app_id, note, action_ids, active,
+               app_secret_ciphertext, created_at, updated_at
+        FROM integration_applications
+        WHERE platform = 'wecom_bot'
+        ORDER BY created_at, id
+      `);
+      if (!legacy.rowCount) return;
+
+      const provider = await getConnectorProvider("wecom_bot");
+      const availableActionIds = new Set(provider.actions
+        .filter((action) => action.execution?.catalogOnly !== true)
+        .map((action) => action.id));
+
+      for (const row of legacy.rows) {
+        if (!row.app_secret_ciphertext) {
+          throw new IntegrationStoreError(`企微机器人 ${row.app_name} 的凭据不完整，无法迁移`, 409);
+        }
+        const connectionName = migratedWeComBotConnectionName(row.id);
+        const actionIds = storedActionIds(row.action_ids).filter((actionId) => (
+          availableActionIds.has(actionId) && !WECOM_BOT_SYSTEM_ONLY_ACTION_IDS.has(actionId)
+        ));
+        const connection = await saveConnectorConnection("wecom_bot", {
+          connectionName,
+          authType: "custom_credential",
+          values: {
+            botId: row.app_id,
+            secret: decryptIntegrationSecret(row.app_secret_ciphertext),
+          },
+        });
+        if (!connection?.configured) {
+          throw new IntegrationStoreError(`企微机器人 ${row.app_name} 无法迁移为共享连接`, 502);
+        }
+
+        const bindings = await getPool().query<{ service: string; connection_name: string }>(`
+          SELECT service, connection_name
+          FROM employee_connector_bindings
+          WHERE application_id = $1
+        `, [row.id]);
+        const client = await getPool().connect();
+        try {
+          await client.query("BEGIN");
+          await client.query(`
+            INSERT INTO shared_connector_resources (
+              id, service, connection_name, display_name, security_domain,
+              authorization_mode, action_ids, enabled, created_by, updated_by
+            ) VALUES ($1, 'wecom_bot', $2, $3, 'wecom', 'wecom_visibility', $4::JSONB, $5, $6, $6)
+            ON CONFLICT (service, connection_name) DO UPDATE SET
+              display_name = EXCLUDED.display_name,
+              security_domain = 'wecom',
+              authorization_mode = 'wecom_visibility',
+              action_ids = EXCLUDED.action_ids,
+              enabled = EXCLUDED.enabled,
+              updated_by = EXCLUDED.updated_by,
+              updated_at = NOW()
+          `, [
+            row.id,
+            connectionName,
+            row.app_name,
+            JSON.stringify(actionIds),
+            row.active && actionIds.length > 0,
+            "migration:wecom_bot",
+          ]);
+          await client.query("DELETE FROM employee_connector_bindings WHERE application_id = $1", [row.id]);
+          await client.query("DELETE FROM integration_applications WHERE id = $1", [row.id]);
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        } finally {
+          client.release();
+        }
+
+        for (const binding of bindings.rows) {
+          if (binding.service === "wecom_bot" && binding.connection_name !== connectionName) {
+            await deleteConnectorConnection(binding.service, binding.connection_name).catch(() => undefined);
+          }
+        }
+      }
+    })().catch((error: unknown) => {
+      globalThis.aiBaseWeComBotMigrationPromise = undefined;
+      throw error;
+    });
+  }
+  return globalThis.aiBaseWeComBotMigrationPromise;
+}
+
 function normalizePlatform(value: unknown): EnterpriseIntegrationPlatform {
   if (typeof value !== "string" || !allowedPlatforms.has(value as EnterpriseIntegrationPlatform)) {
-    throw new IntegrationStoreError("仅支持飞书、企微、企微机器人和钉钉应用", 400);
+    throw new IntegrationStoreError("仅支持飞书、企微和钉钉应用；企微机器人请在连接器管理中维护", 400);
   }
   return value as EnterpriseIntegrationPlatform;
 }
@@ -506,6 +618,7 @@ export function buildEnterpriseIntegrationsSnapshot(
 
 export async function getEnterpriseIntegrations(): Promise<EnterpriseIntegrationsSnapshot> {
   await ensureSchema();
+  await migrateLegacyWeComBotIntegrations();
   const [result, catalogs] = await Promise.all([
     getPool().query<IntegrationApplicationRow>(`
       SELECT id, platform, app_name, app_id, note, action_ids, active, created_at, updated_at
@@ -791,23 +904,34 @@ async function reconcileEmployeeBindings(identity: ConsoleIdentity) {
 
 export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promise<EmployeeIntegrationsSnapshot> {
   await ensureSchema();
-  const [applications, bindings] = await Promise.all([
+  await migrateLegacyWeComBotIntegrations();
+  const [applications, bindings, automaticWeComBots] = await Promise.all([
     getPool().query<IntegrationApplicationRow>(`
       SELECT id, platform, app_name, app_id, note, action_ids, active, created_at, updated_at
       FROM integration_applications
       ORDER BY created_at, app_name, app_id
     `),
     reconcileEmployeeBindings(identity),
+    getPool().query<{ count: string }>(`
+      SELECT COUNT(*)::TEXT AS count
+      FROM shared_connector_resources
+      WHERE service = 'wecom_bot'
+        AND authorization_mode = 'wecom_visibility'
+        AND enabled
+    `),
   ]);
   return buildEmployeeIntegrationsSnapshot(
     applications.rows.map(serializeApplication),
     bindings.map(serializeBinding),
     { name: identity.name, email: identity.email },
+    undefined,
+    Number.parseInt(automaticWeComBots.rows[0]?.count || "0", 10) || 0,
   );
 }
 
 export async function listClassifiedConnectorConnections(): Promise<ConnectorConnectionsSnapshot> {
   await ensureSchema();
+  await migrateLegacyWeComBotIntegrations();
   const [snapshot, bindings, sharedResources] = await Promise.all([
     listConnectorConnections(),
     getPool().query<Pick<
@@ -824,15 +948,18 @@ export async function listClassifiedConnectorConnections(): Promise<ConnectorCon
       connection_name: string;
       display_name: string;
       security_domain: string;
+      authorization_mode: "manual" | "wecom_visibility";
+      action_ids: unknown;
+      enabled: boolean;
       grant_count: string;
     }>(`
       SELECT resource.id, resource.service, resource.connection_name,
              resource.display_name, resource.security_domain,
+             resource.authorization_mode, resource.action_ids, resource.enabled,
              COUNT(grant_row.id)::TEXT AS grant_count
       FROM shared_connector_resources AS resource
       LEFT JOIN shared_connector_grants AS grant_row
         ON grant_row.resource_id = resource.id AND grant_row.enabled
-      WHERE resource.enabled
       GROUP BY resource.id
     `),
   ]);
@@ -852,6 +979,9 @@ export async function listClassifiedConnectorConnections(): Promise<ConnectorCon
         resourceId: resource.id,
         displayName: resource.display_name,
         securityDomain: resource.security_domain,
+        authorizationMode: resource.authorization_mode,
+        actionCount: storedActionIds(resource.action_ids).length,
+        enabled: resource.enabled,
         grantCount: Number.parseInt(resource.grant_count, 10) || 0,
       },
     ]),
@@ -871,6 +1001,7 @@ export function buildEmployeeIntegrationsSnapshot(
   bindings: EmployeeConnectorBinding[],
   identity: EmployeeIntegrationsSnapshot["identity"],
   updatedAt = new Date().toISOString(),
+  automaticWeComBotCount = applications.filter((application) => application.platform === "wecom_bot" && application.active).length,
 ): EmployeeIntegrationsSnapshot {
   const bindingByApplication = new Map(
     bindings.map((binding) => [binding.applicationId, binding]),
@@ -893,6 +1024,7 @@ export function buildEmployeeIntegrationsSnapshot(
   return {
     identity,
     applications: employeeApplications,
+    automaticWeComBotCount,
     updatedAt,
   };
 }
@@ -956,40 +1088,8 @@ export async function startEmployeeIntegrationAuthorization(
   ]);
 
   try {
-    if (definition.bindingMode === "oauth2") {
-      await syncApplicationOAuthClient(row);
-      return await startConnectorOAuthAuthorization(definition.service, connectionName, actionIds);
-    }
-
-    if (definition.platform !== "wecom_bot") {
-      throw new IntegrationStoreError("当前集成类型缺少账号绑定实现", 409);
-    }
-    const connection = await saveConnectorConnection(definition.service, {
-      connectionName,
-      authType: "custom_credential",
-      values: {
-        botId: row.app_id,
-        secret: decryptIntegrationSecret(row.app_secret_ciphertext!),
-      },
-    });
-    if (!connection) throw new IntegrationStoreError("OpenConnector 未返回有效的企微机器人连接", 502);
-    await getPool().query(`
-      UPDATE employee_connector_bindings
-      SET status = 'connected', display_name = $3, account_id = $4,
-          error_message = NULL, connected_at = NOW(), updated_at = NOW()
-      WHERE principal_issuer = $1 AND principal_subject = $2 AND service = $5
-    `, [
-      identity.principalIssuer,
-      identity.principalSubject,
-      connection.profile.displayName,
-      connection.profile.accountId,
-      definition.service,
-    ]);
-    return {
-      service: definition.service,
-      connectionName,
-      connected: true as const,
-    };
+    await syncApplicationOAuthClient(row);
+    return await startConnectorOAuthAuthorization(definition.service, connectionName, actionIds);
   } catch (error) {
     await getPool().query(`
       UPDATE employee_connector_bindings
@@ -1026,11 +1126,116 @@ export async function disconnectEmployeeIntegration(identity: ConsoleIdentity, a
   return { disconnected: true };
 }
 
+const WECOM_VISIBILITY_CACHE_TTL_MS = 60_000;
+const WECOM_USER_ID_HASH_PATTERN = /^[a-f0-9]{64}$/;
+const WECOM_CORP_GROUP_PATTERN = /^wecom:[a-f0-9]{12}$/;
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+export function hashWeComUserId(userId: string) {
+  return createHash("sha256").update(userId, "utf8").digest("hex");
+}
+
+export function parseWeComVisibleUserIdHashes(value: unknown) {
+  const payload = recordValue(value);
+  if (!payload || payload.errcode !== 0 || !Array.isArray(payload.userlist)) {
+    throw new IntegrationStoreError("企微机器人可见范围查询失败", 502);
+  }
+  const userIdHashes = new Set<string>();
+  for (const item of payload.userlist) {
+    const user = recordValue(item);
+    if (typeof user?.userid === "string" && user.userid) {
+      userIdHashes.add(hashWeComUserId(user.userid));
+    }
+  }
+  return userIdHashes;
+}
+
+async function readWeComVisibleUserIdHashes(connectionName: string) {
+  const cache = globalThis.aiBaseWeComVisibilityCache ||= new Map();
+  const cached = cache.get(connectionName);
+  if (cached && cached.expiresAt > Date.now()) return cached.userIdHashes;
+  cache.delete(connectionName);
+  try {
+    const userIdHashes = parseWeComVisibleUserIdHashes(
+      await runConnectorAction("wecom_bot.get_userlist", connectionName),
+    );
+    cache.set(connectionName, {
+      expiresAt: Date.now() + WECOM_VISIBILITY_CACHE_TTL_MS,
+      userIdHashes,
+    });
+    return userIdHashes;
+  } catch (error) {
+    cache.delete(connectionName);
+    throw error;
+  }
+}
+
+export function resetWeComVisibilityCache() {
+  globalThis.aiBaseWeComVisibilityCache = undefined;
+}
+
+async function resolveWeComVisibilityResources(input: {
+  groups: string[];
+  service?: string;
+  wecomUserIdHash?: string;
+}) {
+  if (input.service && input.service !== "wecom_bot") return [];
+  if (!input.wecomUserIdHash) return [];
+  if (!WECOM_USER_ID_HASH_PATTERN.test(input.wecomUserIdHash)) {
+    throw new IntegrationStoreError("企微用户身份摘要格式无效", 400, "invalid_wecom_identity");
+  }
+  const corpGroups = input.groups.filter((group) => WECOM_CORP_GROUP_PATTERN.test(group));
+  if (corpGroups.length !== 1) return [];
+
+  const activeWeCom = await getPool().query<{ app_id: string }>(`
+    SELECT app_id
+    FROM integration_applications
+    WHERE platform = 'wecom' AND active
+    LIMIT 1
+  `);
+  const corpId = activeWeCom.rows[0]?.app_id;
+  if (!corpId) return [];
+  const expectedGroup = `wecom:${createHash("sha256").update(corpId, "utf8").digest("hex").slice(0, 12)}`;
+  if (corpGroups[0] !== expectedGroup) return [];
+
+  const resources = await getPool().query<WeComVisibilityResourceRow>(`
+    SELECT id AS resource_id, service, connection_name, display_name, action_ids
+    FROM shared_connector_resources
+    WHERE enabled
+      AND service = 'wecom_bot'
+      AND authorization_mode = 'wecom_visibility'
+      AND ($1::TEXT IS NULL OR service = $1)
+      AND NOT EXISTS (
+        SELECT 1 FROM employee_connector_bindings AS personal_binding
+        WHERE personal_binding.service = shared_connector_resources.service
+          AND personal_binding.connection_name = shared_connector_resources.connection_name
+          AND personal_binding.status <> 'revoked'
+      )
+    ORDER BY connection_name
+  `, [input.service || null]);
+
+  const visible = await Promise.all(resources.rows.map(async (resource) => {
+    try {
+      const hashes = await readWeComVisibleUserIdHashes(resource.connection_name);
+      return hashes.has(input.wecomUserIdHash!) ? resource : undefined;
+    } catch {
+      return undefined;
+    }
+  }));
+  return visible.filter((resource): resource is WeComVisibilityResourceRow => Boolean(resource));
+}
+
 export async function resolveEmployeeConnectorBindings(input: {
   issuer: string;
   subject: string;
   email?: string;
   groups?: string[];
+  wecomUserIdHash?: string;
   clientId?: string;
   service?: string;
   requestedConnectionName?: string;
@@ -1095,14 +1300,14 @@ export async function resolveEmployeeConnectorBindings(input: {
     }
   }
 
-  const [snapshot, sharedRows] = await Promise.all([
+  const [snapshot, sharedRows, wecomVisibilityRows] = await Promise.all([
     listConnectorConnections(),
     getPool().query<SharedConnectorGrantResolutionRow>(`
       SELECT resource.id AS resource_id, resource.service, resource.connection_name,
              resource.display_name, grant_row.action_ids, grant_row.id AS grant_id
       FROM shared_connector_resources AS resource
       JOIN shared_connector_grants AS grant_row ON grant_row.resource_id = resource.id
-      WHERE resource.enabled AND grant_row.enabled
+      WHERE resource.enabled AND resource.authorization_mode = 'manual' AND grant_row.enabled
         AND NOT EXISTS (
           SELECT 1 FROM employee_connector_bindings AS personal_binding
           WHERE personal_binding.service = resource.service
@@ -1132,6 +1337,11 @@ export async function resolveEmployeeConnectorBindings(input: {
         )
       ORDER BY resource.service, resource.connection_name, grant_row.created_at
     `, [issuer, subject, email || null, service || null, groups]),
+    resolveWeComVisibilityResources({
+      groups,
+      service,
+      wecomUserIdHash: input.wecomUserIdHash,
+    }),
   ]);
   const valid = new Map(
     snapshot.connections
@@ -1187,6 +1397,23 @@ export async function resolveEmployeeConnectorBindings(input: {
     ...connection,
     allowedActionIds: Array.from(connection.allowedActionIds).sort(),
   }));
+  for (const row of wecomVisibilityRows) {
+    const currentConnection = valid.get(`${row.service}\0${row.connection_name}`);
+    if (!currentConnection) continue;
+    sharedConnections.push({
+      id: row.resource_id,
+      service: row.service,
+      connectionName: row.connection_name,
+      displayName: row.display_name || currentConnection.profile.displayName,
+      public: false,
+      accessMode: "controlled_shared",
+      actionRestricted: true,
+      allowedActionIds: storedActionIds(row.action_ids)
+        .filter((actionId) => !WECOM_BOT_SYSTEM_ONLY_ACTION_IDS.has(actionId))
+        .sort(),
+      policyIds: [`wecom-visibility:${row.resource_id}`],
+    });
+  }
   const boundServices = new Set([
     ...boundConnections.map((connection) => connection.service),
     ...sharedConnections.map((connection) => connection.service),

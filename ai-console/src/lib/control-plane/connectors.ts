@@ -84,6 +84,9 @@ export type ConnectorSharedAccess = {
   resourceId: string;
   displayName: string;
   securityDomain: string;
+  authorizationMode: "manual" | "wecom_visibility";
+  actionCount: number;
+  enabled: boolean;
   grantCount: number;
 };
 

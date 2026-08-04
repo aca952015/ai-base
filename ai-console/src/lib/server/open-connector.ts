@@ -63,6 +63,16 @@ function adminHeaders(body = false): HeadersInit {
   };
 }
 
+function runtimeHeaders(connectionName: string): HeadersInit {
+  const token = process.env.OPEN_CONNECTOR_RUNTIME_TOKEN?.trim();
+  if (!token) throw new OpenConnectorError("OpenConnector Runtime Token 未配置", 503);
+  return {
+    Authorization: `Bearer ${token}`,
+    "content-type": "application/json",
+    "x-oo-connector-alias": connectionName,
+  };
+}
+
 function upstreamErrorMessage(payload: unknown, fallback: string) {
   if (!isRecord(payload)) return fallback;
   if (typeof payload.error === "string") return payload.error;
@@ -331,6 +341,37 @@ export async function deleteConnectorConnection(service: string, connectionName:
     method: "DELETE",
     body: JSON.stringify({ connectionName }),
   });
+}
+
+export async function runConnectorAction(
+  actionId: string,
+  connectionName: string,
+  input: Record<string, unknown> = {},
+): Promise<unknown> {
+  if (!/^[a-z0-9][a-z0-9_-]{0,127}\.[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/.test(actionId)) {
+    throw new OpenConnectorError("无效的 Connector Action ID", 400);
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(connectionName)) {
+    throw new OpenConnectorError("无效的 Connector 连接名称", 400);
+  }
+  const response = await fetch(connectorUrl(`v1/actions/${encodeURIComponent(actionId)}`), {
+    method: "POST",
+    cache: "no-store",
+    headers: runtimeHeaders(connectionName),
+    body: JSON.stringify({ input }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  });
+  const payload = await response.json().catch(() => undefined) as unknown;
+  if (!response.ok) {
+    throw new OpenConnectorError(
+      upstreamErrorMessage(payload, `OpenConnector Action 执行失败（${response.status}）`),
+      response.status >= 400 && response.status < 600 ? response.status : 502,
+    );
+  }
+  if (!isRecord(payload) || payload.success !== true || !("data" in payload)) {
+    throw new OpenConnectorError("OpenConnector 返回了无效的 Action 结果");
+  }
+  return payload.data;
 }
 
 function normalizeOAuthConfig(value: unknown): ConnectorOAuthConfig | undefined {

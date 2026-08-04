@@ -8,7 +8,7 @@ export default function AccountPage() {
     <div className="page-stack">
       <PageHeader
         title="账号绑定"
-        description="绑定个人企业账号，AI Base 将按当前登录身份建立并筛选专属连接器。"
+        description="维护个人 OAuth 账号；企业共享机器人会在 MCP 登录后按可信企微身份自动筛选。"
       />
       <AccountIntegrationManager />
     </div>

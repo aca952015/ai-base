@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -32,10 +33,11 @@ const (
 )
 
 type employeeIdentity struct {
-	Subject string
-	Email   string
-	Name    string
-	Groups  []string
+	Subject         string
+	Email           string
+	Name            string
+	Groups          []string
+	WeComUserIDHash string
 }
 
 type loginProvider interface {
@@ -119,11 +121,32 @@ func (p *dexLoginProvider) exchange(
 		name = claims.Email
 	}
 	return employeeIdentity{
-		Subject: idToken.Subject,
-		Email:   claims.Email,
-		Name:    name,
-		Groups:  claims.Groups,
+		Subject:         idToken.Subject,
+		Email:           claims.Email,
+		Name:            name,
+		Groups:          claims.Groups,
+		WeComUserIDHash: deriveWeComUserIDHash(claims.PreferredUsername, claims.Groups),
 	}, nil
+}
+
+func deriveWeComUserIDHash(preferredUsername string, groups []string) string {
+	userID := strings.TrimSpace(preferredUsername)
+	if userID == "" {
+		return ""
+	}
+
+	enterpriseMarkers := 0
+	for _, group := range groups {
+		if strings.HasPrefix(group, "wecom:") && validLowerHex(strings.TrimPrefix(group, "wecom:"), 12) {
+			enterpriseMarkers++
+		}
+	}
+	if enterpriseMarkers != 1 {
+		return ""
+	}
+
+	digest := sha256.Sum256([]byte(userID))
+	return hex.EncodeToString(digest[:])
 }
 
 type loginTransaction struct {
@@ -615,7 +638,7 @@ func (b *oauthBroker) signAccessToken(
 	if err != nil {
 		return "", err
 	}
-	return b.signJWT(map[string]interface{}{
+	claims := map[string]interface{}{
 		"iss":       b.cfg.issuer,
 		"sub":       employee.Subject,
 		"aud":       resource,
@@ -629,7 +652,11 @@ func (b *oauthBroker) signAccessToken(
 		"email":     employee.Email,
 		"name":      employee.Name,
 		"groups":    employee.Groups,
-	}, oauthAccessTokenType)
+	}
+	if employee.WeComUserIDHash != "" {
+		claims["wecom_user_id_hash"] = employee.WeComUserIDHash
+	}
+	return b.signJWT(claims, oauthAccessTokenType)
 }
 
 func (b *oauthBroker) issueRefreshToken(

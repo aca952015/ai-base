@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Bot,
   Building2,
   CheckCircle2,
   ClipboardPaste,
@@ -42,12 +41,11 @@ type EditorState = {
   actionIds: string[];
 };
 
-const platformIcons = {
+const platformIcons: Partial<Record<EnterpriseIntegrationPlatform, typeof MessageSquareShare>> = {
   feishu: MessageSquareShare,
   wecom: Building2,
-  wecom_bot: Bot,
   dingtalk: ShieldCheck,
-} satisfies Record<EnterpriseIntegrationPlatform, typeof MessageSquareShare>;
+};
 
 function errorMessage(payload: unknown, fallback: string) {
   if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
@@ -302,21 +300,21 @@ export function IntegrationManager({
                     />
                   </label>
                   <label className="field-label gateway-channel-field--wide">
-                    <span>{editor.platform === "wecom" ? "企业 ID（CorpID）" : editor.platform === "wecom_bot" ? "Bot ID" : "App ID"}</span>
+                    <span>{editor.platform === "wecom" ? "企业 ID（CorpID）" : "App ID"}</span>
                     <input
                       value={editor.appId}
                       onChange={(event) => setEditor((current) => current ? { ...current, appId: event.target.value } : current)}
-                      placeholder={editor.platform === "wecom" ? "填写企业微信的 CorpID" : editor.platform === "wecom_bot" ? "填写企微智能机器人的 Bot ID" : "填写开放平台应用的 App ID"}
+                      placeholder={editor.platform === "wecom" ? "填写企业微信的 CorpID" : "填写开放平台应用的 App ID"}
                       autoComplete="off"
                     />
                   </label>
                   <label className="field-label gateway-channel-field--wide">
-                    <span>{editor.platform === "wecom_bot" ? "Bot Secret" : "App Secret"}</span>
+                    <span>App Secret</span>
                     <input
                       type="password"
                       value={editor.appSecret}
                       onChange={(event) => setEditor((current) => current ? { ...current, appSecret: event.target.value } : current)}
-                      placeholder={editor.mode === "edit" ? "留空表示保留当前 Secret" : editor.platform === "wecom_bot" ? "填写企微智能机器人的 Secret" : "填写开放平台应用的 App Secret"}
+                      placeholder={editor.mode === "edit" ? "留空表示保留当前 Secret" : "填写开放平台应用的 App Secret"}
                       autoComplete="new-password"
                     />
                   </label>
@@ -454,9 +452,7 @@ function IntegrationActionSelector({
         <span>{selected.size}/{group.actions.length} 已选择</span>
       </div>
       <p className="integration-action-help">
-        {group.platform === "wecom_bot"
-          ? "员工绑定到个人 AI Base 账号后，仅能调用已选择的 Action。"
-          : "员工绑定账号时，仅申请已选 Action 所需的权限。修改后，已经绑定的员工需要重新授权才能生效。"}
+        员工绑定账号时，仅申请已选 Action 所需的权限。修改后，已经绑定的员工需要重新授权才能生效。
       </p>
       <div className="integration-action-toolbar">
         <label className="connector-search-input integration-action-search">
@@ -595,7 +591,7 @@ function IntegrationGroup({
   onEdit: (application: IntegrationApplication) => void;
   onActivate: (application: IntegrationApplication) => void;
 }) {
-  const Icon = platformIcons[group.platform];
+  const Icon = platformIcons[group.platform] || ShieldCheck;
   return (
     <section className="portal-group gateway-resource-section integration-platform-group" aria-labelledby={`integration-${group.platform}-title`}>
       <header className="portal-group__header">

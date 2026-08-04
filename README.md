@@ -137,7 +137,11 @@ MCP_ADMIN_TOKEN=replace-with-a-random-admin-token
 
 从旧的内存刷新令牌版本升级时，已有客户端需要重新连接一次；新令牌写入持久化存储后，后续网关重启不再要求重新登录。不要通过延长 Access Token 来实现长期登录，长期能力由可复用、可撤销并滑动续期的 Refresh Token 提供。
 
-员工还需要在 AI Console 的 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account) 完成个人企业账号授权。MCP Access Gateway 会按 Broker JWT 的 `issuer + subject` 查询 PostgreSQL 映射，覆盖客户端提交的 `connectionName`，并只向当前员工的 MCP 客户端返回该员工自己的有效连接。需要凭据的 Connector 在没有绑定、连接已失效或映射服务不可用时会关闭失败，不会回退到共享 `default` 连接；上游明确声明为 `no_auth` 的虚拟公共 Connector 可以按系统 `default` 连接使用。
+需要个人 OAuth 的 Connector 仍由员工在 AI Console 的 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account) 完成授权。企业微信 API 模式智能机器人不需要员工再绑定一次：管理员在“连接器配置”维护具名机器人连接和 Action 白名单；员工通过 MCP 的企业微信认证后，Broker 只把 `UserID` 的 SHA-256 摘要写入短期 Access Token，Console 校验当前启用的 CorpID 身份域，并通过每个机器人的 `wecom_bot.get_userlist` 自动筛选可见连接。原始 UserID 不进入解析器请求、浏览器响应或普通日志；查询失败、身份域不匹配或员工不在可见范围时关闭失败。
+
+从旧版本升级后，已经登录的 MCP 客户端需要重新完成一次企业微信认证，才能让新签发的 Token 带上可信 UserID 摘要；旧 Refresh Token 不会被补写该身份声明。
+
+MCP Access Gateway 会按 Broker JWT 的 `issuer + subject` 查询个人映射和受控共享策略，覆盖客户端提交的 `connectionName`，并只返回当前员工可用的连接。需要凭据的 Connector 在没有个人绑定或共享授权、连接已失效、可见范围查询失败或映射服务不可用时不会回退到共享 `default`；上游明确声明为 `no_auth` 的虚拟公共 Connector 可以按系统 `default` 连接使用。
 
 `http://127.0.0.1:8080` 只用于本机验证。共享环境必须改用同一个正式 HTTPS 主机，并同步更新 MCP Resource、OAuth Issuer、Dex 回调地址和允许的客户端回调白名单。
 
@@ -220,17 +224,21 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - OAuth 在独立窗口完成，Console 确认 OpenConnector 已生成连接后才展示新卡片；
 - OpenConnector 自带的免认证连接以只读系统卡片展示。
 - 管理员可以把具名凭据连接设置为“受控共享”，按员工账号、OIDC Subject 或用户组授权，并限制可调用的 Action；
+- `wecom_bot` 的 Bot ID/Secret 也在本页按具名连接维护，不进入“集成管理”；保存机器人时必须同时选择员工可调用的静态 Action；
+- 企微机器人固定使用“企业身份自动筛选”策略，不创建员工绑定或手工授权名单；管理员配置的机器人可见范围只是上限，MCP 调用时仍执行连接与 Action 白名单；
 - 受控共享策略只在 AI Base 的 PostgreSQL 与 MCP Access Gateway 中生效，OpenConnector 仍负责保存凭据和执行 Action，不修改上游代码。
 
-新增或编辑只有在 OpenConnector 校验并保存成功后才会更新卡片列表。受控共享连接必须使用非 `default` 的具名连接；MCP 网关根据已经验证的员工 OIDC 身份选择连接并校验 Action 白名单，客户端提交的连接名不能越权。高风险通用调用 `wecom_bot.call_tool` 固定拒绝共享授权，企微共享能力应按具体 Action 开放。
+新增或编辑只有在 OpenConnector 校验并保存成功后才会更新卡片列表。受控共享连接必须使用非 `default` 的具名连接；MCP 网关根据已经验证的员工 OIDC 身份选择连接并校验 Action 白名单，客户端提交的连接名不能越权。`wecom_bot.get_userlist` 仅供服务端可见性判定，`wecom_bot.call_tool` 及旧 Webhook 发送入口固定拒绝员工授权，企微共享能力必须按具体静态 Action 开放。可见性结果只缓存 60 秒且不使用过期结果，员工移出机器人可见范围后会自动撤权。
+
+升级时，旧“集成管理 / 企微机器人”记录会在首次读取 Console 管理数据时迁移为 `wecom_bot_<应用 UUID>` 具名共享连接，Bot ID/Secret 写入 OpenConnector，Action 白名单写入 PostgreSQL；迁移成功后删除旧员工绑定和旧集成记录。OpenConnector 校验或数据库写入失败时保留旧记录并报错，不会把机器人降级成全局连接。
 
 ### 集成管理
 
-[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 仅供管理员使用，固定提供飞书、企微和钉钉三个分组。每个分组可以登记多个企业应用，但同一平台只有一个启用应用；员工开始授权前，AI Base 会把启用应用的 OAuth Client 配置同步到 OpenConnector。
+[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 仅供管理员使用，固定提供飞书、企微和钉钉三个分组。这里管理企业登录或个人 OAuth 应用；企微机器人的 Bot ID/Secret 与 Action 策略在“连接器配置”维护。每个集成分组可以登记多个企业应用，但同一平台只有一个启用应用；员工开始授权前，AI Base 会把启用应用的 OAuth Client 配置同步到 OpenConnector。
 
 应用配置独立保存在 PostgreSQL 的 `integration_applications` 表中。`App Secret` 使用 `AI_CONSOLE_SECRET_ENCRYPTION_KEY` 在服务端执行 AES-256-GCM 加密，读取接口和编辑表单均不回显明文。OpenConnector 当前只有飞书 Provider 提供用户级 OAuth；企微和钉钉现有 Provider 是机器人/API Key 模式，因此控制台保留企业应用配置，但个人授权按钮保持不可用，直到上游提供用户 OAuth。
 
-普通员工登录 Console 后只进入 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account)。飞书授权成功后：
+普通员工登录 Console 后只进入 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account)。页面只为飞书等个人 OAuth 连接提供绑定操作，并以只读说明展示企微机器人会由 MCP 自动筛选。飞书授权成功后：
 
 1. OpenConnector 在自己的加密 SQLite 数据中保存 OAuth Token；
 2. PostgreSQL 的 `employee_connector_bindings` 只保存员工 OIDC 主体与命名连接的映射、状态和安全摘要；

@@ -38,6 +38,7 @@ export async function POST(request: Request) {
       groups: Array.isArray(input.groups)
         ? input.groups.filter((group): group is string => typeof group === "string")
         : undefined,
+      wecomUserIdHash: typeof input.wecomUserIdHash === "string" ? input.wecomUserIdHash : undefined,
       clientId: typeof input.clientId === "string" ? input.clientId : undefined,
       service: typeof input.service === "string" ? input.service : undefined,
       requestedConnectionName: typeof input.requestedConnectionName === "string"

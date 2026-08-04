@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -45,10 +46,11 @@ func (p *fakeLoginProvider) exchange(
 		return employeeIdentity{}, errors.New("invalid upstream login")
 	}
 	return employeeIdentity{
-		Subject: "dex-user-123",
-		Email:   "employee@example.com",
-		Name:    "Example Employee",
-		Groups:  []string{"engineering"},
+		Subject:         "dex-user-123",
+		Email:           "employee@example.com",
+		Name:            "Example Employee",
+		Groups:          []string{"engineering", "wecom:012345abcdef"},
+		WeComUserIDHash: deriveWeComUserIDHash("zhangsan", []string{"engineering", "wecom:012345abcdef"}),
 	}, nil
 }
 
@@ -197,6 +199,56 @@ func TestAuthorizationCodeFlowAndReusableRefresh(t *testing.T) {
 	}
 	assertAccessToken(t, broker, refreshed.AccessToken, clientID)
 	refreshAccessToken(t, broker, clientID, token.RefreshToken, http.StatusOK)
+}
+
+func TestDeriveWeComUserIDHashRequiresOneTrustedEnterpriseMarker(t *testing.T) {
+	digest := sha256.Sum256([]byte("zhangsan"))
+	want := hex.EncodeToString(digest[:])
+
+	for _, testCase := range []struct {
+		name              string
+		preferredUsername string
+		groups            []string
+		want              string
+	}{
+		{
+			name:              "verified WeCom identity",
+			preferredUsername: "zhangsan",
+			groups:            []string{"employees", "wecom:012345abcdef"},
+			want:              want,
+		},
+		{
+			name:              "missing preferred username",
+			preferredUsername: " ",
+			groups:            []string{"wecom:012345abcdef"},
+		},
+		{
+			name:              "missing enterprise marker",
+			preferredUsername: "zhangsan",
+			groups:            []string{"employees"},
+		},
+		{
+			name:              "uppercase marker is not trusted",
+			preferredUsername: "zhangsan",
+			groups:            []string{"wecom:012345ABCDEf"},
+		},
+		{
+			name:              "short marker is not trusted",
+			preferredUsername: "zhangsan",
+			groups:            []string{"wecom:012345abcde"},
+		},
+		{
+			name:              "ambiguous enterprise markers",
+			preferredUsername: "zhangsan",
+			groups:            []string{"wecom:012345abcdef", "wecom:fedcba654321"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := deriveWeComUserIDHash(testCase.preferredUsername, testCase.groups); got != testCase.want {
+				t.Fatalf("expected %q, got %q", testCase.want, got)
+			}
+		})
+	}
 }
 
 func TestRefreshTokenPersistsAndSlidesAcrossBrokerRestarts(t *testing.T) {
@@ -416,6 +468,13 @@ func assertAccessToken(t *testing.T, broker *oauthBroker, rawToken, clientID str
 		claims["client_id"] != clientID ||
 		claims["sub"] != brokerSubject(broker.cfg.loginIssuer, "dex-user-123") {
 		t.Fatalf("unexpected access token claims: %#v", claims)
+	}
+	expectedDigest := sha256.Sum256([]byte("zhangsan"))
+	if claims["wecom_user_id_hash"] != hex.EncodeToString(expectedDigest[:]) {
+		t.Fatalf("access token did not preserve the verified WeCom identity hash: %#v", claims)
+	}
+	if _, exists := claims["preferred_username"]; exists {
+		t.Fatalf("access token must not contain the plaintext WeCom UserID: %#v", claims)
 	}
 }
 

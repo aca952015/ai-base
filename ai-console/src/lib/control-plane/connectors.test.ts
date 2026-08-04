@@ -94,6 +94,9 @@ describe("connector access classification", () => {
         resourceId: "resource-1",
         displayName: "销售机器人",
         securityDomain: "sales",
+        authorizationMode: "wecom_visibility",
+        actionCount: 3,
+        enabled: true,
         grantCount: 2,
       }]]),
     );
@@ -113,6 +116,9 @@ describe("connector access classification", () => {
       resourceId: "resource-1",
       displayName: "销售机器人",
       securityDomain: "sales",
+      authorizationMode: "wecom_visibility",
+      actionCount: 3,
+      enabled: true,
       grantCount: 2,
     });
     expect(classified[3].localAccount).toBeUndefined();

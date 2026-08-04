@@ -5,15 +5,18 @@ import {
   listConnectorConnections,
   listConnectorProviders,
   resetOpenConnectorProviderCache,
+  runConnectorAction,
   saveConnectorConnection,
 } from "./open-connector";
 
 const originalUrl = process.env.OPEN_CONNECTOR_URL;
 const originalAdminToken = process.env.OPEN_CONNECTOR_ADMIN_TOKEN;
+const originalRuntimeToken = process.env.OPEN_CONNECTOR_RUNTIME_TOKEN;
 
 beforeEach(() => {
   process.env.OPEN_CONNECTOR_URL = "http://connector.internal/base";
   process.env.OPEN_CONNECTOR_ADMIN_TOKEN = "admin-secret";
+  process.env.OPEN_CONNECTOR_RUNTIME_TOKEN = "runtime-secret";
   resetOpenConnectorProviderCache();
 });
 
@@ -22,6 +25,8 @@ afterEach(() => {
   else process.env.OPEN_CONNECTOR_URL = originalUrl;
   if (originalAdminToken === undefined) delete process.env.OPEN_CONNECTOR_ADMIN_TOKEN;
   else process.env.OPEN_CONNECTOR_ADMIN_TOKEN = originalAdminToken;
+  if (originalRuntimeToken === undefined) delete process.env.OPEN_CONNECTOR_RUNTIME_TOKEN;
+  else process.env.OPEN_CONNECTOR_RUNTIME_TOKEN = originalRuntimeToken;
   vi.unstubAllGlobals();
 });
 
@@ -133,6 +138,33 @@ describe("OpenConnector connection adapter", () => {
       profile: { accountId: "42", displayName: "Acme", grantedScopes: ["repo"] },
     });
     expect(snapshot.connections[0]).not.toHaveProperty("apiKey");
+  });
+
+  it("runs an internal action with the runtime token and named connection", async () => {
+    const upstream = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      void input;
+      void init;
+      return new Response(JSON.stringify({
+        success: true,
+        message: "OK",
+        data: { errcode: 0, userlist: [{ userid: "employee01" }] },
+        meta: {},
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", upstream);
+
+    const data = await runConnectorAction("wecom_bot.get_userlist", "wecom_sales");
+
+    expect(data).toEqual({ errcode: 0, userlist: [{ userid: "employee01" }] });
+    expect(upstream.mock.calls[0][0]).toBe("http://connector.internal/base/v1/actions/wecom_bot.get_userlist");
+    expect(upstream.mock.calls[0][1]).toEqual(expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({
+        Authorization: "Bearer runtime-secret",
+        "x-oo-connector-alias": "wecom_sales",
+      }),
+      body: JSON.stringify({ input: {} }),
+    }));
   });
 
   it("sends credentials only in the server-side Admin request", async () => {

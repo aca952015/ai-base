@@ -9,6 +9,8 @@ import {
   buildEnterpriseIntegrationsSnapshot,
   decryptIntegrationSecret,
   encryptIntegrationSecret,
+  hashWeComUserId,
+  parseWeComVisibleUserIdHashes,
 } from "./integrations";
 
 const originalEncryptionKey = process.env.AI_CONSOLE_SECRET_ENCRYPTION_KEY;
@@ -71,13 +73,11 @@ describe("enterprise integration store", () => {
     expect(snapshot.groups.map((group) => group.platform)).toEqual([
       "feishu",
       "wecom",
-      "wecom_bot",
       "dingtalk",
     ]);
     expect(snapshot.groups[0].applications).toEqual([applications[1]]);
     expect(snapshot.groups[1].applications).toEqual([]);
-    expect(snapshot.groups[2].applications).toEqual([]);
-    expect(snapshot.groups[3].applications).toEqual([applications[0]]);
+    expect(snapshot.groups[2].applications).toEqual([applications[0]]);
     expect(snapshot.groups[0].actions.map((action) => action.id)).toEqual([
       "feishu.search_bitable_records",
     ]);
@@ -97,7 +97,7 @@ describe("enterprise integration store", () => {
     expect(decryptIntegrationSecret(first)).toBe(secret);
   });
 
-  it("builds one employee binding card for every configured application", () => {
+  it("excludes shared WeCom bots from employee binding cards", () => {
     const applications: IntegrationApplication[] = [
       {
         id: "019fd023-aec6-7cd0-8d43-29f9523a63c1",
@@ -169,24 +169,43 @@ describe("enterprise integration store", () => {
     expect(snapshot.applications.map((application) => application.id)).toEqual([
       applications[0].id,
       applications[1].id,
-      applications[2].id,
       applications[3].id,
     ]);
     expect(snapshot.applications.map((application) => application.platformDisplayName)).toEqual([
       "飞书",
       "飞书",
-      "企微机器人",
       "钉钉",
     ]);
     expect(snapshot.applications.map((application) => application.bindingMode)).toEqual([
       "oauth2",
       "oauth2",
-      "managed_credential",
       "unsupported",
     ]);
     expect(snapshot.applications[0].binding).toEqual(binding);
     expect(snapshot.applications[1].binding).toBeUndefined();
     expect(snapshot.applications[1].active).toBe(false);
     expect(snapshot.identity.email).toBe("employee01@bluetron.cn");
+    expect(snapshot.automaticWeComBotCount).toBe(1);
+  });
+
+  it("hashes only WeCom user IDs returned by a successful visibility response", () => {
+    const hashes = parseWeComVisibleUserIdHashes({
+      errcode: 0,
+      errmsg: "ok",
+      userlist: [
+        { userid: "ZhangSan", name: "张三" },
+        { userid: "LiSi", name: "李四" },
+        { userid: "" },
+        { name: "missing" },
+      ],
+    });
+
+    expect(hashes).toEqual(new Set([
+      hashWeComUserId("ZhangSan"),
+      hashWeComUserId("LiSi"),
+    ]));
+    expect(hashes.has(hashWeComUserId("zhangsan"))).toBe(false);
+    expect(() => parseWeComVisibleUserIdHashes({ errcode: 40013, userlist: [] }))
+      .toThrow("企微机器人可见范围查询失败");
   });
 });

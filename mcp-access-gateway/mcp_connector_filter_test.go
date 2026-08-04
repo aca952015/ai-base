@@ -347,6 +347,11 @@ func TestConnectorResolutionFailuresFailClosed(t *testing.T) {
 }
 
 func TestHardDeniedConnectorActionNeverReachesResolverOrUpstream(t *testing.T) {
+	for _, actionID := range []string{"wecom_bot.call_tool", "wecom_bot.get_userlist"} {
+		if _, denied := hardDeniedConnectorActions[actionID]; !denied {
+			t.Fatalf("%s must remain system-hard-denied", actionID)
+		}
+	}
 	var upstreamCalls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		upstreamCalls.Add(1)

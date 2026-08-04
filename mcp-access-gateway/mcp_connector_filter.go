@@ -20,7 +20,13 @@ var protectedOpenConnectorTools = map[string]struct{}{
 }
 
 var hardDeniedConnectorActions = map[string]struct{}{
-	"wecom_bot.call_tool": {},
+	"wecom_bot.call_tool":                {},
+	"wecom_bot.get_userlist":             {},
+	"wecom_bot.send_text_message":        {},
+	"wecom_bot.send_markdown_message":    {},
+	"wecom_bot.send_markdown_v2_message": {},
+	"wecom_bot.send_image_message":       {},
+	"wecom_bot.send_news_message":        {},
 }
 
 type mcpRequestFilterResult struct {

@@ -28,12 +28,11 @@ type RequestState = {
   action: "authorizing" | "disconnecting";
 };
 
-const platformIcons = {
+const platformIcons: Partial<Record<EnterpriseIntegrationPlatform, typeof MessageSquareShare>> = {
   feishu: MessageSquareShare,
   wecom: Building2,
-  wecom_bot: Bot,
   dingtalk: ShieldCheck,
-} satisfies Record<EnterpriseIntegrationPlatform, typeof MessageSquareShare>;
+};
 
 const pollingIntervalMs = 1_500;
 const maxPollingAttempts = 200;
@@ -197,27 +196,6 @@ export function AccountIntegrationManager() {
     if (application.bindingMode === "unsupported" || !application.active) return;
     stopPolling();
 
-    if (application.bindingMode === "managed_credential") {
-      setRequestState({ applicationId: application.id, action: "authorizing" });
-      setMessage({ tone: "info", text: `正在将${application.name}绑定到当前账号…` });
-      try {
-        await fetchJson<{ connected: true }>(
-          `/api/account/integrations/${encodeURIComponent(application.id)}/authorize`,
-          { method: "POST" },
-        );
-        await reload();
-        setMessage({ tone: "success", text: `${application.name}已绑定，机器人能力仅对当前登录身份可见。` });
-      } catch (error) {
-        setMessage({
-          tone: "error",
-          text: error instanceof Error ? error.message : `${application.name}账号绑定失败`,
-        });
-      } finally {
-        setRequestState(undefined);
-      }
-      return;
-    }
-
     try {
       if (popupRef.current && !popupRef.current.closed) popupRef.current.close();
     } catch {
@@ -313,8 +291,19 @@ export function AccountIntegrationManager() {
           <strong>{snapshot?.identity.name || snapshot?.identity.email || "当前员工"}</strong>
           {snapshot?.identity.email && snapshot.identity.email !== snapshot.identity.name ? <small>{snapshot.identity.email}</small> : null}
         </div>
-        <p><LockKeyhole size={14} />绑定只对当前登录身份生效</p>
+        <p><LockKeyhole size={14} />个人 OAuth 授权只对当前登录身份生效</p>
       </section>
+
+      {snapshot?.automaticWeComBotCount ? (
+        <section className="account-identity-strip" aria-label="企微机器人自动授权">
+          <span><Bot size={20} /></span>
+          <div>
+            <strong>企微机器人无需绑定</strong>
+            <small>{snapshot.automaticWeComBotCount} 个企业共享机器人由管理员在连接器管理中维护</small>
+          </div>
+          <p><ShieldCheck size={14} />MCP 登录后按可信企微身份与机器人可见范围自动筛选</p>
+        </section>
+      ) : null}
 
       <div className="account-integration-grid">
         {(snapshot?.applications || []).map((application) => (
@@ -329,10 +318,10 @@ export function AccountIntegrationManager() {
         ))}
       </div>
 
-      {!snapshot?.applications.length ? (
+      {!snapshot?.applications.length && !snapshot?.automaticWeComBotCount ? (
         <div className="account-integration-loading">
           <Link2 size={20} />
-          <span>管理员尚未配置可供员工绑定的企业集成。</span>
+          <span>当前没有需要个人绑定的企业集成。</span>
         </div>
       ) : null}
     </>
@@ -396,7 +385,7 @@ function AccountIntegrationCard({
           ) : (
             <>
               <strong>建立个人连接器</strong>
-              <small>{application.bindingMode === "managed_credential" ? "绑定后仅当前登录账号可以使用" : "授权凭据仅用于当前登录账号"}</small>
+              <small>授权凭据仅用于当前登录账号</small>
             </>
           )}
         </div>
@@ -408,7 +397,7 @@ function AccountIntegrationCard({
           </button>
         ) : (
           <button className="button button--primary" type="button" onClick={onAuthorize} disabled={busy || Boolean(unavailableReason)}>
-            {action === "authorizing" ? <LoaderCircle className="is-spinning" size={15} /> : application.bindingMode === "oauth2" ? <ExternalLink size={15} /> : <Link2 size={15} />}
+            {action === "authorizing" ? <LoaderCircle className="is-spinning" size={15} /> : <ExternalLink size={15} />}
             {action === "authorizing" ? "绑定中" : "绑定账号"}
           </button>
         )}

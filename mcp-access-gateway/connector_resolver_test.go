@@ -50,11 +50,12 @@ func TestHTTPConnectorResolverSendsOpaqueIdentityAndToken(t *testing.T) {
 		client:   server.Client(),
 	}
 	caller := identity{
-		issuer:   "https://broker.example/oauth",
-		subject:  "opaque-broker-subject",
-		email:    "Employee@Example.com",
-		clientID: "workbuddy",
-		groups:   []string{"sales", "employees"},
+		issuer:          "https://broker.example/oauth",
+		subject:         "opaque-broker-subject",
+		email:           "Employee@Example.com",
+		clientID:        "workbuddy",
+		groups:          []string{"sales", "employees"},
+		wecomUserIDHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}
 
 	binding, err := resolver.resolve(
@@ -90,6 +91,12 @@ func TestHTTPConnectorResolverSendsOpaqueIdentityAndToken(t *testing.T) {
 		}
 		if request["clientId"] != "workbuddy" {
 			t.Fatalf("resolver must forward the verified client id: %#v", request)
+		}
+		if request["wecomUserIdHash"] != caller.wecomUserIDHash {
+			t.Fatalf("resolver must forward the verified WeCom identity hash: %#v", request)
+		}
+		if _, exists := request["preferredUsername"]; exists {
+			t.Fatalf("resolver must not forward plaintext WeCom identity: %#v", request)
 		}
 		groups, ok := request["groups"].([]any)
 		if !ok || len(groups) != 2 || groups[0] != "sales" {

@@ -27,15 +27,6 @@ const emptySnapshot: EnterpriseIntegrationsSnapshot = {
       applications: [],
     },
     {
-      platform: "wecom_bot",
-      displayName: "企微机器人",
-      description: "管理企微智能机器人，并由员工绑定到个人 AI Base 账号后使用。",
-      actions: [],
-      defaultActionIds: [],
-      oauthBaseScopes: [],
-      applications: [],
-    },
-    {
       platform: "dingtalk",
       displayName: "钉钉",
       description: "管理钉钉开放平台应用凭据。",
@@ -63,7 +54,7 @@ export default async function IntegrationsPage() {
     <div className="page-stack">
       <PageHeader
         title="集成管理"
-        description="按平台管理企业应用凭据和开放给员工的 Action 权限。"
+        description="管理企业登录与个人 OAuth 应用；共享机器人凭据请在连接器管理中维护。"
       />
       <IntegrationManager initialSnapshot={snapshot} initialError={initialError} />
     </div>

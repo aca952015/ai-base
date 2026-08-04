@@ -84,14 +84,15 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 - Access Token 保持 1 小时短有效期；Refresh Token 默认 90 天滑动有效，服务端只将 Token 哈希原子持久化到 `mcp-auth-data`，因此员工设备休眠和网关重启不会中断长期登录；
 - 网关在内存中保留最近 24 小时的成功鉴权客户端摘要，按员工 Subject、Issuer 与 OAuth Client 绑定聚合；Console 通过独立管理令牌读取，外部能力网关不暴露该管理端点；
 - 每个 MCP 请求都验证 Broker JWT Access Token 的 issuer、audience、有效期和必需 scope；
-- 保护 OpenConnector 的 `execute_action`、`get_action_guide` 与 `list_connections`：网关按 `issuer + subject` 查询员工绑定，覆盖客户端连接名，并在本地过滤连接列表；
+- 保护 OpenConnector 的 `execute_action`、`get_action_guide` 与 `list_connections`：网关按 `issuer + subject` 查询员工绑定和受控共享策略，覆盖客户端连接名，并在本地过滤连接列表；
+- 企业微信 MCP 登录仅在 Dex 身份同时具有唯一 `wecom:<CorpID 摘要>` 群组与 `preferred_username` 时，把 `SHA-256(UserID)` 作为私有 claim 透传给内网解析器；原始 UserID 不进入 Broker Token 或 Console 请求；
 - 发布 RFC 9728 Protected Resource Metadata，并在 `401` 响应中返回 `WWW-Authenticate` 发现地址；
 - 员工 Access Token 在进入 Envoy 前移除，禁止 Token passthrough；
 - Envoy Session ID 经 HMAC 签名并绑定 `issuer + subject + client_id`，避免跨员工会话复用；
 - MCP 客户端回调地址使用明确白名单，Refresh Token 一次性轮换；服务重启后安全失效并要求重新登录；
 - Go 网关只做身份、个人连接选择与协议边界，Agent 运行仍由 Agent Runtime 承担。
 
-个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，解析器只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
+个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。受控共享资源保存具名连接引用、授权模式与 Action 白名单，不复制 Bot Secret。`wecom_visibility` 资源只能用于 `wecom_bot`：解析器先用启用的企微登录应用 CorpID 校验 Token 中唯一企业群组，再调用对应具名机器人的 `get_userlist`，只比较 UserID 哈希；60 秒缓存到期或查询异常后不使用旧结果。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，个人绑定解析只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
 
 企业微信不是标准 OIDC Provider。独立 `wecom-auth-bridge` 使用 `snsapi_base` 获取企业 UserID，派生稳定 Subject，并作为 Dex 的 OIDC Connector 上游；Pomerium 与 MCP OAuth Broker 仍只信任 Dex。企微 CorpID 与 Secret 由 Console 集成管理加密保存；公开认证入口、直接/中继回调方式和企业邮箱域由管理员在 `/settings/wecom-auth` 保存到 Console 数据卷。桥接服务通过独立 Bearer Token 的 Compose 内网接口按请求读取两类配置且不缓存，因此新登录立即使用最新设置；配置缺失、无启用应用或内部接口失败时关闭失败。浏览器与 Dex 均不接触 Secret。桥接 Access Token 短期有效，Refresh Token 哈希保存在独立 Volume 并按 90 天滑动续期。企业微信工作台使用 `/auth/wework` 独立入口：Caddy 将其导向专用 Pomerium 实例，该实例只为 Dex 添加 `connector_id=wecom`，因此跳过登录方式选择；普通 Console 登录入口与其他认证方式保持不变。
 
@@ -135,6 +136,7 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 - 通过独立卡片页面管理大模型渠道、Provider/Base URL、服务端 Key、模型别名和启停状态，并原子生成 Envoy AI Gateway 原生资源；
 - 默认将 Open Connector `/mcp` 与独立 RAG MCP 以系统托管、只读配置接入 Envoy AI，并通过与模型配置并列的 MCP 配置页面管理其他 Streamable HTTP 上游、工具命名空间、允许/排除列表和可选密钥；
 - 通过连接器配置页面管理 OpenConnector 的连接生命周期；Connector 搜索、认证方式和动态字段读取真实 Provider Schema，凭证只经服务端 Admin API 写入且不回显，OAuth 授权成功后才创建卡片；
+- 企业微信 API 模式智能机器人作为 `controlled_shared` 具名连接在连接器配置页面维护；保存时同时写入 `wecom_visibility` 与静态 Action 白名单，员工侧不创建机器人绑定；
 - 通过管理员集成管理页面维护飞书、企微和钉钉的多个企业应用，并约束每个平台只有一个启用应用；App Secret 经 AES-256-GCM 加密后落 PostgreSQL；
 - 普通员工通过账号绑定页面发起受支持平台的个人 OAuth；OpenConnector 保存个人 Token，PostgreSQL 保存 OIDC 主体到命名连接的映射，当前上游只有飞书支持用户 OAuth；
 - 通过单独修订文件触发网关进程重载，Key 以文件替换方式注入生成过程，不写入路由 YAML 或浏览器响应；

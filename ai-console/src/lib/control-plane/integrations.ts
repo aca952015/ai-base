@@ -1,6 +1,6 @@
 export type EnterpriseIntegrationPlatform = "feishu" | "wecom" | "wecom_bot" | "dingtalk";
 
-export type EmployeeIntegrationBindingMode = "oauth2" | "managed_credential" | "unsupported";
+export type EmployeeIntegrationBindingMode = "oauth2" | "unsupported";
 
 export type IntegrationActionOption = {
   id: string;
@@ -159,5 +159,6 @@ export type EmployeeIntegrationsSnapshot = {
     email: string;
   };
   applications: EmployeeIntegrationApplication[];
+  automaticWeComBotCount: number;
   updatedAt: string;
 };

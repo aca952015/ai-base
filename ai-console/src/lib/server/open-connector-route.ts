@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { ConsoleAuthError } from "./console-identity";
 import { OpenConnectorError } from "./open-connector";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -23,9 +24,16 @@ export function readStringRecord(value: unknown, field: string) {
 }
 
 export function openConnectorErrorResponse(error: unknown) {
-  const known = error instanceof OpenConnectorError;
-  return NextResponse.json(
-    { error: known ? error.message : "OpenConnector 请求失败" },
-    { status: known ? error.status : 502 },
-  );
+  if (error instanceof OpenConnectorError || error instanceof ConsoleAuthError) {
+    return NextResponse.json({ error: error.message }, { status: error.status });
+  }
+  if (
+    error instanceof Error
+    && error.name === "IntegrationStoreError"
+    && "status" in error
+    && typeof error.status === "number"
+  ) {
+    return NextResponse.json({ error: error.message }, { status: error.status });
+  }
+  return NextResponse.json({ error: "OpenConnector 请求失败" }, { status: 502 });
 }

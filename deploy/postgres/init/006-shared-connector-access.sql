@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS shared_connector_resources (
   connection_name TEXT NOT NULL,
   display_name TEXT NOT NULL,
   security_domain TEXT NOT NULL DEFAULT 'general',
+  authorization_mode TEXT NOT NULL DEFAULT 'manual'
+    CHECK (authorization_mode IN ('manual', 'wecom_visibility')),
+  action_ids JSONB NOT NULL DEFAULT '[]'::JSONB,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   created_by TEXT NOT NULL,
   updated_by TEXT NOT NULL,

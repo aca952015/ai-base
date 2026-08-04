@@ -6,6 +6,7 @@ import type {
   SharedConnectorAccessSnapshot,
   SharedConnectorGrant,
   SharedConnectorGrantInput,
+  SharedConnectorAuthorizationMode,
   SharedConnectorResource,
   SharedConnectorResourceInput,
 } from "../control-plane/connector-access";
@@ -21,6 +22,12 @@ const MAX_ACTIONS = 1_000;
 
 export const hardDeniedConnectorActionIds = [
   "wecom_bot.call_tool",
+  "wecom_bot.get_userlist",
+  "wecom_bot.send_text_message",
+  "wecom_bot.send_markdown_message",
+  "wecom_bot.send_markdown_v2_message",
+  "wecom_bot.send_image_message",
+  "wecom_bot.send_news_message",
 ] as const;
 
 const hardDeniedActionSet = new Set<string>(hardDeniedConnectorActionIds);
@@ -31,6 +38,8 @@ type SharedResourceRow = QueryResultRow & {
   connection_name: string;
   display_name: string;
   security_domain: string;
+  authorization_mode: SharedConnectorAuthorizationMode;
+  action_ids: unknown;
   enabled: boolean;
   updated_at: Date | string;
 };
@@ -95,6 +104,8 @@ function serializeResource(row: SharedResourceRow, grants: SharedConnectorGrant[
     connectionName: row.connection_name,
     displayName: row.display_name,
     securityDomain: row.security_domain,
+    authorizationMode: row.authorization_mode,
+    actionIds: stringArray(row.action_ids),
     enabled: row.enabled,
     grants,
     updatedAt: new Date(row.updated_at).toISOString(),
@@ -104,7 +115,8 @@ function serializeResource(row: SharedResourceRow, grants: SharedConnectorGrant[
 async function readResources(): Promise<SharedConnectorResource[]> {
   const [resources, grants] = await Promise.all([
     getPool().query<SharedResourceRow>(`
-      SELECT id, service, connection_name, display_name, security_domain, enabled, updated_at
+      SELECT id, service, connection_name, display_name, security_domain,
+             authorization_mode, action_ids, enabled, updated_at
       FROM shared_connector_resources
       ORDER BY service, connection_name
     `),
@@ -216,6 +228,23 @@ async function normalizeGrants(
   });
 }
 
+export async function validateSharedConnectorActionIds(service: string, value: unknown) {
+  const actionIds = Array.from(new Set(stringArray(value)));
+  if (!actionIds.length) throw new IntegrationStoreError("企微机器人至少选择一个可用 Action", 400);
+  if (actionIds.length > MAX_ACTIONS) throw new IntegrationStoreError(`Action 不能超过 ${MAX_ACTIONS} 个`, 400);
+  const provider = await getConnectorProvider(service);
+  const knownActions = new Set(provider.actions.map((action) => action.id));
+  for (const actionId of actionIds) {
+    if (!ACTION_PATTERN.test(actionId) || !knownActions.has(actionId)) {
+      throw new IntegrationStoreError(`Action ${actionId} 不存在`, 400);
+    }
+    if (hardDeniedActionSet.has(actionId)) {
+      throw new IntegrationStoreError(`Action ${actionId} 属于系统禁止项`, 409);
+    }
+  }
+  return actionIds;
+}
+
 async function replaceGrants(
   client: PoolClient,
   resourceId: string,
@@ -261,7 +290,21 @@ export async function saveSharedConnectorResource(
   const securityDomain = input.securityDomain
     ? requiredText(input.securityDomain, "安全域", 64).toLowerCase()
     : "general";
-  const grants = await normalizeGrants(identity, service, input.grants || []);
+  const authorizationMode = input.authorizationMode === "wecom_visibility"
+    ? "wecom_visibility"
+    : "manual";
+  if (service === "wecom_bot" && authorizationMode !== "wecom_visibility") {
+    throw new IntegrationStoreError("企微机器人必须使用企业身份可见范围筛选", 409);
+  }
+  if (service !== "wecom_bot" && authorizationMode !== "manual") {
+    throw new IntegrationStoreError("当前 Connector 不支持企微可见范围筛选", 409);
+  }
+  const actionIds = authorizationMode === "wecom_visibility"
+    ? await validateSharedConnectorActionIds(service, input.actionIds)
+    : [];
+  const grants = authorizationMode === "manual"
+    ? await normalizeGrants(identity, service, input.grants || [])
+    : [];
   const actor = identity.email;
   const id = randomUUID();
   const client = await getPool().connect();
@@ -270,20 +313,33 @@ export async function saveSharedConnectorResource(
     const result = await client.query<{ id: string }>(`
       INSERT INTO shared_connector_resources (
         id, service, connection_name, display_name, security_domain,
-        enabled, created_by, updated_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        authorization_mode, action_ids, enabled, created_by, updated_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7::JSONB, $8, $9, $9)
       ON CONFLICT (service, connection_name) DO UPDATE SET
         display_name = EXCLUDED.display_name,
         security_domain = EXCLUDED.security_domain,
+        authorization_mode = EXCLUDED.authorization_mode,
+        action_ids = EXCLUDED.action_ids,
         enabled = EXCLUDED.enabled,
         updated_by = EXCLUDED.updated_by,
         updated_at = NOW()
       RETURNING id
-    `, [id, service, connectionName, displayName, securityDomain, input.enabled !== false, actor]);
+    `, [
+      id,
+      service,
+      connectionName,
+      displayName,
+      securityDomain,
+      authorizationMode,
+      JSON.stringify(actionIds),
+      input.enabled !== false,
+      actor,
+    ]);
     const resourceId = result.rows[0]?.id;
     if (!resourceId) throw new IntegrationStoreError("共享连接保存失败", 500);
     await replaceGrants(client, resourceId, actor, grants);
     await client.query("COMMIT");
+    if (service === "wecom_bot") globalThis.aiBaseWeComVisibilityCache = undefined;
     return (await readResources()).find((resource) => resource.id === resourceId);
   } catch (error) {
     await client.query("ROLLBACK");
@@ -301,6 +357,21 @@ export async function deleteSharedConnectorResource(identity: ConsoleIdentity, i
     [resourceId],
   );
   if (!result.rowCount) throw new IntegrationStoreError("共享连接授权不存在", 404);
+  globalThis.aiBaseWeComVisibilityCache = undefined;
   void identity;
   return { deleted: true };
+}
+
+export async function deleteSharedConnectorResourceByConnection(
+  identity: ConsoleIdentity,
+  service: string,
+  connectionName: string,
+) {
+  await ensureSchema();
+  await getPool().query(
+    "DELETE FROM shared_connector_resources WHERE service = $1 AND connection_name = $2",
+    [service, connectionName],
+  );
+  if (service === "wecom_bot") globalThis.aiBaseWeComVisibilityCache = undefined;
+  void identity;
 }

@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +77,49 @@ func TestOIDCVerifierValidatesAudienceAndScope(t *testing.T) {
 	}
 	if caller.subject != "employee-123" || caller.clientID != "workbuddy" {
 		t.Fatalf("unexpected identity: %#v", caller)
+	}
+	if caller.wecomUserIDHash != "" {
+		t.Fatalf("missing private claim must not produce a WeCom identity hash: %#v", caller)
+	}
+
+	digest := sha256.Sum256([]byte("zhangsan"))
+	wecomUserIDHash := hex.EncodeToString(digest[:])
+	validWeComToken := signTestToken(t, privateKey, map[string]interface{}{
+		"iss":                provider.URL,
+		"sub":                "employee-123",
+		"aud":                "https://mcp.example/mcp",
+		"azp":                "workbuddy",
+		"scope":              "openid ai-base:mcp",
+		"wecom_user_id_hash": wecomUserIDHash,
+		"iat":                time.Now().Add(-time.Minute).Unix(),
+		"exp":                time.Now().Add(time.Hour).Unix(),
+	})
+	wecomCaller, err := verifier.verify(context.Background(), validWeComToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wecomCaller.wecomUserIDHash != wecomUserIDHash {
+		t.Fatalf("verified private claim was not retained: %#v", wecomCaller)
+	}
+
+	for _, forgedHash := range []string{
+		strings.ToUpper(wecomUserIDHash),
+		wecomUserIDHash[:63],
+		base64.RawURLEncoding.EncodeToString(digest[:]),
+	} {
+		forgedToken := signTestToken(t, privateKey, map[string]interface{}{
+			"iss":                provider.URL,
+			"sub":                "employee-123",
+			"aud":                "https://mcp.example/mcp",
+			"azp":                "workbuddy",
+			"scope":              "openid ai-base:mcp",
+			"wecom_user_id_hash": forgedHash,
+			"iat":                time.Now().Add(-time.Minute).Unix(),
+			"exp":                time.Now().Add(time.Hour).Unix(),
+		})
+		if _, err := verifier.verify(context.Background(), forgedToken); !errors.Is(err, errInvalidToken) {
+			t.Fatalf("expected forged WeCom hash %q to be rejected, got %v", forgedHash, err)
+		}
 	}
 
 	wrongScope := signTestToken(t, privateKey, map[string]interface{}{

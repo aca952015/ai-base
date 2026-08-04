@@ -1,4 +1,5 @@
 export type SharedConnectorPrincipalType = "user" | "group";
+export type SharedConnectorAuthorizationMode = "manual" | "wecom_visibility";
 
 export type SharedConnectorGrant = {
   id: string;
@@ -19,6 +20,8 @@ export type SharedConnectorResource = {
   connectionName: string;
   displayName: string;
   securityDomain: string;
+  authorizationMode: SharedConnectorAuthorizationMode;
+  actionIds: string[];
   enabled: boolean;
   grants: SharedConnectorGrant[];
   updatedAt: string;
@@ -46,6 +49,8 @@ export type SharedConnectorResourceInput = {
   connectionName: string;
   displayName: string;
   securityDomain?: string;
+  authorizationMode?: SharedConnectorAuthorizationMode;
+  actionIds?: string[];
   enabled?: boolean;
   grants: SharedConnectorGrantInput[];
 };

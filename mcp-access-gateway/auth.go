@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,12 +20,13 @@ var (
 )
 
 type identity struct {
-	issuer      string
-	subject     string
-	clientID    string
-	displayName string
-	email       string
-	groups      []string
+	issuer          string
+	subject         string
+	clientID        string
+	displayName     string
+	email           string
+	groups          []string
+	wecomUserIDHash string
 }
 
 type tokenVerifier interface {
@@ -69,10 +71,14 @@ func (v *oidcTokenVerifier) verify(ctx context.Context, rawToken string) (identi
 		Email           string      `json:"email"`
 		Name            string      `json:"name"`
 		Groups          []string    `json:"groups"`
+		WeComUserIDHash string      `json:"wecom_user_id_hash"`
 		Scope           interface{} `json:"scope"`
 		Scopes          interface{} `json:"scp"`
 	}
 	if err := token.Claims(&claims); err != nil || token.Subject == "" {
+		return identity{}, errInvalidToken
+	}
+	if claims.WeComUserIDHash != "" && !validLowerHex(claims.WeComUserIDHash, sha256.Size*2) {
 		return identity{}, errInvalidToken
 	}
 
@@ -92,13 +98,26 @@ func (v *oidcTokenVerifier) verify(ctx context.Context, rawToken string) (identi
 	}
 
 	return identity{
-		issuer:      token.Issuer,
-		subject:     token.Subject,
-		clientID:    clientID,
-		displayName: claims.Name,
-		email:       claims.Email,
-		groups:      append([]string(nil), claims.Groups...),
+		issuer:          token.Issuer,
+		subject:         token.Subject,
+		clientID:        clientID,
+		displayName:     claims.Name,
+		email:           claims.Email,
+		groups:          append([]string(nil), claims.Groups...),
+		wecomUserIDHash: claims.WeComUserIDHash,
 	}, nil
+}
+
+func validLowerHex(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, character := range value {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (v *oidcTokenVerifier) getVerifier(ctx context.Context) (*oidc.IDTokenVerifier, error) {

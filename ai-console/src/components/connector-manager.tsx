@@ -54,6 +54,8 @@ type EditorState = {
   oauthClientId: string;
   oauthClientSecret: string;
   oauthValues: Record<string, string>;
+  sharedActionIds: string[];
+  hardDeniedActionIds: string[];
   reconfigureOAuth: boolean;
   loadingProvider: boolean;
 };
@@ -161,6 +163,7 @@ function ConnectorCard({
 }) {
   const accountBound = connection.accessMode === "account_bound";
   const controlledShared = connection.accessMode === "controlled_shared";
+  const weComVisibility = connection.sharedAccess?.authorizationMode === "wecom_visibility";
   const accessLabel = connection.accessMode === "no_auth"
     ? "无需认证"
     : accountBound
@@ -223,9 +226,9 @@ function ConnectorCard({
           : accountBound
             ? <span className="gateway-managed-lock"><UserRound size={14} />员工专属连接</span>
             : controlledShared
-              ? <span className="gateway-managed-lock"><UsersRound size={14} />{connection.sharedAccess?.grantCount || 0} 条授权</span>
+              ? <span className="gateway-managed-lock"><UsersRound size={14} />{weComVisibility ? "企微身份筛选" : `${connection.sharedAccess?.grantCount || 0} 条授权`}</span>
               : <span className="gateway-managed-lock"><CheckCircle2 size={14} />凭据已保存</span>}
-        {connection.accessMode === "global" || controlledShared ? <button className="button button--secondary" type="button" onClick={() => onManageAccess(connection)}><ShieldCheck size={14} />授权</button> : null}
+        {connection.accessMode === "global" || controlledShared ? <button className="button button--secondary" type="button" onClick={() => onManageAccess(connection)}><ShieldCheck size={14} />{weComVisibility ? "策略" : "授权"}</button> : null}
         {connection.accessMode === "global" || controlledShared ? <button className="button button--secondary" type="button" onClick={() => onEdit(connection)}><Pencil size={14} />编辑</button> : null}
         {connection.accessMode === "global" || controlledShared ? <button className="gateway-remove-button" type="button" onClick={() => onDisconnect(connection)} disabled={deleting} aria-label={`断开${connection.connectionName}`}><Trash2 size={15} /></button> : null}
       </div>
@@ -402,6 +405,8 @@ export function ConnectorManager({
       oauthClientId: "",
       oauthClientSecret: "",
       oauthValues: {},
+      sharedActionIds: [],
+      hardDeniedActionIds: [],
       reconfigureOAuth: false,
       loadingProvider: false,
     });
@@ -434,9 +439,21 @@ export function ConnectorManager({
         oauthClientId: oauthConfig?.clientId || "",
         oauthClientSecret: "",
         oauthValues: initialValues(auth?.type === "oauth2" ? auth.clientConfigFields : []),
+        connectionName: provider.service === "wecom_bot" && current.connectionName === "default"
+          ? `wecom_bot_${Date.now().toString(36)}`
+          : current.connectionName,
+        sharedActionIds: [],
+        hardDeniedActionIds: [],
         reconfigureOAuth: Boolean(authType === "oauth2" && !oauthConfig?.configured),
         loadingProvider: false,
       } : current);
+      if (provider.service === "wecom_bot") {
+        const access = await fetchJson<SharedConnectorAccessSnapshot>("/api/connector-access/shared-resources");
+        setEditor((current) => current?.provider?.service === "wecom_bot" ? {
+          ...current,
+          hardDeniedActionIds: access.hardDeniedActionIds,
+        } : current);
+      }
     } catch (error) {
       patchEditor({ loadingProvider: false });
       setState("error");
@@ -455,13 +472,20 @@ export function ConnectorManager({
       oauthClientId: "",
       oauthClientSecret: "",
       oauthValues: {},
+      sharedActionIds: [],
+      hardDeniedActionIds: [],
       reconfigureOAuth: false,
       loadingProvider: true,
     });
     setState("idle");
     setMessage("");
     try {
-      const provider = await fetchJson<ConnectorProviderDetail>(`/api/open-connector/providers/${encodeURIComponent(connection.service)}`);
+      const [provider, access] = await Promise.all([
+        fetchJson<ConnectorProviderDetail>(`/api/open-connector/providers/${encodeURIComponent(connection.service)}`),
+        connection.service === "wecom_bot"
+          ? fetchJson<SharedConnectorAccessSnapshot>("/api/connector-access/shared-resources")
+          : Promise.resolve(undefined),
+      ]);
       const auth = authDefinition(provider, connection.authType);
       const oauthConfig = connection.authType === "oauth2" ? await loadOAuthConfig(provider.service) : undefined;
       setKnownProviders((current) => {
@@ -476,6 +500,10 @@ export function ConnectorManager({
         oauthConfig,
         oauthClientId: oauthConfig?.clientId || "",
         oauthValues: initialValues(auth?.type === "oauth2" ? auth.clientConfigFields : []),
+        sharedActionIds: access?.resources.find((resource) => (
+          resource.service === connection.service && resource.connectionName === connection.connectionName
+        ))?.actionIds || [],
+        hardDeniedActionIds: access?.hardDeniedActionIds || [],
         reconfigureOAuth: Boolean(connection.authType === "oauth2" && !oauthConfig?.configured),
         loadingProvider: false,
       } : current);
@@ -497,6 +525,7 @@ export function ConnectorManager({
       oauthClientSecret: "",
       oauthValues: initialValues(auth?.type === "oauth2" ? auth.clientConfigFields : []),
       reconfigureOAuth: false,
+      sharedActionIds: type === "oauth2" ? [] : editor.sharedActionIds,
     });
     if (type === "oauth2") {
       setState("loading");
@@ -528,6 +557,12 @@ export function ConnectorManager({
     const auth = authDefinition(editor.provider, editor.authType);
     const fields = connectionFields(auth);
     validateFields(fields, editor.values);
+    if (editor.provider.service === "wecom_bot" && !editor.sharedActionIds.length) {
+      throw new Error("企微机器人至少选择一个允许员工使用的 Action");
+    }
+    if (editor.provider.service === "wecom_bot" && editor.connectionName.toLowerCase() === "default") {
+      throw new Error("企微机器人必须使用具名连接，不能使用 default");
+    }
     if (editor.mode === "create" && connections.some((connection) => connection.service === editor.provider?.service && connection.connectionName === editor.connectionName)) {
       throw new Error("同名连接已经存在，请直接编辑已有卡片");
     }
@@ -540,6 +575,8 @@ export function ConnectorManager({
           connectionName: editor.connectionName,
           authType: editor.authType,
           values: Object.fromEntries(fields.map((field) => [field.key, editor.values[field.key] || ""])),
+          actionIds: editor.provider.service === "wecom_bot" ? editor.sharedActionIds : undefined,
+          displayName: editor.original?.sharedAccess?.displayName || editor.provider.displayName,
         }),
       },
     );
@@ -707,7 +744,9 @@ export function ConnectorManager({
           ? `group:${grant.groupName || ""}`
           : `user:${grant.principalEmail || grant.principalSubject || ""}`
       )).filter((value) => !value.endsWith(":")) || [];
-      const actionIds = Array.from(new Set(resource?.grants.flatMap((grant) => grant.actionIds) || []));
+      const actionIds = resource?.authorizationMode === "wecom_visibility"
+        ? resource.actionIds
+        : Array.from(new Set(resource?.grants.flatMap((grant) => grant.actionIds) || []));
       setAccessEditor((current) => current?.connection.id === connection.id ? {
         ...current,
         resource,
@@ -740,19 +779,28 @@ export function ConnectorManager({
     patchAccessEditor({ actionIds: Array.from(selected) });
   }
 
+  function toggleEditorSharedAction(actionId: string) {
+    if (!editor || editor.hardDeniedActionIds.includes(actionId)) return;
+    const selected = new Set(editor.sharedActionIds);
+    if (selected.has(actionId)) selected.delete(actionId);
+    else selected.add(actionId);
+    patchEditor({ sharedActionIds: Array.from(selected) });
+  }
+
   async function saveSharedAccess() {
     if (!accessEditor?.provider) return;
+    const weComVisibility = accessEditor.connection.service === "wecom_bot";
     const principalLines = accessEditor.principals
       .split(/\r?\n|,/)
       .map((line) => line.trim())
       .filter(Boolean);
-    if (principalLines.length && !accessEditor.actionIds.length) {
+    if ((weComVisibility || principalLines.length) && !accessEditor.actionIds.length) {
       patchAccessEditor({ error: "至少为授权对象选择一个 Action" });
       return;
     }
     let grants;
     try {
-      grants = principalLines.map((line) => {
+      grants = weComVisibility ? [] : principalLines.map((line) => {
         const [prefix, ...rest] = line.split(":");
         const value = rest.join(":").trim();
         if ((prefix !== "user" && prefix !== "group") || !value) {
@@ -778,6 +826,8 @@ export function ConnectorManager({
           connectionName: accessEditor.connection.connectionName,
           displayName: accessEditor.displayName,
           securityDomain: accessEditor.securityDomain,
+          authorizationMode: weComVisibility ? "wecom_visibility" : "manual",
+          actionIds: weComVisibility ? accessEditor.actionIds : [],
           enabled: true,
           grants,
         }),
@@ -910,7 +960,7 @@ export function ConnectorManager({
         <header className="portal-group__header">
           <div>
             <h2 id="connector-controlled-shared-title">受控共享</h2>
-            <p>企业共享凭据由 OpenConnector 保存，AI Base 按员工或群组限制可用 Action。</p>
+            <p>企业共享凭据由 OpenConnector 保存，AI Base 按员工、群组或企微可见范围限制可用 Action。</p>
           </div>
           <span className="gateway-channel-state is-managed">{controlledSharedConnections.length} 个 Connector</span>
         </header>
@@ -974,13 +1024,13 @@ export function ConnectorManager({
               <div>
                 <span className="card-kicker">受控共享</span>
                 <h3 id="shared-access-title">{accessEditor.connection.profile.displayName}</h3>
-                <p>员工只能看到获授权的具名连接，并且只能执行勾选的 Action。凭据仍由 OpenConnector 管理。</p>
+                <p>{accessEditor.connection.service === "wecom_bot" ? "员工通过 MCP 登录后，AI Base 使用可信企微身份和机器人可见范围自动筛选连接。" : "员工只能看到获授权的具名连接，并且只能执行勾选的 Action。凭据仍由 OpenConnector 管理。"}</p>
               </div>
-              <button type="button" data-drawer-autofocus onClick={closeAccessEditor} disabled={accessEditor.saving} aria-label="关闭共享授权"><X size={17} /></button>
+              <button type="button" data-drawer-autofocus onClick={closeAccessEditor} disabled={accessEditor.saving} aria-label={accessEditor.connection.service === "wecom_bot" ? "关闭连接策略" : "关闭共享授权"}><X size={17} /></button>
             </div>
             <div className="gateway-channel-drawer__body connector-shared-access">
               {accessEditor.loading ? (
-                <div className="gateway-mcp-tools-state"><RefreshCw className="is-spinning" size={18} /><strong>正在读取授权策略</strong></div>
+                <div className="gateway-mcp-tools-state"><RefreshCw className="is-spinning" size={18} /><strong>正在读取连接策略</strong></div>
               ) : (
                 <>
                   <section className="resource-detail-section">
@@ -988,7 +1038,11 @@ export function ConnectorManager({
                     <div className="gateway-channel-fields connector-fields">
                       <label className="field-label"><span>显示名称</span><input value={accessEditor.displayName} onChange={(event) => patchAccessEditor({ displayName: event.target.value })} /></label>
                       <label className="field-label"><span>安全域</span><input value={accessEditor.securityDomain} onChange={(event) => patchAccessEditor({ securityDomain: event.target.value })} placeholder="general / sales / hr" /></label>
-                      <label className="field-label connector-field--wide"><span>授权对象</span><textarea rows={5} value={accessEditor.principals} onChange={(event) => patchAccessEditor({ principals: event.target.value })} placeholder={"每行一个，例如：\nuser:employee01@company.com\ngroup:sales"} /><small className="connector-field-help">员工使用 user:邮箱或可信 Subject；群组使用 group:OIDC 群组名。</small></label>
+                      {accessEditor.connection.service === "wecom_bot" ? (
+                        <div className="connector-auth-note connector-field--wide"><ShieldCheck size={16} /><div><strong>企业身份自动筛选</strong><p>不配置员工绑定或手工名单。服务端用企微认证得到的 UserID 摘要调用该机器人的 get_userlist；查询失败或员工不在可见范围时连接不会出现在 MCP 清单中。</p></div></div>
+                      ) : (
+                        <label className="field-label connector-field--wide"><span>授权对象</span><textarea rows={5} value={accessEditor.principals} onChange={(event) => patchAccessEditor({ principals: event.target.value })} placeholder={"每行一个，例如：\nuser:employee01@company.com\ngroup:sales"} /><small className="connector-field-help">员工使用 user:邮箱或可信 Subject；群组使用 group:OIDC 群组名。</small></label>
+                      )}
                     </div>
                   </section>
                   <section className="resource-detail-section">
@@ -1015,7 +1069,7 @@ export function ConnectorManager({
               <button className="button button--secondary" type="button" onClick={closeAccessEditor} disabled={accessEditor.saving}>取消</button>
               <button className="button button--primary" type="button" onClick={saveSharedAccess} disabled={accessEditor.loading || accessEditor.saving || !accessEditor.provider}>
                 {accessEditor.saving ? <RefreshCw className="is-spinning" size={14} /> : <Save size={14} />}
-                {accessEditor.saving ? "保存中" : "保存授权"}
+                {accessEditor.saving ? "保存中" : accessEditor.connection.service === "wecom_bot" ? "保存策略" : "保存授权"}
               </button>
             </div>
           </aside>
@@ -1168,6 +1222,29 @@ export function ConnectorManager({
                       <DynamicField key={field.key} field={field} value={editor.values[field.key] || ""} onChange={(value) => patchEditor({ values: { ...editor.values, [field.key]: value } })} />
                     ))}
                   </div>
+
+                  {editor.provider.service === "wecom_bot" ? (
+                    <section className="resource-detail-section">
+                      <div className="resource-detail-section__header"><strong>企业共享策略</strong><span>{editor.sharedActionIds.length} 个 Action</span></div>
+                      <div className="connector-auth-note"><ShieldCheck size={16} /><div><strong>按企微身份自动筛选</strong><p>机器人作为企业共享连接维护，不创建员工绑定。MCP 仅向通过企微认证且位于机器人 get_userlist 可见范围内的员工展示此连接。</p></div></div>
+                      <div className="connector-shared-action-list">
+                        {editor.provider.actions.map((action) => {
+                          const hardDenied = editor.hardDeniedActionIds.includes(action.id);
+                          return (
+                            <label className={hardDenied ? "is-denied" : ""} key={action.id}>
+                              <input
+                                type="checkbox"
+                                checked={editor.sharedActionIds.includes(action.id)}
+                                disabled={hardDenied || state === "saving"}
+                                onChange={() => toggleEditorSharedAction(action.id)}
+                              />
+                              <span><strong>{action.id}</strong><small>{hardDenied ? "系统内部或高风险动态入口，不向员工授权" : action.description || "暂无说明"}</small></span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  ) : null}
 
                   {selectedAuth?.type === "no_auth" ? <div className="connector-auth-note"><ShieldCheck size={16} /><div><strong>无需认证</strong><p>该 Connector 由 OpenConnector 作为系统可用连接提供，不会保存凭据。</p></div></div> : null}
 
