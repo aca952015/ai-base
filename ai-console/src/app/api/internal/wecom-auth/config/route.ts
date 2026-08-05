@@ -3,10 +3,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import {
-  getActiveIntegrationCredential,
   IntegrationStoreError,
 } from "@/lib/server/integrations";
-import { getWeComAuthenticationSnapshot, readConfig } from "@/lib/server/config";
+import {
+  getWeComAuthenticationConfiguration,
+  getWeComAuthenticationCredential,
+} from "@/lib/server/wecom-authentication";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,9 +28,9 @@ export async function GET(request: Request) {
   if (!authorized(request)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  const runtime = getWeComAuthenticationSnapshot(await readConfig());
+  const runtime = await getWeComAuthenticationConfiguration();
   try {
-    const application = await getActiveIntegrationCredential("wecom");
+    const application = await getWeComAuthenticationCredential();
     return NextResponse.json({
       configured: true,
       runtime: {
@@ -40,7 +42,7 @@ export async function GET(request: Request) {
       application: {
         id: application.id,
         name: application.name,
-        corpId: application.appId,
+        corpId: application.corpId,
         appSecret: application.appSecret,
         updatedAt: application.updatedAt,
       },

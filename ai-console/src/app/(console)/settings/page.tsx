@@ -1,11 +1,11 @@
-import { ChevronRight, KeyRound, LockKeyhole, MessageSquareLock, NotebookTabs, Router, ServerCog, ShieldCheck, TriangleAlert } from "lucide-react";
+import { ChevronRight, KeyRound, LockKeyhole, NotebookTabs, Router, ServerCog, ShieldCheck, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 
 import { PageHeader } from "@/components/page-header";
 import { SectionCard } from "@/components/section-card";
 import { SettingsForm } from "@/components/settings-form";
 import { getComponentData } from "@/lib/server/component-data";
-import { getWeComAuthenticationSnapshot, readConfig } from "@/lib/server/config";
+import { readConfig } from "@/lib/server/config";
 import { readGatewayMcpServers } from "@/lib/server/gateway-config";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,6 @@ export default async function SettingsPage() {
     getComponentData(config),
     readGatewayMcpServers(),
   ]);
-  const wecomAuth = getWeComAuthenticationSnapshot(config);
   const connectorApiReady = !data.errors.openConnector;
   const runtimeTokenConfigured = Boolean(process.env.OPEN_CONNECTOR_RUNTIME_TOKEN);
   const oidcConfigured = process.env.OIDC_ENABLED === "true";
@@ -38,12 +37,6 @@ export default async function SettingsPage() {
             <span className="settings-subpage-row__icon"><NotebookTabs size={19} /></span>
             <span className="settings-subpage-row__copy"><strong>LightRAG</strong><small>模型、Embedding、切片与并发</small></span>
             <span className="settings-subpage-row__status">{data.knowledge.pipelineBusy ? "索引处理中" : `${data.knowledge.documentCount} 篇文档`}</span>
-            <ChevronRight size={18} />
-          </Link>
-          <Link className="settings-subpage-row" href="/settings/wecom-auth">
-            <span className="settings-subpage-row__icon is-green"><MessageSquareLock size={19} /></span>
-            <span className="settings-subpage-row__copy"><strong>企业微信认证</strong><small>公开入口、回调方式与员工邮箱域</small></span>
-            <span className="settings-subpage-row__status">{wecomAuth.callbackMode === "relay" ? "公网中继" : "直接回调"}</span>
             <ChevronRight size={18} />
           </Link>
         </div>

@@ -61,16 +61,16 @@ Dex 中的 `ai-base-pomerium` 客户端需要同时登记 `https://authenticate.
 
 `wecom-auth-bridge` 是独立 Go 容器，作为 Dex 的上游 OIDC Provider。员工从 Console 或 MCP 登录时在 Dex 选择“企业微信”，桥接服务执行企业微信 `snsapi_base` 网页授权，使用返回的企业 `UserID` 生成稳定 OIDC Subject，再由 Dex 统一签发 AI Base 身份。Pomerium、MCP Access Gateway 与账号绑定仍只信任 Dex，因此同一员工在浏览器与 MCP 客户端中保持同一身份边界。
 
-管理员在 Console 的“集成管理 / 企微”中登记并启用应用：
+管理员在 Console 的“集成管理 / 企业微信认证”中维护唯一一套系统认证配置：
 
 - “企业 ID（CorpID）”填写企业微信管理后台的企业 ID；
 - “App Secret”填写该自建应用的 Secret；
 - 自建应用的可见范围应包含允许登录 AI Base 的员工；
-- 在“系统设置 / 企业微信认证”中维护 AI Base 公开认证入口、企业邮箱域和回调方式；企业微信后台把可信域名与网页授权回调配置为页面展示的“当前生效回调”；正式公网部署可直接使用本地网关，开发机/内网部署则可使用独立公网回调中继；
+- 在同一表单中维护 AI Base 公开认证入口、企业邮箱域和回调方式；企业微信后台把可信域名与网页授权回调配置为页面展示的“当前生效回调”；正式公网部署可直接使用本地网关，开发机/内网部署则可使用独立公网回调中继；
 - 不使用 Relay 时，将下载的 `WW_verify_*.txt` 原文件放入 `deploy/global-gateway/wecom-verification/`；使用 Relay 时，按其 README 配置校验文件名与内容；
 - 工作台应用主页指向 AI Console 的 `/auth/wework`；该入口不展示认证方式选择页，认证完成后直接进入 `/account`。
 
-桥接服务在每次新登录时通过内网接口读取 Console 中的公开路由设置与启用应用，保存后无需重启；Secret 不返回浏览器。只有内部接口 Token、Dex 上游客户端密钥和身份拓扑仍属于启动信任根：
+桥接服务在每次新登录时通过内网接口读取 Console 中的唯一企微认证配置，保存后无需重启；Secret 不返回浏览器。只有内部接口 Token、Dex 上游客户端密钥和身份拓扑仍属于启动信任根：
 
 ```dotenv
 WECOM_AUTH_BRIDGE_CONFIG_TOKEN=replace-with-a-long-random-internal-token
@@ -80,7 +80,7 @@ WECOM_DEX_REDIRECT_URI=https://id.example.com/dex/callback
 
 相邻 `local-oidc` 的 Dex 配置已包含 `wecom` OIDC Connector，本地桥接客户端密钥必须与 AI Base 的 `WECOM_OIDC_CLIENT_SECRET` 相同。正式环境需把桥接 `issuer` 和 Dex 回调统一替换为部署对应的稳定地址。OIDC Client Secret、内部配置 Token、签名密钥、issuer/client 绑定不能移入登录后的管理页面，否则会形成认证自举死锁并扩大信任根暴露面。
 
-系统设置默认使用 `http://127.0.0.1:8080/wecom-oidc` 并直接回调其 `/callback`，仅适合本机验证。使用公网中继时，把“回调方式”改为“通过公网认证中继”并填写稳定 HTTPS 回调地址；中继仍不持有企微 Secret 或用户身份，只把白名单参数交还浏览器，因此页面中的 AI Base 公开认证入口必须能被发起登录的浏览器访问。
+集成管理中的默认公开入口是 `http://127.0.0.1:8080/wecom-oidc`，并直接回调其 `/callback`，仅适合本机验证。使用公网中继时，把“回调方式”改为“通过公网认证中继”并填写稳定 HTTPS 回调地址；中继仍不持有企微 Secret 或用户身份，只把白名单参数交还浏览器，因此页面中的 AI Base 公开认证入口必须能被发起登录的浏览器访问。
 
 外部 Dex 的 Connector 配置如下；`redirectURI` 必须是 Dex 自身 issuer 下的 `/callback`：
 
@@ -99,7 +99,7 @@ connectors:
       scopes: [profile, email, groups, offline_access]
 ```
 
-桥接服务的 Access Token 默认 1 小时，Dex 上游 Refresh Token 使用持久卷保存、90 天滑动续期；刷新凭据只保存 SHA-256 哈希。企业微信通讯录权限允许时使用成员企业邮箱；读取受限或邮箱域不匹配时，按系统设置中的企业邮箱域生成 `UserID@<domain>` 稳定登录邮箱。修改该域时还应同步检查 Pomerium 的邮箱域策略。
+桥接服务的 Access Token 默认 1 小时，Dex 上游 Refresh Token 使用持久卷保存、90 天滑动续期；刷新凭据只保存 SHA-256 哈希。企业微信通讯录权限允许时使用成员企业邮箱；读取受限或邮箱域不匹配时，按集成管理中的企业邮箱域生成 `UserID@<domain>` 稳定登录邮箱。修改该域时还应同步检查 Pomerium 的邮箱域策略。
 
 OpenConnector 的管理请求由独立内部代理注入 Admin Token，Token 不进入浏览器。OpenConnector 不再映射宿主机端口；管理入口经 Pomerium，Agent 功能流量经全局网关 `/connector`，分别使用 Admin Token 与 Runtime Token。
 
@@ -234,9 +234,9 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 
 ### 集成管理
 
-[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 仅供管理员使用，固定提供飞书、企微和钉钉三个分组。这里管理企业登录或个人 OAuth 应用；企微机器人的 Bot ID/Secret 与 Action 策略在“连接器配置”维护。每个集成分组可以登记多个企业应用，但同一平台只有一个启用应用；员工开始授权前，AI Base 会把启用应用的 OAuth Client 配置同步到 OpenConnector。
+[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 仅供管理员使用，并作为企业微信、飞书和钉钉的统一配置目录。企业微信进入独立的 [认证二级页](https://ai-console.localhost.pomerium.io:8443/integrations/wecom-authentication)，集中维护 CorpID、App Secret、公开入口、回调方式和企业邮箱域；飞书与钉钉分别进入 `/integrations/feishu` 和 `/integrations/dingtalk`，独立管理各自的应用凭据、Action 与启用状态。企微机器人的 Bot ID/Secret 与 Action 策略仍在“连接器配置”维护。飞书和钉钉可以登记多个企业应用，但同一平台只有一个启用应用；员工开始授权前，AI Base 会把支持的启用应用 OAuth Client 配置同步到 OpenConnector。
 
-应用配置独立保存在 PostgreSQL 的 `integration_applications` 表中。`App Secret` 使用 `AI_CONSOLE_SECRET_ENCRYPTION_KEY` 在服务端执行 AES-256-GCM 加密，读取接口和编辑表单均不回显明文。OpenConnector 当前只有飞书 Provider 提供用户级 OAuth；企微和钉钉现有 Provider 是机器人/API Key 模式，因此控制台保留企业应用配置，但个人授权按钮保持不可用，直到上游提供用户 OAuth。
+企业微信认证保存在 PostgreSQL 的单例表 `wecom_authentication_configuration`；飞书和钉钉应用保存在 `integration_applications`。所有 App Secret 均使用 `AI_CONSOLE_SECRET_ENCRYPTION_KEY` 在服务端执行 AES-256-GCM 加密，读取接口和编辑表单不回显明文。升级时，旧 `integration_applications.wecom` 的启用凭据与 Console 配置文件中的企微运行参数会迁移到单例表，随后删除旧企微应用记录和配置文件副本。OpenConnector 当前只有飞书 Provider 提供用户级 OAuth；钉钉现有 Provider 不提供个人 OAuth，因此对应员工授权保持不可用。
 
 普通员工登录 Console 后只进入 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account)。页面只为飞书等个人 OAuth 连接提供绑定操作，并以只读说明展示企微机器人会由 MCP 自动筛选。飞书授权成功后：
 
@@ -256,10 +256,10 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `GET/PUT/DELETE /api/open-connector/connections`：读取安全摘要，并在服务端创建、更新或删除真实连接。
 - `GET/PUT /api/open-connector/oauth-configs/:service`、`POST /api/open-connector/oauth-authorizations`：管理 OAuth Client 配置并启动授权。
 - `GET/PUT /api/connector-access/shared-resources`、`DELETE /api/connector-access/shared-resources/:id`：管理具名 Connector 的受控共享资源、身份授权和 Action 白名单。
-- `GET/POST /api/integrations`、`PUT/DELETE /api/integrations/:id`：读取并管理飞书、企微和钉钉应用凭据。
+- `GET/POST /api/integrations`、`PUT/DELETE /api/integrations/:id`：读取并管理飞书和钉钉应用凭据。
 - `POST /api/integrations/:id/activate`：将应用设为平台唯一启用配置，并同步支持的 OAuth Client。
-- `GET/PUT /api/settings/wecom-auth`：仅管理员读取或保存企微公开认证入口、回调方式和企业邮箱域。
-- `GET /api/internal/wecom-auth/config`：仅供桥接容器以内网 Bearer Token 读取企微运行设置以及启用的 CorpID 与 Secret，不由全局网关代理。
+- `GET/PUT /api/integrations/wecom-authentication`：仅管理员读取或保存唯一的企业微信系统认证配置。
+- `GET /api/internal/wecom-auth/config`：仅供桥接容器以内网 Bearer Token 读取同一企微认证配置的运行参数、CorpID 与 Secret，不由全局网关代理。
 - `GET /api/account/integrations`、`POST/DELETE /api/account/integrations/:platform/authorize`：读取、发起或解除当前员工个人绑定。
 
 OpenConnector Token、模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 保存在服务端。Console 只读取 LightRAG 文档状态，不返回知识正文。

@@ -54,14 +54,22 @@ export type ServiceConfig = {
   notes?: string;
 };
 
-export type WeComAuthenticationSettings = {
+export type WeComAuthenticationRuntimeSettings = {
   publicBaseUrl: string;
   callbackMode: "direct" | "relay";
   relayCallbackUrl?: string;
   emailDomain: string;
 };
 
-export type WeComAuthenticationSnapshot = WeComAuthenticationSettings & {
+export type WeComAuthenticationSettings = WeComAuthenticationRuntimeSettings & {
+  corpId: string;
+  appSecret?: string;
+};
+
+export type WeComAuthenticationSnapshot = WeComAuthenticationRuntimeSettings & {
+  corpId: string;
+  configured: boolean;
+  secretConfigured: boolean;
   effectiveCallbackUrl: string;
   updatedAt: string;
 };
@@ -80,8 +88,9 @@ export type ConsoleConfig = {
   currency: "CNY" | "USD";
   monthlyBudget: number;
   services: Partial<Record<ServiceId, ServiceConfig>>;
-  authentication: {
-    wecom: WeComAuthenticationSettings;
+  /** @deprecated Migrated into the singleton PostgreSQL WeCom authentication configuration. */
+  authentication?: {
+    wecom?: WeComAuthenticationRuntimeSettings;
   };
   updatedAt: string;
 };

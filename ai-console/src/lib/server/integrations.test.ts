@@ -72,12 +72,10 @@ describe("enterprise integration store", () => {
 
     expect(snapshot.groups.map((group) => group.platform)).toEqual([
       "feishu",
-      "wecom",
       "dingtalk",
     ]);
     expect(snapshot.groups[0].applications).toEqual([applications[1]]);
-    expect(snapshot.groups[1].applications).toEqual([]);
-    expect(snapshot.groups[2].applications).toEqual([applications[0]]);
+    expect(snapshot.groups[1].applications).toEqual([applications[0]]);
     expect(snapshot.groups[0].actions.map((action) => action.id)).toEqual([
       "feishu.search_bitable_records",
     ]);

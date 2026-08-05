@@ -92,11 +92,11 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 - MCP 客户端回调地址使用明确白名单，Refresh Token 一次性轮换；服务重启后安全失效并要求重新登录；
 - Go 网关只做身份、个人连接选择与协议边界，Agent 运行仍由 Agent Runtime 承担。
 
-个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。受控共享资源保存具名连接引用、授权模式与 Action 白名单，不复制 Bot Secret。`wecom_visibility` 资源只能用于 `wecom_bot`：解析器先用启用的企微登录应用 CorpID 校验 Token 中唯一企业群组，再调用对应具名机器人的 `get_userlist`，只比较 UserID 哈希；60 秒缓存到期或查询异常后不使用旧结果。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，个人绑定解析只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
+个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。受控共享资源保存具名连接引用、授权模式与 Action 白名单，不复制 Bot Secret。`wecom_visibility` 资源只能用于 `wecom_bot`：解析器先用唯一企微认证配置中的 CorpID 校验 Token 中唯一企业群组，再调用对应具名机器人的 `get_userlist`，只比较 UserID 哈希；60 秒缓存到期或查询异常后不使用旧结果。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，个人绑定解析只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
 
-企业微信不是标准 OIDC Provider。独立 `wecom-auth-bridge` 使用 `snsapi_base` 获取企业 UserID，派生稳定 Subject，并作为 Dex 的 OIDC Connector 上游；Pomerium 与 MCP OAuth Broker 仍只信任 Dex。企微 CorpID 与 Secret 由 Console 集成管理加密保存；公开认证入口、直接/中继回调方式和企业邮箱域由管理员在 `/settings/wecom-auth` 保存到 Console 数据卷。桥接服务通过独立 Bearer Token 的 Compose 内网接口按请求读取两类配置且不缓存，因此新登录立即使用最新设置；配置缺失、无启用应用或内部接口失败时关闭失败。浏览器与 Dex 均不接触 Secret。桥接 Access Token 短期有效，Refresh Token 哈希保存在独立 Volume 并按 90 天滑动续期。企业微信工作台使用 `/auth/wework` 独立入口：Caddy 将其导向专用 Pomerium 实例，该实例只为 Dex 添加 `connector_id=wecom`，因此跳过登录方式选择；普通 Console 登录入口与其他认证方式保持不变。
+企业微信不是标准 OIDC Provider。独立 `wecom-auth-bridge` 使用 `snsapi_base` 获取企业 UserID，派生稳定 Subject，并作为 Dex 的 OIDC Connector 上游；Pomerium 与 MCP OAuth Broker 仍只信任 Dex。企微 CorpID、Secret、公开认证入口、直接/中继回调方式和企业邮箱域由管理员在 `/integrations/wecom-authentication` 的唯一“企业微信认证”表单维护，并保存在 PostgreSQL 单例表 `wecom_authentication_configuration`；`/integrations` 只提供配置摘要和二级页入口。Secret 仍使用 AES-256-GCM 加密。桥接服务通过独立 Bearer Token 的 Compose 内网接口按请求读取这一条配置且不缓存，因此新登录立即使用最新设置；配置不完整或内部接口失败时关闭失败。浏览器与 Dex 均不接触 Secret。桥接 Access Token 短期有效，Refresh Token 哈希保存在独立 Volume 并按 90 天滑动续期。企业微信工作台使用 `/auth/wework` 独立入口：Caddy 将其导向专用 Pomerium 实例，该实例只为 Dex 添加 `connector_id=wecom`，因此跳过登录方式选择；普通 Console 登录入口与其他认证方式保持不变。升级时，旧企微集成凭据与 Console 配置文件中的运行参数在事务边界内迁移到单例记录，旧来源随后删除，避免双写和优先级歧义。
 
-`WECOM_AUTH_BRIDGE_CONFIG_TOKEN`、`WECOM_OIDC_CLIENT_SECRET`、OIDC issuer/client 绑定与签名密钥属于认证启动信任根，继续由部署密钥提供，不能依赖登录后的 Console 页面。`WECOM_AUTH_PUBLIC_BASE_URL`、`WECOM_AUTH_CALLBACK_URL` 与 `WECOM_EMAIL_DOMAIN` 不再作为 bridge 环境变量；系统设置默认值只支持 loopback 本机验证，正式部署由已认证管理员改为可达地址。
+`WECOM_AUTH_BRIDGE_CONFIG_TOKEN`、`WECOM_OIDC_CLIENT_SECRET`、OIDC issuer/client 绑定与签名密钥属于认证启动信任根，继续由部署密钥提供，不能依赖登录后的 Console 页面。`WECOM_AUTH_PUBLIC_BASE_URL`、`WECOM_AUTH_CALLBACK_URL` 与 `WECOM_EMAIL_DOMAIN` 不再作为 bridge 环境变量；唯一企微配置的默认地址只支持 loopback 本机验证，正式部署由已认证管理员改为可达地址。
 
 同级独立项目 `ai-auth-relay` 是可选公网边缘，不属于 AI Base Compose，也不是身份提供方。它用 provider adapter 约束公开回调字段和固定本地目标；当前首个 adapter 为企业微信。浏览器先从本地 `/wecom-oidc/authorize` 获得一次性 state 与 HttpOnly Cookie，企微回到 Relay 后，Relay 将白名单字段经 302 带回固定的本地 callback，再由 `wecom-auth-bridge` 完成 Cookie/state 校验和 code 消费。Relay 不保存 CorpID、Secret、身份或 Token，不依赖 Vercel 到本地的永久长连接；浏览器无法访问本地目标时链路关闭失败。
 
@@ -137,11 +137,11 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 - 默认将 Open Connector `/mcp` 与独立 RAG MCP 以系统托管、只读配置接入 Envoy AI，并通过与模型配置并列的 MCP 配置页面管理其他 Streamable HTTP 上游、工具命名空间、允许/排除列表和可选密钥；
 - 通过连接器配置页面管理 OpenConnector 的连接生命周期；Connector 搜索、认证方式和动态字段读取真实 Provider Schema，凭证只经服务端 Admin API 写入且不回显，OAuth 授权成功后才创建卡片；
 - 企业微信 API 模式智能机器人作为 `controlled_shared` 具名连接在连接器配置页面维护；保存时同时写入 `wecom_visibility` 与静态 Action 白名单，员工侧不创建机器人绑定；
-- 通过管理员集成管理页面维护飞书、企微和钉钉的多个企业应用，并约束每个平台只有一个启用应用；App Secret 经 AES-256-GCM 加密后落 PostgreSQL；
+- 通过管理员集成管理页面维护唯一企业微信系统认证配置，以及飞书和钉钉的企业应用；所有 App Secret 经 AES-256-GCM 加密后落 PostgreSQL；
 - 普通员工通过账号绑定页面发起受支持平台的个人 OAuth；OpenConnector 保存个人 Token，PostgreSQL 保存 OIDC 主体到命名连接的映射，当前上游只有飞书支持用户 OAuth；
 - 通过单独修订文件触发网关进程重载，Key 以文件替换方式注入生成过程，不写入路由 YAML 或浏览器响应；
 - 通过系统设置的 LightRAG 二级页面选择网关已发布模型并管理切片、摘要和并发参数；保存后由内部配置控制面完成原子更新、健康等待与失败回滚；
-- 通过系统设置的企业微信认证二级页面维护公开入口、回调方式和企业邮箱域；bridge 每次新登录从受保护内网接口读取并立即应用，启动信任根不进入浏览器配置；
+- 企业微信认证的 CorpID、App Secret、公开入口、回调方式和企业邮箱域在集成管理的独立二级页维护；bridge 每次新登录从受保护内网接口读取并立即应用，启动信任根不进入浏览器配置；
 - 服务端聚合全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、LightRAG、RAG MCP、Jaeger 与 Promptfoo 的真实运行摘要；
 - JSON 配置读取、字段白名单校验和原子写入；
 - HTTP/TCP 服务健康探测；

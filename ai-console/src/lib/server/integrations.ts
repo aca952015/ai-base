@@ -20,6 +20,11 @@ import {
 } from "../control-plane/connectors";
 import type { ConsoleIdentity } from "./console-identity";
 import {
+  DEFAULT_WECOM_AUTHENTICATION_RUNTIME_SETTINGS,
+  readConfig,
+  removeLegacyWeComAuthenticationSettings,
+} from "./config";
+import {
   deleteConnectorConnection,
   getConnectorProvider,
   listConnectorConnections,
@@ -69,15 +74,6 @@ const platformDefinitions: PlatformDefinition[] = [
     bindingMode: "oauth2",
     actions: [],
     defaultActionIds: FEISHU_DEFAULT_ACTION_IDS,
-    oauthBaseScopes: [],
-  },
-  {
-    platform: "wecom",
-    displayName: "企微",
-    description: "管理企微自建应用凭据。",
-    bindingMode: "unsupported",
-    actions: [],
-    defaultActionIds: [],
     oauthBaseScopes: [],
   },
   {
@@ -237,6 +233,18 @@ export async function ensureSchema() {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS integration_applications_one_active_per_platform
         ON integration_applications(platform) WHERE active;
+      CREATE TABLE IF NOT EXISTS wecom_authentication_configuration (
+        singleton_key TEXT PRIMARY KEY DEFAULT 'default' CHECK (singleton_key = 'default'),
+        corp_id TEXT NOT NULL DEFAULT '',
+        app_secret_ciphertext TEXT,
+        public_base_url TEXT NOT NULL,
+        callback_mode TEXT NOT NULL CHECK (callback_mode IN ('direct', 'relay')),
+        relay_callback_url TEXT,
+        email_domain TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (callback_mode = 'direct' OR (relay_callback_url IS NOT NULL AND BTRIM(relay_callback_url) <> ''))
+      );
       CREATE TABLE IF NOT EXISTS employee_connector_bindings (
         id UUID PRIMARY KEY,
         application_id UUID NOT NULL REFERENCES integration_applications(id) ON DELETE RESTRICT,
@@ -318,12 +326,78 @@ export async function ensureSchema() {
       CREATE INDEX IF NOT EXISTS shared_connector_grants_group_idx
         ON shared_connector_grants(principal_issuer, group_name, enabled)
         WHERE principal_type = 'group'
-    `).then(() => undefined).catch((error: unknown) => {
+    `).then(async () => {
+      await migrateLegacyWeComAuthenticationConfiguration();
+    }).catch((error: unknown) => {
       globalThis.aiBaseIntegrationSchemaPromise = undefined;
       throw error;
     });
   }
   return globalThis.aiBaseIntegrationSchemaPromise;
+}
+
+async function migrateLegacyWeComAuthenticationConfiguration() {
+  const config = await readConfig();
+  const legacyRuntime = config.authentication?.wecom;
+  const runtime = legacyRuntime ?? DEFAULT_WECOM_AUTHENTICATION_RUNTIME_SETTINGS;
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('ai_base_wecom_authentication_configuration'))");
+    const current = await client.query<{ corp_id: string; app_secret_ciphertext: string | null }>(`
+      SELECT corp_id, app_secret_ciphertext
+      FROM wecom_authentication_configuration
+      WHERE singleton_key = 'default'
+      FOR UPDATE
+    `);
+    const legacy = await client.query<Pick<IntegrationApplicationRow, "app_id" | "app_secret_ciphertext">>(`
+      SELECT app_id, app_secret_ciphertext
+      FROM integration_applications
+      WHERE platform = 'wecom'
+      ORDER BY active DESC, updated_at DESC, created_at DESC, id
+      LIMIT 1
+    `);
+    const legacyApplication = legacy.rows[0];
+    if (!current.rows[0]) {
+      await client.query(`
+        INSERT INTO wecom_authentication_configuration (
+          singleton_key, corp_id, app_secret_ciphertext, public_base_url,
+          callback_mode, relay_callback_url, email_domain
+        ) VALUES ('default', $1, $2, $3, $4, $5, $6)
+      `, [
+        legacyApplication?.app_id || "",
+        legacyApplication?.app_secret_ciphertext || null,
+        runtime.publicBaseUrl,
+        runtime.callbackMode,
+        runtime.callbackMode === "relay" ? runtime.relayCallbackUrl || null : null,
+        runtime.emailDomain,
+      ]);
+    } else if (
+      legacyApplication
+      && !current.rows[0].corp_id
+      && !current.rows[0].app_secret_ciphertext
+    ) {
+      await client.query(`
+        UPDATE wecom_authentication_configuration
+        SET corp_id = $1, app_secret_ciphertext = $2, updated_at = NOW()
+        WHERE singleton_key = 'default'
+      `, [legacyApplication.app_id, legacyApplication.app_secret_ciphertext]);
+    }
+    await client.query(`
+      DELETE FROM employee_connector_bindings
+      WHERE application_id IN (
+        SELECT id FROM integration_applications WHERE platform = 'wecom'
+      )
+    `);
+    await client.query("DELETE FROM integration_applications WHERE platform = 'wecom'");
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  if (legacyRuntime) await removeLegacyWeComAuthenticationSettings();
 }
 
 function encryptionKey() {
@@ -472,7 +546,7 @@ async function migrateLegacyWeComBotIntegrations() {
 
 function normalizePlatform(value: unknown): EnterpriseIntegrationPlatform {
   if (typeof value !== "string" || !allowedPlatforms.has(value as EnterpriseIntegrationPlatform)) {
-    throw new IntegrationStoreError("仅支持飞书、企微和钉钉应用；企微机器人请在连接器管理中维护", 400);
+    throw new IntegrationStoreError("仅支持飞书和钉钉应用；企业微信认证请使用集成管理中的唯一配置，企微机器人请在连接器管理中维护", 400);
   }
   return value as EnterpriseIntegrationPlatform;
 }
@@ -1192,13 +1266,14 @@ async function resolveWeComVisibilityResources(input: {
   const corpGroups = input.groups.filter((group) => WECOM_CORP_GROUP_PATTERN.test(group));
   if (corpGroups.length !== 1) return [];
 
-  const activeWeCom = await getPool().query<{ app_id: string }>(`
-    SELECT app_id
-    FROM integration_applications
-    WHERE platform = 'wecom' AND active
-    LIMIT 1
+  const activeWeCom = await getPool().query<{ corp_id: string }>(`
+    SELECT corp_id
+    FROM wecom_authentication_configuration
+    WHERE singleton_key = 'default'
+      AND corp_id <> ''
+      AND app_secret_ciphertext IS NOT NULL
   `);
-  const corpId = activeWeCom.rows[0]?.app_id;
+  const corpId = activeWeCom.rows[0]?.corp_id;
   if (!corpId) return [];
   const expectedGroup = `wecom:${createHash("sha256").update(corpId, "utf8").digest("hex").slice(0, 12)}`;
   if (corpGroups[0] !== expectedGroup) return [];

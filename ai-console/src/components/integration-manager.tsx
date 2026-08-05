@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Building2,
   CheckCircle2,
   ClipboardPaste,
   LockKeyhole,
@@ -43,7 +42,6 @@ type EditorState = {
 
 const platformIcons: Partial<Record<EnterpriseIntegrationPlatform, typeof MessageSquareShare>> = {
   feishu: MessageSquareShare,
-  wecom: Building2,
   dingtalk: ShieldCheck,
 };
 
@@ -64,9 +62,11 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 export function IntegrationManager({
   initialSnapshot,
   initialError,
+  platform,
 }: {
   initialSnapshot: EnterpriseIntegrationsSnapshot;
   initialError?: string;
+  platform?: "feishu" | "dingtalk";
 }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [editor, setEditor] = useState<EditorState>();
@@ -262,7 +262,7 @@ export function IntegrationManager({
         </p>
       ) : null}
 
-      {snapshot.groups.map((group) => (
+      {snapshot.groups.filter((group) => !platform || group.platform === platform).map((group) => (
         <IntegrationGroup
           group={group}
           onAdd={() => addApplication(group.platform)}
@@ -300,11 +300,11 @@ export function IntegrationManager({
                     />
                   </label>
                   <label className="field-label gateway-channel-field--wide">
-                    <span>{editor.platform === "wecom" ? "企业 ID（CorpID）" : "App ID"}</span>
+                    <span>App ID</span>
                     <input
                       value={editor.appId}
                       onChange={(event) => setEditor((current) => current ? { ...current, appId: event.target.value } : current)}
-                      placeholder={editor.platform === "wecom" ? "填写企业微信的 CorpID" : "填写开放平台应用的 App ID"}
+                      placeholder="填写开放平台应用的 App ID"
                       autoComplete="off"
                     />
                   </label>

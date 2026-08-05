@@ -1,28 +1,28 @@
 import { NextResponse } from "next/server";
 
 import { ConsoleAuthError, requireConsoleAdmin } from "@/lib/server/console-identity";
+import { IntegrationStoreError } from "@/lib/server/integrations";
 import {
-  getWeComAuthenticationSnapshot,
-  readConfig,
-  updateWeComAuthenticationSettings,
+  getWeComAuthenticationConfiguration,
+  updateWeComAuthenticationConfiguration,
   validateWeComAuthenticationSettings,
-} from "@/lib/server/config";
+} from "@/lib/server/wecom-authentication";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function errorResponse(error: unknown, fallback: string) {
-  const status = error instanceof ConsoleAuthError ? error.status : 503;
+  const known = error instanceof ConsoleAuthError || error instanceof IntegrationStoreError;
   return NextResponse.json(
-    { error: error instanceof Error ? error.message : fallback },
-    { status },
+    { error: known ? error.message : fallback },
+    { status: known ? error.status : 503 },
   );
 }
 
 export async function GET() {
   try {
     await requireConsoleAdmin();
-    return NextResponse.json(getWeComAuthenticationSnapshot(await readConfig()));
+    return NextResponse.json(await getWeComAuthenticationConfiguration());
   } catch (error) {
     return errorResponse(error, "读取企业微信认证配置失败");
   }
@@ -48,7 +48,7 @@ export async function PUT(request: Request) {
     );
   }
   try {
-    return NextResponse.json(await updateWeComAuthenticationSettings(validation.value));
+    return NextResponse.json(await updateWeComAuthenticationConfiguration(validation.value));
   } catch (error) {
     return errorResponse(error, "保存企业微信认证配置失败");
   }
