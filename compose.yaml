@@ -125,6 +125,24 @@ services:
       retries: 20
       start_period: 10s
 
+  pomerium-database-init:
+    image: ai-base/postgres-age-pgvector:17
+    restart: "no"
+    environment:
+      PGPASSWORD: ${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}
+    command:
+      - psql
+      - --host=postgres
+      - --username=ai_base
+      - --dbname=ai_base
+      - --set=ON_ERROR_STOP=1
+      - --file=/bootstrap/004-pomerium-databases.sql
+    volumes:
+      - ./deploy/postgres/init/004-pomerium-databases.sql:/bootstrap/004-pomerium-databases.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   llm-gateway:
     build:
       context: .
@@ -480,10 +498,14 @@ services:
       IDP_CLIENT_SECRET: ${POMERIUM_IDP_CLIENT_SECRET:-replace-with-the-external-oidc-client-secret}
       COOKIE_SECRET: ${POMERIUM_COOKIE_SECRET:-f3w8vZzhlwLw1DIXoCaILrswiMeDabDaRcyH6JBMwoc=}
       SHARED_SECRET: ${POMERIUM_SHARED_SECRET:-tq+Rx6zdR8G7iv9SFdiCS1dBGVnug94N+WyOSx1QyCM=}
+      DATABROKER_STORAGE_TYPE: postgres
+      DATABROKER_STORAGE_CONNECTION_STRING: postgresql://ai_base:${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}@postgres:5432/ai_base_pomerium?sslmode=disable
     volumes:
       - ./deploy/pomerium/config.example.yaml:/pomerium/config.yaml:ro
       - ./deploy/pomerium/dev-signing-key.pem:/run/secrets/pomerium-signing-key.pem:ro
     depends_on:
+      pomerium-database-init:
+        condition: service_completed_successfully
       ai-console:
         condition: service_healthy
       open-connector-admin-proxy:
@@ -501,10 +523,14 @@ services:
       IDP_CLIENT_SECRET: ${POMERIUM_IDP_CLIENT_SECRET:-replace-with-the-external-oidc-client-secret}
       COOKIE_SECRET: ${POMERIUM_COOKIE_SECRET:-f3w8vZzhlwLw1DIXoCaILrswiMeDabDaRcyH6JBMwoc=}
       SHARED_SECRET: ${POMERIUM_SHARED_SECRET:-tq+Rx6zdR8G7iv9SFdiCS1dBGVnug94N+WyOSx1QyCM=}
+      DATABROKER_STORAGE_TYPE: postgres
+      DATABROKER_STORAGE_CONNECTION_STRING: postgresql://ai_base:${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}@postgres:5432/ai_base_pomerium_wework?sslmode=disable
     volumes:
       - ./deploy/pomerium/wework-config.example.yaml:/pomerium/config.yaml:ro
       - ./deploy/pomerium/dev-signing-key.pem:/run/secrets/pomerium-signing-key.pem:ro
     depends_on:
+      pomerium-database-init:
+        condition: service_completed_successfully
       ai-console:
         condition: service_healthy
 

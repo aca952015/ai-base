@@ -58,7 +58,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 评测 | Promptfoo | 黄金集、回归、安全、红队与发布门禁 | Docker profile / CI 按需运行 |
 | 可观测 | OpenTelemetry + Jaeger v2 | Agent、模型、检索、工具的统一 Trace | Trace 不替代合规审计账本 |
 | 外部认证中心 | 企业 OIDC / 独立轻量 IdP | 用户、凭据、MFA 与 OIDC Client | 不属于 AI Base Stack，由身份团队独立部署和运维 |
-| 身份边界 | Pomerium Core + 外部 OIDC | 登录、反向代理和路由策略 | Pomerium 不是 IdP，不保存用户密码 |
+| 身份边界 | Pomerium Core + 外部 OIDC | 登录、持久化浏览器会话、反向代理和路由策略 | Pomerium 不是 IdP，不保存用户密码；普通与企微入口使用隔离的 Data Broker 数据库 |
 | 密钥配置 | Console 数据卷；生产发布可接 SOPS + age | 模型渠道与 MCP 上游 Key 独立文件、版本化配置和受控发布 | API/控制台不回显明文；生产环境加密静态存储 |
 
 ## Open Connector 边界
@@ -95,6 +95,8 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。受控共享资源保存具名连接引用、授权模式与 Action 白名单，不复制 Bot Secret。`wecom_visibility` 资源只能用于 `wecom_bot`：解析器先用唯一企微认证配置中的 CorpID 校验 Token 中唯一企业群组，再调用对应具名机器人的 `get_userlist`，只比较 UserID 哈希；60 秒缓存到期或查询异常后不使用旧结果。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，个人绑定解析只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
 
 企业微信不是标准 OIDC Provider。独立 `wecom-auth-bridge` 使用 `snsapi_base` 获取企业 UserID，派生稳定 Subject，并作为 Dex 的 OIDC Connector 上游；Pomerium 与 MCP OAuth Broker 仍只信任 Dex。企微 CorpID、Secret、公开认证入口、直接/中继回调方式和企业邮箱域由管理员在 `/integrations/wecom-authentication` 的唯一“企业微信认证”表单维护，并保存在 PostgreSQL 单例表 `wecom_authentication_configuration`；`/integrations` 只提供配置摘要和二级页入口。Secret 仍使用 AES-256-GCM 加密。桥接服务通过独立 Bearer Token 的 Compose 内网接口按请求读取这一条配置且不缓存，因此新登录立即使用最新设置；配置不完整或内部接口失败时关闭失败。浏览器与 Dex 均不接触 Secret。桥接 Access Token 短期有效，Refresh Token 哈希保存在独立 Volume 并按 90 天滑动续期。企业微信工作台使用 `/auth/wework` 独立入口：Caddy 将其导向专用 Pomerium 实例，该实例只为 Dex 添加 `connector_id=wecom`，因此跳过登录方式选择；普通 Console 登录入口与其他认证方式保持不变。升级时，旧企微集成凭据与 Console 配置文件中的运行参数在事务边界内迁移到单例记录，旧来源随后删除，避免双写和优先级歧义。
+
+普通入口与企业微信入口的 Pomerium 会话均为 14 小时固定上限，并分别通过 PostgreSQL Data Broker 写入 `ai_base_pomerium` 与 `ai_base_pomerium_wework` 数据库。容器或 Docker 重启不会清空会话；两个入口不共享 Data Broker，避免不同认证路由互相消费会话记录。数据库由一次性 `pomerium-database-init` 服务幂等创建，Pomerium 负责维护各自的内部表。删除 PostgreSQL 数据卷、轮换 Cookie/Shared Secret、上游 Token 刷新失败、主动退出或策略撤权仍会提前终止会话。Data Broker 记录不会由 Pomerium 再做静态加密，生产部署必须依赖受保护且加密的 PostgreSQL 存储。
 
 `WECOM_AUTH_BRIDGE_CONFIG_TOKEN`、`WECOM_OIDC_CLIENT_SECRET`、OIDC issuer/client 绑定与签名密钥属于认证启动信任根，继续由部署密钥提供，不能依赖登录后的 Console 页面。`WECOM_AUTH_PUBLIC_BASE_URL`、`WECOM_AUTH_CALLBACK_URL` 与 `WECOM_EMAIL_DOMAIN` 不再作为 bridge 环境变量；唯一企微配置的默认地址只支持 loopback 本机验证，正式部署由已认证管理员改为可达地址。
 

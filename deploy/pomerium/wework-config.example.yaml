@@ -5,6 +5,7 @@ authenticate_service_url: https://authenticate-wework.localhost.pomerium.io:8443
 idp_scopes: openid,profile,email
 idp_request_params:
   connector_id: wecom
+cookie_expire: 14h
 signing_key_file: /run/secrets/pomerium-signing-key.pem
 signout_redirect_url: https://ai-console.localhost.pomerium.io:8443
 

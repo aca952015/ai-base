@@ -57,6 +57,8 @@ POMERIUM_IDP_CLIENT_SECRET=replace-with-the-real-client-secret
 
 Dex 中的 `ai-base-pomerium` 客户端需要同时登记 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback` 和 `https://authenticate-wework.localhost.pomerium.io:8443/oauth2/callback`。普通入口保留 Dex 的认证方式选择；`/auth/wework` 转到隔离的 Pomerium 入口，由静态 `connector_id=wecom` 直接进入企业微信认证。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域；更换企业域名时同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml) 和 [`deploy/pomerium/wework-config.example.yaml`](./deploy/pomerium/wework-config.example.yaml)。Pomerium 本机入口使用开发证书和仓库内的本地签名键；正式部署必须替换签名键，并配置受信任证书、正式域名和企业 OIDC。AI Console 会验证 Pomerium 签名的 JWT Assertion、有效期和两个受信入口的 audience，不信任可由客户端直接伪造的身份头。
 
+普通入口与企业微信直达入口的浏览器会话上限均显式设置为 14 小时。两套 Pomerium Data Broker 分别使用现有 PostgreSQL 服务中的 `ai_base_pomerium` 与 `ai_base_pomerium_wework` 数据库保存会话，因此容器重启或普通 `docker compose down` / `up` 不再要求员工提前重新登录；两个入口的会话数据互不共享。`pomerium-database-init` 会在启动时以幂等方式补齐数据库，兼容空库和已有数据卷。`docker compose down -v`、删除 PostgreSQL 数据卷，或者轮换 Pomerium Cookie/Shared Secret 仍会使已有会话失效。Data Broker 记录包含登录会话和身份提供方 Token 状态，生产环境必须保护 PostgreSQL、启用静态加密并纳入备份策略。
+
 ### 企业微信登录桥接
 
 `wecom-auth-bridge` 是独立 Go 容器，作为 Dex 的上游 OIDC Provider。员工从 Console 或 MCP 登录时在 Dex 选择“企业微信”，桥接服务执行企业微信 `snsapi_base` 网页授权，使用返回的企业 `UserID` 生成稳定 OIDC Subject，再由 Dex 统一签发 AI Base 身份。Pomerium、MCP Access Gateway 与账号绑定仍只信任 Dex，因此同一员工在浏览器与 MCP 客户端中保持同一身份边界。
@@ -276,7 +278,7 @@ docker compose --profile quality up -d promptfoo
 
 ## 本机验证与生产边界
 
-Compose 内置的数据库密码、OpenConnector token、Pomerium Client Secret、开发签名键和加密键只用于 loopback 本机验证。共享主机或正式环境必须从 [`.env.example`](./.env.example) 创建 `.env` 并替换全部值，同时替换 `deploy/pomerium/dev-signing-key.pem` 及对应公钥挂载；OpenConnector 与 AI Console 的加密键都必须稳定备份，丢失后无法恢复已经加密的凭据。
+Compose 内置的数据库密码、OpenConnector token、Pomerium Client Secret、开发签名键和加密键只用于 loopback 本机验证。共享主机或正式环境必须从 [`.env.example`](./.env.example) 创建 `.env` 并替换全部值，同时替换 `deploy/pomerium/dev-signing-key.pem` 及对应公钥挂载；OpenConnector 与 AI Console 的加密键都必须稳定备份，丢失后无法恢复已经加密的凭据。Pomerium Data Broker 同样属于敏感认证状态，必须限制数据库访问、加密静态存储并纳入备份策略。
 
 - OpenConnector 默认禁止通用 provider proxy，避免 Agent 绕过审阅过的 Action。
 - `MCP_CONNECTOR_BINDING_RESOLVER_TOKEN` 只用于 MCP Access Gateway 到 AI Console 的 Compose 内网查询，正式环境必须替换默认值。
