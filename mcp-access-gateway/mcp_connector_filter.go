@@ -3,11 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 )
 
@@ -55,6 +53,7 @@ func (g *mcpGateway) filterConnectorRequest(
 		if !batchContainsProtectedConnectorCall(typed) {
 			return mcpRequestFilterResult{body: body}
 		}
+		recordProtectedBatchDecisions(ctx, typed, caller)
 		return mcpRequestFilterResult{
 			handled:       true,
 			localResponse: protectedBatchErrorResponses(typed),
@@ -70,6 +69,7 @@ func (g *mcpGateway) filterSingleConnectorCall(
 	request map[string]any,
 	caller identity,
 ) mcpRequestFilterResult {
+	ctx = messageContext(ctx, request["id"])
 	tool, arguments, protected := protectedConnectorToolCall(request)
 	if !protected {
 		return mcpRequestFilterResult{body: original}
@@ -78,9 +78,11 @@ func (g *mcpGateway) filterSingleConnectorCall(
 	if tool == "list_connections" {
 		bindings, err := g.resolver.list(ctx, caller)
 		if err != nil {
+			toolErr := resolverToolError(err)
+			recordConnectorDecision(ctx, caller, "__other__", "", tool, "__other__", "deny", toolErr.code)
 			return mcpRequestFilterResult{
 				handled:       true,
-				localResponse: connectorToolErrorResponse(request["id"], resolverToolError(err)),
+				localResponse: connectorToolErrorResponse(request["id"], toolErr),
 			}
 		}
 		if service, _ := arguments["service"].(string); strings.TrimSpace(service) != "" {
@@ -101,6 +103,7 @@ func (g *mcpGateway) filterSingleConnectorCall(
 	actionID, _ := arguments["actionId"].(string)
 	service, ok := serviceFromActionID(actionID)
 	if !ok {
+		recordConnectorDecision(ctx, caller, "__other__", "", tool, "__other__", "deny", "invalid_action_id")
 		return mcpRequestFilterResult{
 			handled: true,
 			localResponse: connectorToolErrorResponse(
@@ -113,7 +116,7 @@ func (g *mcpGateway) filterSingleConnectorCall(
 		}
 	}
 	if _, denied := hardDeniedConnectorActions[strings.TrimSpace(actionID)]; denied {
-		auditConnectorDecision(caller, service, "", actionID, "deny", "system_hard_deny")
+		recordConnectorDecision(ctx, caller, service, "", tool, actionID, "deny", "system_hard_deny")
 		return mcpRequestFilterResult{
 			handled: true,
 			localResponse: connectorToolErrorResponse(
@@ -139,7 +142,7 @@ func (g *mcpGateway) filterSingleConnectorCall(
 		strings.TrimSpace(actionID),
 	)
 	if err != nil {
-		auditConnectorDecision(caller, service, requestedConnectionName, actionID, "deny", resolverToolError(err).code)
+		recordConnectorDecision(ctx, caller, service, "", tool, actionID, "deny", resolverToolError(err).code)
 		return mcpRequestFilterResult{
 			handled:       true,
 			localResponse: connectorToolErrorResponse(request["id"], resolverToolError(err)),
@@ -147,7 +150,7 @@ func (g *mcpGateway) filterSingleConnectorCall(
 	}
 	if binding.AccessMode == "controlled_shared" {
 		if !binding.ActionRestricted || !containsString(binding.AllowedActionIDs, strings.TrimSpace(actionID)) {
-			auditConnectorDecision(caller, service, binding.ConnectionName, actionID, "deny", "action_not_authorized")
+			recordConnectorDecision(ctx, caller, service, "", tool, actionID, "deny", "action_not_authorized")
 			return mcpRequestFilterResult{
 				handled: true,
 				localResponse: connectorToolErrorResponse(
@@ -160,7 +163,11 @@ func (g *mcpGateway) filterSingleConnectorCall(
 			}
 		}
 	}
-	auditConnectorDecision(caller, service, binding.ConnectionName, actionID, "allow", binding.AccessMode)
+	authorizedService := strings.TrimSpace(binding.Service)
+	if authorizedService == "" {
+		authorizedService = service
+	}
+	recordConnectorDecision(ctx, caller, authorizedService, binding.ConnectionName, tool, actionID, "allow", binding.AccessMode)
 
 	// The authenticated employee-to-connector mapping is authoritative. Public
 	// no-auth providers intentionally use their virtual default connection;
@@ -183,25 +190,34 @@ func (g *mcpGateway) filterSingleConnectorCall(
 	return mcpRequestFilterResult{body: updated}
 }
 
-func auditConnectorDecision(
-	caller identity,
-	service string,
-	connectionName string,
-	actionID string,
-	decision string,
-	reason string,
-) {
-	fingerprint := sha256.Sum256([]byte(caller.issuer + "\x00" + caller.subject))
-	slog.Info(
-		"connector authorization decision",
-		"principal", fmt.Sprintf("%x", fingerprint[:8]),
-		"client_id", caller.clientID,
-		"service", service,
-		"connection", connectionName,
-		"action", actionID,
-		"decision", decision,
-		"reason", reason,
-	)
+func recordProtectedBatchDecisions(ctx context.Context, batch []any, caller identity) {
+	for _, item := range batch {
+		request, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		tool, arguments, protected := protectedConnectorToolCall(request)
+		if !protected {
+			continue
+		}
+		actionID, _ := arguments["actionId"].(string)
+		service, valid := serviceFromActionID(actionID)
+		normalizedAction := strings.TrimSpace(actionID)
+		if !valid {
+			service = "__other__"
+			normalizedAction = "__other__"
+		}
+		recordConnectorDecision(
+			messageContext(ctx, request["id"]),
+			caller,
+			service,
+			"",
+			tool,
+			normalizedAction,
+			"deny",
+			"protected_batch_not_supported",
+		)
+	}
 }
 
 func containsString(values []string, expected string) bool {

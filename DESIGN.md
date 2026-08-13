@@ -3,9 +3,9 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-08-05
+- Last refreshed: 2026-08-10
 - Primary product surfaces: AI 基础设施总览、组件门户、Agent 管理、账号绑定、配置指南、模型配置、MCP配置、集成管理、连接器配置、能力管理、数据与知识、评测、可观测、认证管理、系统设置及组件二级设置
-- Evidence reviewed: `/Users/aca/dev/ai-fde/.omx/plans/sme-agent-infrastructure-v0.1.md`、`ai-console/src/app/(console)`、`ai-console/src/components`、`ai-console/src/lib/server/component-data.ts`、`vendor/open-connector/src/providers/wecom_bot`、Envoy AI Gateway 1.0 standalone 配置契约、用户确认的 Next.js 技术栈与工具链边界
+- Evidence reviewed: `/Users/aca/dev/ai-fde/.omx/plans/sme-agent-infrastructure-v0.1.md`、`.omx/plans/model-mcp-observability-expansion.md`、`docs/observability-schema.md`、`ai-console/src/app/(console)`、`ai-console/src/components`、`ai-console/src/lib/server/observability.ts`、`vendor/open-connector/src/providers/wecom_bot`、Envoy AI Gateway 1.0 standalone 配置契约、用户确认的 Next.js 技术栈与工具链边界
 
 ## Brand
 
@@ -16,7 +16,7 @@
 ## Product goals
 
 - Goals: 让平台管理员在一分钟内判断系统健康；通过一个 Portal 找到、打开和配置整套组件；让 Agent 开发者管理模型、工具、连接和知识；让业务负责人看到质量、成本和影响
-- Non-goals: 首版不提供通用 Docker/Kubernetes 生命周期编排；不在浏览器回显密钥；Envoy AI 管理覆盖模型渠道和 MCP 上游路由，不扩展为成本分析、流量分析或评测产品；AI Console 只承接 Open Connector 的高频连接生命周期，不复制其 Action 调试、Runtime Token、策略和运行日志能力；不复制 Jaeger、Promptfoo 与 LightRAG 的专业管理能力
+- Non-goals: 首版不提供通用 Docker/Kubernetes 生命周期编排；不在浏览器回显密钥；Envoy AI 管理覆盖模型渠道和 MCP 上游路由，不扩展为金额成本或评测产品；AI Console 只承接 Open Connector 的高频连接生命周期，不复制其 Action 调试、Runtime Token、策略和运行日志能力；可观测页提供安全治理摘要与有界诊断样本，不复制 Jaeger waterfall、任意 tag/event 查询，也不把 Trace 冒充零丢失账本；不复制 Promptfoo 与 LightRAG 的专业管理能力
 - Success signals: 关键组件状态可见；全局能力网关的功能入口状态可见；每个组件都能从 Portal 进入工作台或对应的内部管理页；模型渠道与 MCP 服务可以保存、测试并自动应用到 Envoy AI；Open Connector Provider 可搜索、连接凭据可按上游 Schema 动态配置、OAuth 可完成授权；异常能定位到受影响 Agent；所有高风险动作有明确确认和审计语义
 
 ## Personas and jobs
@@ -52,7 +52,7 @@
 ## Components
 
 - Existing components to reuse: AppShell、PageHeader、SectionCard、StatusPill、ServiceTable、Button 和全局语义 token
-- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager、IntegrationManager、ConnectorManager、McpClientSetupGuide、LightRagSettingsForm、WeComAuthSettingsForm；ComponentPortal 的资源卡片是全局唯一卡片视觉基准，分组容器、摘要/指标、资源列表、可操作设置和抽屉内工具卡片统一复用其石墨渐变卡面、细冷灰边框、14px 圆角、轻微内高光与克制阴影 token，仅按信息密度调整尺寸和内边距；模型、MCP、集成和连接器管理区沿用组件门户的“分组标题 + 直接卡片网格”结构，不再用 SectionCard 包裹整个资源列表；系统设置作为配置目录，组件专属配置只保留 LightRAG 的 `/settings/lightrag`；企业微信系统认证归属集成管理，`/integrations` 使用摘要入口链接到独立二级页 `/integrations/wecom-authentication`，二级页使用唯一单例表单集中维护 CorpID、App Secret、公开入口、直接/中继回调方式和企业邮箱域，清楚说明新登录立即生效，密钥只显示已配置状态，OIDC Client Secret、内部 Token、issuer/client 绑定和签名密钥不进入页面；飞书与钉钉继续使用应用分组和编辑抽屉，企微不再作为可新增、切换或删除的普通应用；LightRAG 模型选择项只读取大模型网关中已启用渠道发布的模型，不允许在该页新建渠道或手工输入未发布模型；保存 LightRAG 配置时由 AI Console 调用容器内配置控制面并重启 LightRAG，页面必须明确展示应用状态和失败回滚结果；企微机器人在连接器配置中作为具名受控共享连接维护，连接编辑抽屉同时选择静态 Action 白名单，连接策略抽屉以只读说明展示“可信企微身份 + get_userlist 自动筛选”且不显示员工名单输入；员工账号绑定页不生成企微系统应用或机器人绑定卡片，只显示自动筛选说明和管理员已启用的共享机器人数；飞书与钉钉应用配置包含应用名称、App ID、App Secret 和可选备注，紧凑资源卡片展示应用名称、App ID、最多两行备注，并在底部弱化显示密钥状态和更新时间；员工账号绑定页为管理员实际配置的个人集成应用生成独立卡片，同平台多个应用并列展示，绑定状态按应用归属；绑定卡片保持紧凑，只显示应用名称、所属平台、绑定状态和操作，不重复展示 App ID 与备注；未启用或暂不支持个人 OAuth 的应用保留可见并明确禁用原因；连接器管理中的“用户绑定”卡片必须区分 AI Base 本地账户与外部平台账户，卡片直接展示本地账户姓名和邮箱，详情抽屉同时展示本地账户与外部账号字段，不展示内部主体标识；配置指南作为独立模块同时对管理员和员工开放，通过“通用配置/客户端配置”标签切换内容，通用配置展示公开 MCP 地址与可导入 JSON，客户端配置允许用户在 WorkBuddy、Cursor、Codex 等常用客户端间自主切换并逐项复制，所有客户端均为平等示例，任何配置都不得包含访问令牌或密钥；点击卡片进入编辑，不展示存储实现或重复操作控件；侧栏使用系统蓝整行选中态和彩色图标底座，不添加无操作意义的窗口控制装饰；侧栏底部账号触发区展示账号、角色 Badge 和邮箱，点击后向上打开石墨账号操作菜单；资源状态使用小型状态圆点和文字；ComponentPortal 将 Caddy 全局能力网关作为功能入口组件展示，但不将其误作 UI 网关；AppShell 使用“工作台/设置”分组导航和无顶部栏的全局内容布局，所有控制台路由均从窗口内容区顶部开始，不为产品名、搜索或环境状态 eyebrow 小标签；模型、MCP、集成和连接器配置分别使用独立页面、卡片管理区和占满视口高度的右侧编辑抽屉，抽屉头部和底部固定、中间内容独立滚动；连接器抽屉先选择 Open Connector Provider，再从其 `auth` Schema 选择认证类型并动态生成凭据或 OAuth 表单；Provider 在编辑时固定，认证类型可切换；Open Connector MCP 使用带“系统内置”标识的只读卡片；总览和管理页面读取真实数据快照；空状态明确标注未配置项
+- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager、IntegrationManager、ConnectorManager、McpClientSetupGuide、LightRagSettingsForm、WeComAuthSettingsForm、ObservabilitySummary、ObservabilityCallsTable、TraceDetail；ComponentPortal 的资源卡片是全局唯一卡片视觉基准，分组容器、摘要/指标、资源列表、可操作设置和抽屉内工具卡片统一复用其石墨渐变卡面、细冷灰边框、14px 圆角、轻微内高光与克制阴影 token，仅按信息密度调整尺寸和内边距；模型、MCP、集成和连接器管理区沿用组件门户的“分组标题 + 直接卡片网格”结构，不再用 SectionCard 包裹整个资源列表；可观测页按模型/MCP 分区展示固定指标与最多 50 条安全诊断样本，15m/1h/24h/7d 只影响规范摘要，Trace 搜索最多 24 小时并明确截断；Trace 详情只展示白名单时间线，完整 waterfall 通过受 Pomerium 管理员保护的 HTTPS Jaeger 新窗口打开；模型错误率或 TTFT 未被 probe 证明时显示“不可用”，不以估算值或 Trace 数补齐；其余资源与管理交互继续遵守现有组件和抽屉约定
 - Integration directory: `/integrations` 只显示企业微信、飞书、钉钉三条带真实状态的目录入口；飞书与钉钉分别在 `/integrations/feishu`、`/integrations/dingtalk` 复用平台过滤后的 `IntegrationManager`，保存或重新加载后不得串入另一个平台的应用卡片。
 - AppShell sidebar behavior: 参考 Codex App 使用固定品牌区、独立滚动导航区和固定账号区；导航区使用低对比度细滚动条并与主内容滚动完全分离；固定账号区以“账号名 + 管理员/员工 Badge / 邮箱”两行呈现，账号菜单从底部向上展开为紧凑操作列表，账户信息、安全和费用在能力落地前以“即将开放”占位，设置遵守管理员权限，退出登录保持可用
 - Variants and states: default/hover/focus/disabled；healthy/degraded/offline/unconfigured/running
@@ -82,6 +82,7 @@
 - WeCom auth apply: 在集成管理保存 CorpID、可选的新 App Secret、公开入口、回调方式和企业邮箱域后，页面通过 `aria-live` 明确提示新登录立即生效；编辑时不回显 Secret，留空保留已加密值；服务端 Schema 验证失败时保留草稿并显示具体字段错误，中继模式未填写绝对 HTTP(S) 地址时禁止提交，正式公网地址提示使用 HTTPS
 - Disabled: 解释为什么不可操作；系统托管的 Open Connector 与企业知识库 RAG MCP 不提供启停、编辑和删除控件，仅保留连接测试和工具查看
 - Offline/slow network, if applicable: 健康检查超时后保留最后成功时间并标记“状态未知”
+- Observability degradation: Metrics 或 Trace 单侧不可用时保留另一侧结果并使用 `aria-live` 说明影响；无诊断样本区分尚未产生、导出失败与筛选无结果；100% sampling 不写成零丢失承诺
 
 ## Content voice
 
@@ -95,7 +96,7 @@
 - Design-token constraints: token 集中在 `globals.css`；卡片必须使用 `--card-*` 语义 token，不在页面组件中复制阴影、边框或圆角值；不引入 Tailwind 或重量级 UI 套件
 - Performance constraints: 首屏不加载大型图表库；默认 Server Component，仅交互区域使用 Client Component
 - Compatibility constraints: Node.js 22；现代 Chrome、Edge、Firefox、Safari；Envoy AI Gateway 模型与 MCP 配置使用 v1beta1 原生资源并通过只读共享卷注入
-- Test/screenshot expectations: ESLint、TypeScript、Vitest、Next production build；桌面浏览器为主验证；`/model-channels`、`/mcp`、`/integrations`、`/integrations/wecom-authentication`、`/integrations/feishu`、`/integrations/dingtalk` 与 `/connectors` 的卡片布局、平台隔离、表单草稿、密钥不回显、动态字段、OAuth 授权和保存后生效完成交互 smoke test
+- Test/screenshot expectations: ESLint、TypeScript、Vitest、Next production build；桌面浏览器为主验证；`/observability` 与 `/observability/traces/[traceId]` 需覆盖管理员权限、loading/empty/error/offline、截断、安全字段白名单、HTTPS Jaeger 深链、键盘和 360/768/1280px；`/model-channels`、`/mcp`、`/integrations`、`/integrations/wecom-authentication`、`/integrations/feishu`、`/integrations/dingtalk` 与 `/connectors` 继续覆盖卡片布局、平台隔离、表单草稿、密钥不回显、动态字段、OAuth 授权和保存后生效
 
 ## Open questions
 

@@ -95,7 +95,7 @@ export const portalEntries: PortalEntry[] = [
   {
     id: "jaeger",
     category: "governance",
-    workspaceUrl: "http://jaeger.localhost:8080",
+    workspaceUrl: "https://jaeger.localhost.pomerium.io:8443",
     workspaceLabel: "打开 Trace 工作台",
     managePath: "/observability",
     manageLabel: "管理可观测能力",

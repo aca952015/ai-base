@@ -5,17 +5,20 @@ import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib.metadata import version
+from typing import Protocol
 from uuid import uuid4
 
 import psycopg
 from fastapi import FastAPI, HTTPException
 from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel
+
+from app.observability import (
+    configure_observability,
+    current_trace_ids,
+    shutdown_observability,
+)
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -30,19 +33,20 @@ REGISTERED_AGENTS = {
     }
 }
 
+RUNTIME_EVENT_MIGRATIONS = (
+    "ALTER TABLE runtime_events ADD COLUMN IF NOT EXISTS trace_id text",
+    "ALTER TABLE runtime_events ADD COLUMN IF NOT EXISTS span_id text",
+    "ALTER TABLE runtime_events ADD COLUMN IF NOT EXISTS run_id uuid",
+)
 
-def configure_tracing() -> None:
-    endpoint = os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
-    if not endpoint:
-        return
 
-    provider = TracerProvider(
-        resource=Resource.create(
-            {"service.name": os.environ.get("OTEL_SERVICE_NAME", "ai-base-agent-runtime")}
-        )
-    )
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
-    trace.set_tracer_provider(provider)
+class MigrationCursor(Protocol):
+    def execute(self, statement: str) -> object: ...
+
+
+def migrate_runtime_events(cursor: MigrationCursor) -> None:
+    for statement in RUNTIME_EVENT_MIGRATIONS:
+        cursor.execute(statement)
 
 
 def initialize_database() -> None:
@@ -60,6 +64,7 @@ def initialize_database() -> None:
                 )
                 """
             )
+            migrate_runtime_events(cursor)
         connection.commit()
 
 
@@ -90,12 +95,12 @@ def database_snapshot() -> dict[str, object]:
     }
 
 
-def runtime_events_snapshot(limit: int = 50) -> list[dict[str, str]]:
+def runtime_events_snapshot(limit: int = 50) -> list[dict[str, str | None]]:
     with psycopg.connect(DATABASE_URL) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT id, event_type, agent_id, created_at
+                SELECT id, event_type, agent_id, trace_id, span_id, run_id, created_at
                 FROM runtime_events
                 ORDER BY created_at DESC
                 LIMIT %s
@@ -109,8 +114,11 @@ def runtime_events_snapshot(limit: int = 50) -> list[dict[str, str]]:
             "eventType": event_type,
             "agentId": agent_id,
             "createdAt": created_at.isoformat(),
+            "traceId": trace_id,
+            "spanId": span_id,
+            "runId": str(run_id) if run_id else None,
         }
-        for event_id, event_type, agent_id, created_at in rows
+        for event_id, event_type, agent_id, trace_id, span_id, run_id, created_at in rows
     ]
 
 
@@ -153,9 +161,10 @@ def agents_snapshot() -> list[dict[str, object]]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    configure_tracing()
+    provider = configure_observability()
     await asyncio.to_thread(initialize_database)
     yield
+    shutdown_observability(provider)
 
 
 app = FastAPI(
@@ -220,31 +229,51 @@ async def runtime_events() -> dict[str, object]:
 
 
 @app.post("/v1/demo-runs", status_code=201)
-async def create_demo_run(request: DemoRunRequest) -> dict[str, str]:
+async def create_demo_run(request: DemoRunRequest) -> dict[str, str | None]:
     run_id = uuid4()
     tracer = trace.get_tracer("ai-base.demo")
 
-    def write_event() -> None:
+    def write_event() -> tuple[str | None, str | None]:
         with tracer.start_as_current_span(
             "agent.demo-run",
-            attributes={"agent.id": request.agent_id, "run.id": str(run_id)},
+            attributes={
+                "agent.id": request.agent_id,
+                "run.id": str(run_id),
+                "run.kind": "demo",
+            },
         ):
+            trace_id, span_id = current_trace_ids()
             with psycopg.connect(DATABASE_URL) as connection:
                 with connection.cursor() as cursor:
                     cursor.execute(
-                        "INSERT INTO runtime_events (id, event_type, agent_id) VALUES (%s, %s, %s)",
-                        (run_id, "demo-run", request.agent_id),
+                        """
+                        INSERT INTO runtime_events
+                            (id, event_type, agent_id, trace_id, span_id, run_id)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            run_id,
+                            "demo-run",
+                            request.agent_id,
+                            trace_id,
+                            span_id,
+                            run_id,
+                        ),
                     )
                 connection.commit()
+            return trace_id, span_id
 
     try:
-        await asyncio.to_thread(write_event)
+        trace_id, span_id = await asyncio.to_thread(write_event)
     except psycopg.Error as error:
         raise HTTPException(status_code=503, detail="could not record demo run") from error
 
     return {
         "id": str(run_id),
         "agentId": request.agent_id,
+        "runId": str(run_id),
+        "traceId": trace_id,
+        "spanId": span_id,
         "status": "recorded",
         "createdAt": datetime.now(UTC).isoformat(),
     }

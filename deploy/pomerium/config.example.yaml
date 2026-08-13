@@ -24,3 +24,14 @@ routes:
           and:
             - domain:
                 is: bluetron.cn
+
+  - from: https://jaeger.localhost.pomerium.io:8443
+    to: http://jaeger:16686
+    pass_identity_headers: false
+    policy:
+      - allow:
+          and:
+            - domain:
+                is: bluetron.cn
+            - email:
+                is: admin@bluetron.cn

@@ -26,6 +26,13 @@ func main() {
 		os.Exit(1)
 	}
 	gateway := newMCPGateway(cfg, newOIDCTokenVerifier(cfg))
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := gateway.observe.shutdown(shutdownCtx); err != nil {
+			slog.Warn("OpenTelemetry shutdown incomplete", "error", err)
+		}
+	}()
 	server := &http.Server{
 		Addr:              cfg.listenAddress,
 		Handler:           applicationRoutes(gateway, broker),

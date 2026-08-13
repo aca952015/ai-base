@@ -155,6 +155,7 @@ async function probeEmbeddingDimension(model: string) {
     headers: {
       Authorization: "Bearer ai-base-internal",
       "Content-Type": "application/json",
+      "X-AI-Base-Traffic-Origin": "management_probe",
     },
     body: JSON.stringify({ model, input: "dimension probe" }),
     cache: "no-store",

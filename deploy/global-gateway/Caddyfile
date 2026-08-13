@@ -25,6 +25,35 @@ http://:8080 {
 		@models path /v1 /v1/*
 		handle @models {
 			reverse_proxy llm-gateway:1975 {
+				header_up X-AI-Base-Traffic-Origin external_gateway
+				header_up -traceparent
+				header_up -tracestate
+				header_up -baggage
+				header_up -b3
+				header_up -x-b3-traceid
+				header_up -x-b3-spanid
+				header_up -x-b3-parentspanid
+				header_up -x-b3-sampled
+				header_up -x-b3-flags
+				header_up -x-request-id
+				header_up -x-client-trace-id
+				header_up -x-envoy-force-trace
+				header_up -uber-trace-id
+				header_up -x-ot-span-context
+				header_up -ot-tracer-traceid
+				header_up -ot-tracer-spanid
+				header_up -ot-tracer-sampled
+				header_up -grpc-trace-bin
+				header_up -x-cloud-trace-context
+				header_up -x-goog-cloud-trace-context
+				header_up -x-amzn-trace-id
+				header_up -agent-session-id
+				header_up -x-session-id
+				header_up -session-id
+				header_up -x-user-id
+				header_up -x-auth-request-user
+				header_up -x-auth-request-email
+				header_up -x-forwarded-user
 				flush_interval -1
 			}
 		}
@@ -42,6 +71,35 @@ http://:8080 {
 		@mcp path /mcp /mcp/*
 		handle @mcp {
 			reverse_proxy mcp-access-gateway:8081 {
+				header_up -x-ai-base-traffic-origin
+				header_up -traceparent
+				header_up -tracestate
+				header_up -baggage
+				header_up -b3
+				header_up -x-b3-traceid
+				header_up -x-b3-spanid
+				header_up -x-b3-parentspanid
+				header_up -x-b3-sampled
+				header_up -x-b3-flags
+				header_up -x-request-id
+				header_up -x-client-trace-id
+				header_up -x-envoy-force-trace
+				header_up -uber-trace-id
+				header_up -x-ot-span-context
+				header_up -ot-tracer-traceid
+				header_up -ot-tracer-spanid
+				header_up -ot-tracer-sampled
+				header_up -grpc-trace-bin
+				header_up -x-cloud-trace-context
+				header_up -x-goog-cloud-trace-context
+				header_up -x-amzn-trace-id
+				header_up -agent-session-id
+				header_up -x-session-id
+				header_up -session-id
+				header_up -x-user-id
+				header_up -x-auth-request-user
+				header_up -x-auth-request-email
+				header_up -x-forwarded-user
 				flush_interval -1
 			}
 		}
@@ -103,29 +161,15 @@ http://:8080 {
 			}
 		}
 
-		@jaeger path /jaeger /jaeger/*
-		handle @jaeger {
-			uri strip_prefix /jaeger
-			reverse_proxy jaeger:16686
-		}
-
 		@promptfoo path /promptfoo /promptfoo/*
 		handle @promptfoo {
 			uri strip_prefix /promptfoo
 			reverse_proxy promptfoo:3000
 		}
 
-		@otel path /otel /otel/*
-		handle @otel {
-			uri strip_prefix /otel
-			reverse_proxy jaeger:4318 {
-				flush_interval -1
-			}
-		}
-
 		handle / {
 			header Content-Type application/json
-			respond `{"service":"ai-base-global-gateway","routes":{"models":"/v1","mcp":"/mcp","mcpOAuth":"/oauth","wecomOIDC":"/wecom-oidc","rag":"/rag","runtime":"/runtime","connector":"/connector","knowledge":"/knowledge","jaeger":"/jaeger","promptfoo":"/promptfoo","otelHttp":"/otel/v1/traces"}}`
+			respond `{"service":"ai-base-global-gateway","routes":{"models":"/v1","mcp":"/mcp","mcpOAuth":"/oauth","wecomOIDC":"/wecom-oidc","rag":"/rag","runtime":"/runtime","connector":"/connector","knowledge":"/knowledge","promptfoo":"/promptfoo"}}`
 		}
 
 		handle {
@@ -148,16 +192,13 @@ http://knowledge.localhost:8080 {
 	}
 }
 
-http://jaeger.localhost:8080 {
-	reverse_proxy jaeger:16686
-}
-
 http://promptfoo.localhost:8080 {
 	reverse_proxy promptfoo:3000
 }
 
 https://authenticate.localhost.pomerium.io:8443,
 https://ai-console.localhost.pomerium.io:8443,
+https://jaeger.localhost.pomerium.io:8443,
 https://open-connector.localhost.pomerium.io:8443 {
 	tls internal
 

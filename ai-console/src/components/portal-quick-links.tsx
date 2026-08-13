@@ -5,7 +5,7 @@ const quickLinks = [
   { name: "大模型网关", product: "配置模型渠道", url: "/model-channels", icon: BrainCircuit, external: false },
   { name: "外部连接", product: "Open Connector", url: "https://open-connector.localhost.pomerium.io:8443", icon: Network, external: true },
   { name: "知识工作台", product: "LightRAG", url: "http://knowledge.localhost:8080/webui", icon: NotebookTabs, external: true },
-  { name: "链路追踪", product: "Jaeger", url: "http://jaeger.localhost:8080", icon: Activity, external: true },
+  { name: "链路追踪", product: "Jaeger", url: "https://jaeger.localhost.pomerium.io:8443", icon: Activity, external: true },
 ];
 
 export function PortalQuickLinks() {

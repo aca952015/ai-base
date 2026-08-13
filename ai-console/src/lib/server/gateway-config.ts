@@ -990,6 +990,7 @@ export async function testGatewayMcpServer(draft: GatewayMcpServerDraft): Promis
   const headers = new Headers({
     Accept: "application/json, text/event-stream",
     "Content-Type": "application/json",
+    "X-AI-Base-Traffic-Origin": "management_probe",
   });
   const apiKey = await resolveMcpTestKey(draft);
   if (apiKey) {

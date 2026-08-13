@@ -1,0 +1,17 @@
+groups:
+  - name: observability-cardinality
+    rules:
+      - alert: ObservabilityMetricFamilyCardinalityHigh
+        expr: count by (__name__) ({__name__=~"gen_ai_.*|mcp_.*"}) > 5000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: An observability metric family exceeds the 5,000-series budget
+      - alert: ObservabilityTotalCardinalityHigh
+        expr: count({__name__=~"gen_ai_.*|mcp_.*"}) > 20000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Model and MCP observability metrics exceed the 20,000-series budget

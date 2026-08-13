@@ -35,7 +35,10 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ id
           <div className="code-block" aria-label="注册工具">{agent.tools.length ? agent.tools.map((tool) => <span key={tool}>{tool}</span>) : <span>未注册工具</span>}</div>
         </SectionCard>
         <SectionCard title="最近 Runtime 事件" description="未把健康检查 Trace 冒充 Agent 业务运行。">
-          {events.length ? <div className="trace-list">{events.map((event) => <Link className="trace-row" href="/observability" key={event.id}><span className="trace-id">{event.id}</span><span>{event.eventType}</span><span>{event.agentId}</span><small>{formatDateTime(event.createdAt)}</small></Link>)}</div> : <div className="empty-data"><strong>暂无运行事件</strong><span>该 Agent 尚未向 runtime_events 写入记录。</span></div>}
+          {events.length ? <div className="trace-list">{events.map((event) => {
+            const hasTrace = Boolean(event.traceId && /^[a-f0-9]{16,32}$/i.test(event.traceId));
+            return <Link className="trace-row" href={hasTrace ? `/observability/traces/${event.traceId}` : "/observability"} key={event.id}><span className="trace-id">{event.traceId ?? event.id}</span><span>{event.eventType}</span><span>{event.runId ?? event.agentId}</span><small>{formatDateTime(event.createdAt)}</small></Link>;
+          })}</div> : <div className="empty-data"><strong>暂无运行事件</strong><span>该 Agent 尚未向 runtime_events 写入记录。</span></div>}
         </SectionCard>
       </div>
     </div>

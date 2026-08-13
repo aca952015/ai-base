@@ -115,6 +115,9 @@ export type RuntimeEventSnapshot = {
   eventType: string;
   agentId: string;
   createdAt: string;
+  traceId?: string | null;
+  spanId?: string | null;
+  runId?: string | null;
 };
 
 export type RuntimeAgentSnapshot = {

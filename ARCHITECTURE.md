@@ -32,8 +32,13 @@
    │       ▼           │             ▼   外部 SaaS
    │   外部大模型       │         LightRAG
    │                   ▼          文档/RAG
-   └──────────────────────────── PostgreSQL + pgvector + AGE
-                                      KV/向量/图
+   ├──────────────────────────── PostgreSQL + pgvector + AGE
+   │                                  KV/向量/图
+   └── 安全查询 ── Jaeger 2.19 + Badger ── SpanMetrics ── Prometheus
+                         ▲ 已净化 Trace             ▲ GenAI metrics
+                 OTel Collector（事件/正文脱敏）
+                         ▲ OTLP Trace
+                Agent Runtime / MCP GW / Envoy AI Gateway
 
 Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入发布门禁，不常驻默认生产环境。
 ```
@@ -56,7 +61,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | RAG MCP 适配器 | Python 标准库 | 将 LightRAG 问答、上下文、文档状态和知识图谱读取封装为 Streamable HTTP MCP 工具 | 独立容器、只读调用；不修改 LightRAG 镜像或代码 |
 | 数据基础设施 | PostgreSQL 17 + pgvector + Apache AGE | 控制面、审计、LightRAG KV、文档状态、向量与图数据 | 单一数据库基础设施，使用 workspace 隔离 LightRAG 数据 |
 | 评测 | Promptfoo | 黄金集、回归、安全、红队与发布门禁 | Docker profile / CI 按需运行 |
-| 可观测 | OpenTelemetry + Jaeger v2 | Agent、模型、检索、工具的统一 Trace | Trace 不替代合规审计账本 |
+| 可观测 | OpenTelemetry + Jaeger 2.19 + Prometheus 3 | Agent/模型/MCP Trace、安全诊断样本、规范调用量/延迟/Token 与 MCP 决策分析 | Badger/Prometheus 仅适合单机诊断；Trace/Metrics 不替代合规审计账本 |
 | 外部认证中心 | 企业 OIDC / 独立轻量 IdP | 用户、凭据、MFA 与 OIDC Client | 不属于 AI Base Stack，由身份团队独立部署和运维 |
 | 身份边界 | Pomerium Core + 外部 OIDC | 登录、持久化浏览器会话、反向代理和路由策略 | Pomerium 不是 IdP，不保存用户密码；普通与企微入口使用隔离的 Data Broker 数据库 |
 | 密钥配置 | Console 数据卷；生产发布可接 SOPS + age | 模型渠道与 MCP 上游 Key 独立文件、版本化配置和受控发布 | API/控制台不回显明文；生产环境加密静态存储 |
@@ -91,6 +96,8 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 - Envoy Session ID 经 HMAC 签名并绑定 `issuer + subject + client_id`，避免跨员工会话复用；
 - MCP 客户端回调地址使用明确白名单，Refresh Token 一次性轮换；服务重启后安全失效并要求重新登录；
 - Go 网关只做身份、个人连接选择与协议边界，Agent 运行仍由 Agent Runtime 承担。
+- 公网入口在任何 TraceContext 提取前清除 W3C、B3、Envoy request/debug、会话与身份载体，由 Go 建立新的 100% sampled root；每条可解析 JSON-RPC message 使用一个 `mcp.server.message` span，响应观察器只保留 ID、数值错误码、枚举结果和耗时。
+- 授权日志带平台 Trace ID；员工身份使用独立、版本化 HMAC 对 `issuer + subject` 的无歧义长度前缀编码，原始身份与被拒绝的伪造连接别名不进入 Trace、指标或普通日志。
 
 个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。受控共享资源保存具名连接引用、授权模式与 Action 白名单，不复制 Bot Secret。`wecom_visibility` 资源只能用于 `wecom_bot`：解析器先用唯一企微认证配置中的 CorpID 校验 Token 中唯一企业群组，再调用对应具名机器人的 `get_userlist`，只比较 UserID 哈希；60 秒缓存到期或查询异常后不使用旧结果。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，个人绑定解析只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
 
@@ -110,7 +117,7 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 
 ## 全局能力网关边界
 
-全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 转发 Envoy 模型接口，`/mcp` 转发 MCP Access Gateway，`/rag` 转发 LightRAG，`/runtime`、`/connector`、`/knowledge`、`/jaeger`、`/promptfoo` 与 `/otel` 在转发前移除能力前缀；`/wecom-oidc/authorize` 与 `/wecom-oidc/callback` 是企业微信浏览器认证在 AI Base 内部的唯一入口，公网 callback 可直达该入口，也可经同级 `ai-auth-relay` 由浏览器中继，Token、UserInfo 与 JWKS 始终只供 Dex 通过 Compose 内网调用；工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。
+全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 转发 Envoy 模型接口，`/mcp` 转发 MCP Access Gateway，`/rag` 转发 LightRAG，`/runtime`、`/connector`、`/knowledge` 与 `/promptfoo` 在转发前移除能力前缀；`/wecom-oidc/authorize` 与 `/wecom-oidc/callback` 是企业微信浏览器认证在 AI Base 内部的唯一入口，公网 callback 可直达该入口，也可经同级 `ai-auth-relay` 由浏览器中继，Token、UserInfo 与 JWKS 始终只供 Dex 通过 Compose 内网调用；工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。Jaeger 只通过 `jaeger.localhost.pomerium.io:8443` 的管理员策略开放；OTLP 与 Prometheus 只在 Compose 网络内可达。
 
 Envoy AI Gateway、AI Console、Agent Runtime、Open Connector、LightRAG、Jaeger、Promptfoo、PostgreSQL 和 Pomerium 均不直接暴露宿主机端口。PostgreSQL 只允许 Compose 内部访问；Open Connector 与 AI Console 管理入口经过 Pomerium，其余 HTTP 工具均由全局网关反向代理。
 
@@ -145,16 +152,25 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 - 通过系统设置的 LightRAG 二级页面选择网关已发布模型并管理切片、摘要和并发参数；保存后由内部配置控制面完成原子更新、健康等待与失败回滚；
 - 企业微信认证的 CorpID、App Secret、公开入口、回调方式和企业邮箱域在集成管理的独立二级页维护；bridge 每次新登录从受保护内网接口读取并立即应用，启动信任根不进入浏览器配置；
 - 服务端聚合全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、LightRAG、RAG MCP、Jaeger 与 Promptfoo 的真实运行摘要；
+- `/observability` 以管理员权限读取固定 PromQL 和 Jaeger v3 Query，提供模型/MCP 分区、最多 24 小时/100 Trace 的有界诊断样本及字段白名单 Trace 时间线；Pomerium 保护的 Jaeger 承担完整 waterfall，不在 Console 复制任意 tag/event 查询；
 - JSON 配置读取、字段白名单校验和原子写入；
 - HTTP/TCP 服务健康探测；
 - “同步知识”调用 LightRAG 扫描接口并触发真实索引；评测仍由按需 profile 执行；
 - 未接入或无结果的能力显示“未配置”或真实空状态，不以演示数据补齐。
 
-聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token、大模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 仅存在于服务端环境；集成管理 API 只返回应用 ID、平台、App ID 和时间戳。企业微信公开入口、回调 URL 与邮箱域是管理员可见的非敏感设置，普通员工无页面或 API 权限。Console 通过 LightRAG API 读取文档状态、大小与切片数，不读取知识正文；网关请求/响应、外部凭证与 Jaeger Span 日志均不进入浏览器响应。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
+聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token、大模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 仅存在于服务端环境；集成管理 API 只返回应用 ID、平台、App ID 和时间戳。企业微信公开入口、回调 URL 与邮箱域是管理员可见的非敏感设置，普通员工无页面或 API 权限。Console 通过 LightRAG API 读取文档状态、大小与切片数，不读取知识正文；可观测 API 只返回显式 DTO 白名单，不透传 Jaeger 任意 tag、event、异常正文、Prompt、输出或工具参数/结果。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
 
 Portal 负责发现、导航和常用配置治理，专业组件负责 Action 调试、运行策略等深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 
-默认 Compose 启动 AI Console、Caddy 全局网关、Go MCP Access Gateway、WeCom Auth Bridge、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、LightRAG、独立 RAG MCP、PostgreSQL/pgvector/AGE、Jaeger 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium、MCP Access Gateway 与企业微信桥接均通过 Dex 统一员工身份。只有全局网关映射 loopback 宿主机端口。
+默认 Compose 启动 AI Console、Caddy 全局网关、Go MCP Access Gateway、WeCom Auth Bridge、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、LightRAG、独立 RAG MCP、PostgreSQL/pgvector/AGE、Jaeger、Prometheus 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium、MCP Access Gateway 与企业微信桥接均通过 Dex 统一员工身份。只有全局网关映射 loopback 宿主机端口。
+
+## 可观测数据边界
+
+模型调用的规范 KPI 只来自 Envoy AI Gateway capability probe 已证明的 GenAI metrics；MCP KPI 只来自过滤后的 `mcp.server.message`/内部 Envoy 协议 SpanMetrics，公网 MCP 下游 Envoy/HTTP span 不重复计数。当前模型错误率和 TTFT 没有通过固定版本 probe，因此 Console 明确显示不可用。Prometheus label 只允许低基数维度，Trace/Span ID、员工摘要、OAuth client、连接与资源摘要不得成为 label。
+
+公网 `/v1` 与 `/mcp` 清除全部已识别传播和采样载体，平台再建立 root；Compose 内的 Agent Runtime 直连 Envoy 并传播可信 W3C context。首期 100% head sampling，但 exporter、网络和存储仍可能丢 Trace。Jaeger 使用 14 天 Badger TTL，Prometheus 使用 15 天保留；需要零丢失、长期逐调用账单或审计时必须单独设计 PostgreSQL 账本。
+
+采集源关闭模型输入/输出、Embedding 和 invocation parameters，PydanticAI 额外用安全 tracer facade 删除当前版本仍会生成的 request parameters/tool definitions；固定版本的 OpenTelemetry Collector 在 Jaeger 前删除全部 Span Event、状态文本、正文、凭据、完整 URL、异常正文和敏感前缀，Jaeger 在存储和 SpanMetrics 前重复事件与属性过滤。字段与 PromQL 的唯一事实源是 `docs/observability-schema.md`，镜像或 SDK 升级必须重跑 probe/sentinel/基数门禁。
 
 下一阶段可补充 LightRAG 的企业 ACL、Promptfoo 结果导出、发布审批与审计表；不在当前浏览器控制台中添加容器管理权限。
 

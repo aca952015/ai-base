@@ -32,6 +32,9 @@ type config struct {
 	authorizationCodeLifetime time.Duration
 	loginTransactionLifetime  time.Duration
 	allowedRedirectURIs       []string
+	otelExporterEndpoint      string
+	observabilityHMACKey      []byte
+	observabilityKeyVersion   string
 }
 
 func loadConfig() (config, error) {
@@ -155,7 +158,22 @@ func loadConfig() (config, error) {
 			"MCP_OAUTH_ALLOWED_REDIRECT_URIS",
 			"workbuddy://workbuddy/mcp/custom-mcp%3Aai-base/oauth/callback",
 		)),
+		otelExporterEndpoint: firstNonEmpty(
+			os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"),
+			os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		),
+		observabilityHMACKey:    []byte(os.Getenv("OBSERVABILITY_IDENTITY_HMAC_KEY")),
+		observabilityKeyVersion: strings.TrimSpace(os.Getenv("OBSERVABILITY_IDENTITY_HMAC_KEY_VERSION")),
 	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func envOrDefault(name, fallback string) string {

@@ -136,7 +136,7 @@ export const serviceCatalog: ServiceDefinition[] = [
     description: "统一查看 Agent、模型、检索和工具调用链路。",
     group: "observability",
     endpointEnv: "JAEGER_URL",
-    defaultEndpoint: "http://jaeger.localhost:8080",
+    defaultEndpoint: "http://jaeger:16686",
     version: "2.19.0",
     probe: { type: "http", path: "api/services" },
     docsUrl: "https://www.jaegertracing.io/docs/",

@@ -198,7 +198,7 @@ export function summarizeJaegerTrace(trace: JaegerTrace): TraceSnapshot | undefi
 }
 
 async function collectTracing() {
-  const base = process.env.JAEGER_URL || "http://jaeger.localhost:8080";
+  const base = process.env.JAEGER_URL || "http://jaeger:16686";
   const serviceName = process.env.JAEGER_SERVICE_NAME || "ai-base-agent-runtime";
   const [services, tracesPayload] = await Promise.all([
     fetchJson<{ data?: string[]; total?: number }>(`${base}/api/services`),

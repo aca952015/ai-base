@@ -25,7 +25,7 @@ OpenConnector 从 `vendor/open-connector` 中固定的上游提交构建本地�
 | Envoy AI Gateway | 仅容器内访问 | 模型路由，以及内部 `/mcp` 上的外部 MCP 注册、聚合与工具路由 |
 | RAG MCP | 仅容器内访问 | 将 LightRAG 只读查询封装为内置 MCP 工具，不修改 LightRAG |
 | Agent Runtime | http://runtime.localhost:8080/docs | FastAPI、PydanticAI、MCP 与 DBOS 运行边界 |
-| Jaeger | http://jaeger.localhost:8080 | OpenTelemetry Trace |
+| Jaeger | https://jaeger.localhost.pomerium.io:8443 | 经 Pomerium 管理员保护的 OpenTelemetry Trace 工作台 |
 | PostgreSQL | 仅容器内访问 | 控制面、审计、pgvector 与 Apache AGE |
 
 查看日志或停止服务：
@@ -55,7 +55,7 @@ POMERIUM_IDP_CLIENT_ID=ai-base-pomerium
 POMERIUM_IDP_CLIENT_SECRET=replace-with-the-real-client-secret
 ```
 
-Dex 中的 `ai-base-pomerium` 客户端需要同时登记 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback` 和 `https://authenticate-wework.localhost.pomerium.io:8443/oauth2/callback`。普通入口保留 Dex 的认证方式选择；`/auth/wework` 转到隔离的 Pomerium 入口，由静态 `connector_id=wecom` 直接进入企业微信认证。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域；更换企业域名时同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml) 和 [`deploy/pomerium/wework-config.example.yaml`](./deploy/pomerium/wework-config.example.yaml)。Pomerium 本机入口使用开发证书和仓库内的本地签名键；正式部署必须替换签名键，并配置受信任证书、正式域名和企业 OIDC。AI Console 会验证 Pomerium 签名的 JWT Assertion、有效期和两个受信入口的 audience，不信任可由客户端直接伪造的身份头。
+Dex 中的 `ai-base-pomerium` 客户端需要同时登记 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback` 和 `https://authenticate-wework.localhost.pomerium.io:8443/oauth2/callback`。普通入口保留 Dex 的认证方式选择；`/auth/wework` 转到隔离的 Pomerium 入口，由静态 `connector_id=wecom` 直接进入企业微信认证。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域，Jaeger 进一步只允许默认管理员 `admin@bluetron.cn`；更换企业域名或 `AI_CONSOLE_ADMIN_EMAILS` 时必须同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml) 和 [`deploy/pomerium/wework-config.example.yaml`](./deploy/pomerium/wework-config.example.yaml)，保持 Jaeger 与 Console 管理员集合一致。Pomerium 本机入口使用开发证书和仓库内的本地签名键；正式部署必须替换签名键，并配置受信任证书、正式域名和企业 OIDC。AI Console 会验证 Pomerium 签名的 JWT Assertion、有效期和两个受信入口的 audience，不信任可由客户端直接伪造的身份头。
 
 普通入口与企业微信直达入口的浏览器会话上限均显式设置为 14 小时。两套 Pomerium Data Broker 分别使用现有 PostgreSQL 服务中的 `ai_base_pomerium` 与 `ai_base_pomerium_wework` 数据库保存会话，因此容器重启或普通 `docker compose down` / `up` 不再要求员工提前重新登录；两个入口的会话数据互不共享。`pomerium-database-init` 会在启动时以幂等方式补齐数据库，兼容空库和已有数据卷。`docker compose down -v`、删除 PostgreSQL 数据卷，或者轮换 Pomerium Cookie/Shared Secret 仍会使已有会话失效。Data Broker 记录包含登录会话和身份提供方 Token 状态，生产环境必须保护 PostgreSQL、启用静态加密并纳入备份策略。
 
@@ -163,9 +163,7 @@ MCP Access Gateway 会按 Broker JWT 的 `issuer + subject` 查询个人映射�
 | `/llm-admin/*` | Envoy AI Gateway 管理 API | 移除 `/llm-admin` 前缀，仅供控制台内部使用 |
 | `/connector/*` | Open Connector 功能 API | 移除 `/connector` 前缀 |
 | `/knowledge/*` | LightRAG | 移除 `/knowledge` 前缀；浏览器使用 `knowledge.localhost:8080/webui` |
-| `/jaeger/*` | Jaeger 查询 API | 移除 `/jaeger` 前缀；浏览器使用 `jaeger.localhost:8080` |
 | `/promptfoo/*` | Promptfoo | 移除 `/promptfoo` 前缀；仅在 `quality` profile 启动后可用 |
-| `/otel/*` | Jaeger OTLP HTTP | 移除 `/otel` 前缀，例如 `/otel/v1/traces` |
 
 LightRAG 通过 Envoy AI Gateway 使用 `qwen` 完成实体关系抽取与查询，通过 `BAAI/bge-m3` 生成 1024 维向量。KV、文档状态、向量和知识图谱统一复用 PostgreSQL；pgvector 承载向量索引，Apache AGE 承载图数据。
 
@@ -263,8 +261,36 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `GET/PUT /api/integrations/wecom-authentication`：仅管理员读取或保存唯一的企业微信系统认证配置。
 - `GET /api/internal/wecom-auth/config`：仅供桥接容器以内网 Bearer Token 读取同一企微认证配置的运行参数、CorpID 与 Secret，不由全局网关代理。
 - `GET /api/account/integrations`、`POST/DELETE /api/account/integrations/:platform/authorize`：读取、发起或解除当前员工个人绑定。
+- `GET /api/observability/summary?range=15m|1h|24h|7d`：仅管理员读取模型与 MCP 的固定 PromQL 摘要；未被 capability probe 证明的模型错误率和 TTFT 明确返回“不可用”。
+- `GET /api/observability/calls`：仅管理员读取最多 24 小时、扫描最多 100 条 Trace 的安全诊断样本；结果可截断，不提供稳定 cursor，也不是调用账本。
+- `GET /api/observability/traces/:traceId`：仅管理员读取服务端白名单处理后的 Trace 时间线，不透传任意 tag、event 或上游错误正文。
 
 OpenConnector Token、模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 保存在服务端。Console 只读取 LightRAG 文档状态，不返回知识正文。
+
+## 模型与 MCP 可观测性
+
+[可观测性页面](https://ai-console.localhost.pomerium.io:8443/observability) 使用两类独立数据面：Envoy AI Gateway 的规范 GenAI metrics 与 Jaeger MCP-only SpanMetrics 进入 Compose 内网 Prometheus，逐次诊断 Trace 进入 Jaeger 2.19 Badger。默认 Trace 保留 14 天、Metrics 保留 15 天；两者均为诊断数据，不替代 PostgreSQL 审计或零丢失调用账本。
+
+- 公网 `/v1` 和 `/mcp` 会删除 W3C、B3、Envoy request/debug、会话及身份传播载体；平台重新建立 100% head-sampled root。内部服务只传播平台生成的 W3C context，并用服务端 `traffic.origin` 排除管理探测和下游重复计数。
+- 模型指标当前只采用 capability probe 已证明的调用量、P95 延迟和输入/输出 Token；模型错误率与 TTFT 暂不猜测指标名或补算。
+- MCP 每条可解析 JSON-RPC message 产生一个规范 `mcp.server.message` span，记录 method、安全 server/tool/action、allow/deny、枚举原因、结果、耗时和 HMAC 身份摘要；batch、notification、SSE、未匹配响应与 observer 上限都有确定状态。
+- Agent Runtime 把真实 `trace_id`、`span_id` 与 `run_id` 写入 `runtime_events`，并提供可复用的模型/MCP client span 传播边界；当前 demo runtime 没有制造虚假业务调用。
+- Prompt、模型输出、工具参数/返回值、Token、Secret、完整 URL/资源 URI、异常正文与原始 OIDC Subject 在采集源和固定版本 OTel Collector 中删除；Collector 还删除全部 Span Event 并清空状态文本，Jaeger 在存储和 SpanMetrics 前重复事件与属性过滤。Console 只映射固定 DTO 字段。
+
+本地契约检查不会启动或修改运行中的服务：
+
+```bash
+scripts/observability-probe.sh
+scripts/test-observability-probe.sh
+```
+
+完整集成门禁要求默认 Compose 已启动且已配置可用模型渠道；它会发送最小模型/MCP fixture、查询 Jaeger/Prometheus/Console、检查普通日志，并重启一次 Jaeger 证明 Badger 持久化（不删除数据卷）：
+
+```bash
+scripts/test-observability-integration.sh
+```
+
+生产环境必须为 `OBSERVABILITY_IDENTITY_HMAC_KEY` 配置至少 32 字节、独立且稳定的随机密钥，并为 `OBSERVABILITY_IDENTITY_HMAC_KEY_VERSION` 配置可审计版本。轮换版本后，新旧身份摘要不会自动关联。完整字段、PromQL、基数预算和 HMAC fixture 见 [`docs/observability-schema.md`](./docs/observability-schema.md)。
 
 ## 可选运行面
 
@@ -282,8 +308,8 @@ Compose 内置的数据库密码、OpenConnector token、Pomerium Client Secret�
 
 - OpenConnector 默认禁止通用 provider proxy，避免 Agent 绕过审阅过的 Action。
 - `MCP_CONNECTOR_BINDING_RESOLVER_TOKEN` 只用于 MCP Access Gateway 到 AI Console 的 Compose 内网查询，正式环境必须替换默认值。
-- Promptfoo 和 Jaeger UI 没有内建企业认证；正式环境应放在 Pomerium 或等价身份边界后。
-- Jaeger 默认使用内存存储，容器重启后 Trace 会清空；审计数据保存在 PostgreSQL，Trace 不作为合规账本。
+- Promptfoo 没有内建企业认证；Jaeger 只通过管理员 Pomerium 路由开放，Prometheus 与 OTLP 接收端不开放公共路由。
+- Jaeger 使用持久化 Badger 与 14 天 TTL；普通容器重启保留有效期内 Trace。删除命名卷仍会删除数据，且 Trace 始终不作为合规账本。
 
 ## 工程验证
 
@@ -291,6 +317,7 @@ Compose 内置的数据库密码、OpenConnector token、Pomerium Client Secret�
 npm install
 npm run check
 docker compose config --quiet
+scripts/test-observability-probe.sh
 curl -fsS 'http://localhost:8080/health'
 curl -fsS 'http://runtime.localhost:8080/health'
 ```

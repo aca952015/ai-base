@@ -21,7 +21,7 @@ services:
       MCP_ADMIN_TOKEN: ${MCP_ADMIN_TOKEN:-local-mcp-admin-token-change-me}
       MCP_PUBLIC_RESOURCE_URL: ${MCP_PUBLIC_RESOURCE_URL:-http://127.0.0.1:8080/mcp}
       AGENT_RUNTIME_URL: http://global-gateway:8080/runtime
-      LLM_GATEWAY_URL: http://global-gateway:8080
+      LLM_GATEWAY_URL: http://llm-gateway:1975
       LLM_GATEWAY_ADMIN_URL: http://global-gateway:8080/llm-admin
       OPEN_CONNECTOR_URL: http://global-gateway:8080/connector
       OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
@@ -38,7 +38,9 @@ services:
       RAG_MCP_HEALTH_URL: http://rag-mcp:8080
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-      JAEGER_URL: http://global-gateway:8080/jaeger
+      JAEGER_URL: http://jaeger:16686
+      JAEGER_PUBLIC_URL: https://jaeger.localhost.pomerium.io:8443
+      PROMETHEUS_URL: http://prometheus:9090
       PROMPTFOO_URL: http://global-gateway:8080/promptfoo
       OIDC_ENABLED: "true"
     volumes:
@@ -60,7 +62,9 @@ services:
       rag-mcp:
         condition: service_healthy
       jaeger:
-        condition: service_started
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -80,10 +84,12 @@ services:
       - "8000"
     environment:
       DATABASE_URL: postgresql://ai_base:${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}@postgres:5432/ai_base
-      LLM_GATEWAY_URL: http://global-gateway:8080
+      LLM_GATEWAY_URL: http://llm-gateway:1975
       OPEN_CONNECTOR_URL: http://global-gateway:8080/connector
       OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
-      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://global-gateway:8080/otel/v1/traces
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: http/protobuf
+      OTEL_TRACES_SAMPLER: always_on
       OTEL_SERVICE_NAME: ai-base-agent-runtime
     depends_on:
       global-gateway:
@@ -91,6 +97,8 @@ services:
       postgres:
         condition: service_healthy
       jaeger:
+        condition: service_started
+      otel-collector:
         condition: service_started
     healthcheck:
       test:
@@ -163,6 +171,26 @@ services:
       LIGHTRAG_API_KEY: ${LIGHTRAG_API_KEY:-local-lightrag-api-key-change-me}
       LLM_GATEWAY_CONFIG_PATH: /control/llm-gateway-config.yaml
       LLM_GATEWAY_REVISION_PATH: /control/llm-gateway-revision
+      OTEL_SERVICE_NAME: ai-base-llm-gateway
+      OTEL_RESOURCE_ATTRIBUTES: traffic.origin=internal_service
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: http://prometheus:9090/api/v1/otlp/v1/metrics
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: http/protobuf
+      OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: http/protobuf
+      OTEL_TRACES_SAMPLER: always_on
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_PROPAGATORS: tracecontext,baggage
+      OPENINFERENCE_HIDE_INPUTS: "true"
+      OPENINFERENCE_HIDE_OUTPUTS: "true"
+      OPENINFERENCE_HIDE_EMBEDDINGS_TEXT: "true"
+      OPENINFERENCE_HIDE_EMBEDDINGS_VECTORS: "true"
+      OPENINFERENCE_HIDE_LLM_INVOCATION_PARAMETERS: "true"
+      OTEL_AIGW_REQUEST_HEADER_ATTRIBUTES: ""
+      OTEL_AIGW_SPAN_REQUEST_HEADER_ATTRIBUTES: "x-ai-base-traffic-origin:traffic.origin"
+      OTEL_AIGW_METRICS_REQUEST_HEADER_ATTRIBUTES: "x-ai-base-traffic-origin:traffic.origin"
+      OTEL_AIGW_LOG_REQUEST_HEADER_ATTRIBUTES: ""
     volumes:
       - console-data:/control:ro
     depends_on:
@@ -205,11 +233,18 @@ services:
       MCP_ADMIN_TOKEN: ${MCP_ADMIN_TOKEN:-local-mcp-admin-token-change-me}
       MCP_CONNECTOR_BINDING_RESOLVER_URL: http://ai-console:3000/api/internal/connector-bindings/resolve
       MCP_CONNECTOR_BINDING_RESOLVER_TOKEN: ${MCP_CONNECTOR_BINDING_RESOLVER_TOKEN:-local-connector-binding-resolver-token-change-me}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      OBSERVABILITY_IDENTITY_HMAC_KEY: ${OBSERVABILITY_IDENTITY_HMAC_KEY:-local-observability-hmac-key-change-me}
+      OBSERVABILITY_IDENTITY_HMAC_KEY_VERSION: ${OBSERVABILITY_IDENTITY_HMAC_KEY_VERSION:-local-v1}
     volumes:
       - mcp-auth-data:/data
     depends_on:
       llm-gateway:
         condition: service_healthy
+      jaeger:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--output-document", "/dev/null", "http://127.0.0.1:8081/ready"]
       interval: 10s
@@ -458,14 +493,74 @@ services:
       retries: 10
       start_period: 10s
 
+  jaeger-storage-init:
+    image: jaegertracing/jaeger:2.19.0
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["/bin/busybox", "sh", "-c"]
+    command: ["mkdir -p /badger/keys /badger/values && chown 10001:0 /badger /badger/keys /badger/values"]
+    volumes:
+      - jaeger-data:/badger
+
   jaeger:
     image: jaegertracing/jaeger:2.19.0
     restart: unless-stopped
+    command: ["--config=file:/etc/jaeger/jaeger.yaml"]
     expose:
       - "16686"
+      - "16685"
       - "4317"
       - "4318"
       - "13133"
+      - "8888"
+      - "8889"
+    volumes:
+      - ./deploy/jaeger/jaeger.yaml:/etc/jaeger/jaeger.yaml:ro
+      - jaeger-data:/badger
+    depends_on:
+      jaeger-storage-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/bin/busybox", "wget", "--quiet", "--output-document", "/dev/null", "http://127.0.0.1:13133/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.135.0
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    expose:
+      - "4317"
+      - "4318"
+      - "13133"
+    volumes:
+      - ./deploy/otel-collector/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      jaeger:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-otlp-receiver
+      - --web.enable-lifecycle
+    expose:
+      - "9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/observability-rules.yaml:/etc/prometheus/observability-rules.yaml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document", "/dev/null", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
 
   promptfoo:
     image: ghcr.io/promptfoo/promptfoo:0.121.19
@@ -510,6 +605,8 @@ services:
         condition: service_healthy
       open-connector-admin-proxy:
         condition: service_healthy
+      jaeger:
+        condition: service_healthy
 
   pomerium-wework:
     image: pomerium/pomerium:v0.32.7
@@ -544,6 +641,8 @@ volumes:
   lightrag-inputs:
   postgres-data:
   promptfoo-data:
+  jaeger-data:
+  prometheus-data:
 
 networks:
   default:

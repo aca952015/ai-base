@@ -279,12 +279,14 @@ describe("gateway MCP connectivity test", () => {
     const methods: string[] = [];
     let authorization = "";
     let toolsSession = "";
+    let trafficOrigin = "";
     const server = createServer(async (request, response) => {
       let raw = "";
       for await (const chunk of request) raw += chunk.toString();
       const payload = JSON.parse(raw) as { id?: number; method: string; params?: { cursor?: string } };
       methods.push(payload.method);
       authorization = request.headers.authorization || authorization;
+      trafficOrigin = String(request.headers["x-ai-base-traffic-origin"] || trafficOrigin);
       if (payload.method === "initialize") {
         response.setHeader("content-type", "application/json");
         response.setHeader("mcp-session-id", "session-1");
@@ -316,6 +318,7 @@ describe("gateway MCP connectivity test", () => {
       expect(methods).toEqual(["initialize", "notifications/initialized", "tools/list", "tools/list"]);
       expect(authorization).toBe("Bearer super-private-token");
       expect(toolsSession).toBe("session-1");
+      expect(trafficOrigin).toBe("management_probe");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     }
