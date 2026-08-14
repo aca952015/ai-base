@@ -166,7 +166,7 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 
 Portal 负责发现、导航和常用配置治理，专业组件负责 Action 调试、运行策略等深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 
-默认 Compose 启动 AI Console、Caddy 全局网关、Go MCP Access Gateway、WeCom Auth Bridge、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、LightRAG、独立 RAG MCP、PostgreSQL/pgvector/AGE、Jaeger、Prometheus 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium、MCP Access Gateway 与企业微信桥接均通过 Dex 统一员工身份。只有全局网关映射 loopback 宿主机端口。
+默认 Compose 启动 AI Console、Caddy 全局网关、Go MCP Access Gateway、Agent Runtime、Envoy AI Gateway standalone、OpenConnector、LightRAG、独立 RAG MCP、PostgreSQL/pgvector/AGE、Jaeger、Prometheus 和 Pomerium；Promptfoo 位于 `quality` profile。认证中心不属于 AI Base Stack，Pomerium 与 MCP Access Gateway 通过 Dex 确认平台身份；企业微信身份由独立公网中继验证并关联到已登录的平台账号，不作为 Dex 登录方式。只有全局网关映射 loopback 宿主机端口。
 
 ## 可观测数据边界
 
