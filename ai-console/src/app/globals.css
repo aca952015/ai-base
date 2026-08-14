@@ -1343,6 +1343,7 @@ svg { flex: 0 0 auto; }
   align-items: center;
   gap: 5px;
 }
+.account-identity-strip > .button { flex: 0 0 auto; }
 .account-integration-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1860,6 +1861,7 @@ svg { flex: 0 0 auto; }
   .score-cell .sparkline { display: none; }
   .account-identity-strip { align-items: flex-start; flex-wrap: wrap; }
   .account-identity-strip > p { width: 100%; margin-left: 49px; }
+  .account-identity-strip > .button { width: 100%; margin-left: 49px; }
   .mcp-setup-guide__header { align-items: flex-start; }
   .mcp-setup-guide__tabs { padding-right: 14px; padding-left: 14px; }
   .mcp-setup-guide__panel { padding: 12px 14px 14px; }

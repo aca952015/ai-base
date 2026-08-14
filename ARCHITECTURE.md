@@ -9,15 +9,17 @@
 ## 推荐拓扑
 
 ```text
-企业微信工作台 ── /auth/wework ── 专用 Pomerium ──┐
-普通浏览器入口 ─────────────────── 普通 Pomerium ──┤
-                                                   ▼
-                                       独立企业 OIDC / 本地 Dex
-                                                   │ wecom connector
-                                                   ▼
-                                        WeCom Auth Bridge ── 企业微信
-                                                   │ 认证完成
-                                                   ▼
+企业微信工作台 ── /auth/wework ── 普通 Pomerium ── 当前平台身份
+                                      │ 一次性绑定请求 + 同浏览器 nonce
+                                      ▼
+                               AI Console 服务端 ── 加密短期请求 ── tn1 Relay
+                                      ▲                                  │
+                                      │ 加密身份结果                      │ gettoken/getuserinfo
+                                      └──────── 浏览器回程 ───────────────┤
+                                                                         ▼
+普通浏览器入口 ─────────────── 普通 Pomerium ─────────────── 企业微信网页授权
+                                      │
+                                      ▼
                                   AI Console / Component Portal (Next.js)
    │              │ 配置、健康检查、运行摘要
    │              ▼
@@ -52,7 +54,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 出口 DNS | AdGuard dnsproxy | 为 Envoy AI Gateway 与 Open Connector 提供分流解析；公网域名走 DoH，企业内网域名走本机 DNS | 不映射宿主机端口，不通过关闭 SSRF 校验兼容 Fake-IP |
 | Agent Runtime | FastAPI + `pydantic-ai-slim` | Agent 运行、结构化输出、身份上下文、业务策略 | 不保存外部 SaaS 密钥 |
 | MCP 访问网关 | Go + `net/http` + OAuth/OIDC | 面向兼容 OAuth 的 MCP 客户端提供发现、DCR、PKCE、员工登录、MCP 鉴权、身份绑定会话和访问策略 | Dex 仅作登录上游；不注册 MCP 上游、不向 Envoy 透传员工 Token、不执行 Agent |
-| 企业微信认证桥接 | Go 标准库 + OIDC | 将企业微信网页授权的企业 UserID 转换为 Dex 可消费的标准 OIDC 身份 | 不替代 Dex、不读取 OpenConnector Token；只通过内网读取 Console 中的企微应用凭据与管理员认证路由设置 |
+| 企业微信认证中继 | 外部 Go 服务 + AES-256-GCM 协议 | 在固定公网出口完成企微网页授权、`gettoken/getuserinfo`，返回短期加密身份结果 | 不持久化 CorpID、Secret、Token 或 UserID；不替代平台 OIDC；不接受浏览器指定回调目标 |
 | 持久工作流 | DBOS | 审批、队列、定时和恢复 | 复用 PostgreSQL，不加消息队列 |
 | AI 网关 | Envoy AI Gateway standalone | OpenAI 兼容模型入口；内部 MCP 注册、聚合、工具路由与过滤 | MCP API 不直接暴露；Console 生成 `AIGatewayRoute` 与 `MCPRoute` 原生资源 |
 | 内部工具 | 官方 MCP SDK + 薄注册层 | JSON Schema、版本、作用域、风险等级、幂等和审计 | MCP 是协议，不当作安全沙箱 |
@@ -63,7 +65,7 @@ Promptfoo：使用 Docker `quality` profile 或 CI 按需运行，结果进入�
 | 评测 | Promptfoo | 黄金集、回归、安全、红队与发布门禁 | Docker profile / CI 按需运行 |
 | 可观测 | OpenTelemetry + Jaeger 2.19 + Prometheus 3 | Agent/模型/MCP Trace、安全诊断样本、规范调用量/延迟/Token 与 MCP 决策分析 | Badger/Prometheus 仅适合单机诊断；Trace/Metrics 不替代合规审计账本 |
 | 外部认证中心 | 企业 OIDC / 独立轻量 IdP | 用户、凭据、MFA 与 OIDC Client | 不属于 AI Base Stack，由身份团队独立部署和运维 |
-| 身份边界 | Pomerium Core + 外部 OIDC | 登录、持久化浏览器会话、反向代理和路由策略 | Pomerium 不是 IdP，不保存用户密码；普通与企微入口使用隔离的 Data Broker 数据库 |
+| 身份边界 | Pomerium Core + 外部 OIDC | 当前平台登录、持久化浏览器会话、反向代理和路由策略 | Pomerium 不是 IdP，不保存用户密码；企微身份只用于与既有平台账号建立映射 |
 | 密钥配置 | Console 数据卷；生产发布可接 SOPS + age | 模型渠道与 MCP 上游 Key 独立文件、版本化配置和受控发布 | API/控制台不回显明文；生产环境加密静态存储 |
 
 ## Open Connector 边界
@@ -90,7 +92,7 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 - 网关在内存中保留最近 24 小时的成功鉴权客户端摘要，按员工 Subject、Issuer 与 OAuth Client 绑定聚合；Console 通过独立管理令牌读取，外部能力网关不暴露该管理端点；
 - 每个 MCP 请求都验证 Broker JWT Access Token 的 issuer、audience、有效期和必需 scope；
 - 保护 OpenConnector 的 `execute_action`、`get_action_guide` 与 `list_connections`：网关按 `issuer + subject` 查询员工绑定和受控共享策略，覆盖客户端连接名，并在本地过滤连接列表；
-- 企业微信 MCP 登录仅在 Dex 身份同时具有唯一 `wecom:<CorpID 摘要>` 群组与 `preferred_username` 时，把 `SHA-256(UserID)` 作为私有 claim 透传给内网解析器；原始 UserID 不进入 Broker Token 或 Console 请求；
+- 企业微信共享机器人身份来自 `wecom_identity_links` 中已验证的平台账号映射；Broker Token 不携带明文 UserID，解析器只读取 CorpID/UserID 摘要；
 - 发布 RFC 9728 Protected Resource Metadata，并在 `401` 响应中返回 `WWW-Authenticate` 发现地址；
 - 员工 Access Token 在进入 Envoy 前移除，禁止 Token passthrough；
 - Envoy Session ID 经 HMAC 签名并绑定 `issuer + subject + client_id`，避免跨员工会话复用；
@@ -99,15 +101,17 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 - 公网入口在任何 TraceContext 提取前清除 W3C、B3、Envoy request/debug、会话与身份载体，由 Go 建立新的 100% sampled root；每条可解析 JSON-RPC message 使用一个 `mcp.server.message` span，响应观察器只保留 ID、数值错误码、枚举结果和耗时。
 - 授权日志带平台 Trace ID；员工身份使用独立、版本化 HMAC 对 `issuer + subject` 的无歧义长度前缀编码，原始身份与被拒绝的伪造连接别名不进入 Trace、指标或普通日志。
 
-个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。受控共享资源保存具名连接引用、授权模式与 Action 白名单，不复制 Bot Secret。`wecom_visibility` 资源只能用于 `wecom_bot`：解析器先用唯一企微认证配置中的 CorpID 校验 Token 中唯一企业群组，再调用对应具名机器人的 `get_userlist`，只比较 UserID 哈希；60 秒缓存到期或查询异常后不使用旧结果。Pomerium 与 MCP OAuth Broker 对同一上游员工产生不同 opaque subject 时，个人绑定解析只允许使用 Broker 已验证的企业邮箱在同一 issuer 下进行无歧义兜底匹配；冲突时关闭失败。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
+个人 Connector Token 由 OpenConnector 加密保存；AI Base PostgreSQL 保存稳定 `issuer + subject` 到命名连接的映射。Console 与 MCP Broker 使用相同的 `usr_ + SHA-256(login issuer + upstream subject)` opaque subject 契约；旧版个人绑定只允许通过 Broker 已验证的企业邮箱在同一 issuer 下做一次无歧义迁移，冲突时关闭失败。受控共享资源保存具名连接引用、授权模式与 Action 白名单，不复制 Bot Secret。`wecom_visibility` 资源只能用于 `wecom_bot`：解析器优先使用 Broker Token 中的企微摘要；Token 没有该声明时，读取当前平台主体在 `wecom_identity_links` 中的一次性企微身份映射，再用唯一企微认证配置中的 CorpID 校验身份域，调用对应具名机器人的 `get_userlist` 并只比较 UserID 哈希。60 秒缓存到期或查询异常后不使用旧结果。客户端不得决定 OpenConnector `connectionName`，服务端映射是唯一可信来源；需要凭据的 Connector 不得回退到共享 `default`，只有上游声明为 `no_auth` 的虚拟公共 Connector 可以使用系统 `default`。内部映射查询使用独立 Bearer Token，查询服务异常时关闭失败。
 
-企业微信不是标准 OIDC Provider。独立 `wecom-auth-bridge` 使用 `snsapi_base` 获取企业 UserID，派生稳定 Subject，并作为 Dex 的 OIDC Connector 上游；Pomerium 与 MCP OAuth Broker 仍只信任 Dex。企微 CorpID、Secret、公开认证入口、直接/中继回调方式和企业邮箱域由管理员在 `/integrations/wecom-authentication` 的唯一“企业微信认证”表单维护，并保存在 PostgreSQL 单例表 `wecom_authentication_configuration`；`/integrations` 只提供配置摘要和二级页入口。Secret 仍使用 AES-256-GCM 加密。桥接服务通过独立 Bearer Token 的 Compose 内网接口按请求读取这一条配置且不缓存，因此新登录立即使用最新设置；配置不完整或内部接口失败时关闭失败。浏览器与 Dex 均不接触 Secret。桥接 Access Token 短期有效，Refresh Token 哈希保存在独立 Volume 并按 90 天滑动续期。企业微信工作台使用 `/auth/wework` 独立入口：Caddy 将其导向专用 Pomerium 实例，该实例只为 Dex 添加 `connector_id=wecom`，因此跳过登录方式选择；普通 Console 登录入口与其他认证方式保持不变。升级时，旧企微集成凭据与 Console 配置文件中的运行参数在事务边界内迁移到单例记录，旧来源随后删除，避免双写和优先级歧义。
+企业微信不是平台登录 IdP。CorpID、App Secret 和 Relay 回调由管理员在 `/integrations/wecom-authentication` 的唯一表单维护，并保存在 PostgreSQL 单例表 `wecom_authentication_configuration`；Secret 使用 Console 既有 AES-256-GCM 静态加密。浏览器、Pomerium、Dex 和 MCP Broker 均不接触 App Secret。`WECOM_RELAY_SHARED_KEY` 是 AI Base 与单租户 Relay 之间的协议启动信任根，使用独立部署密钥提供，不能依赖登录后的 Console 页面。
 
-普通入口与企业微信入口的 Pomerium 会话均为 14 小时固定上限，并分别通过 PostgreSQL Data Broker 写入 `ai_base_pomerium` 与 `ai_base_pomerium_wework` 数据库。容器或 Docker 重启不会清空会话；两个入口不共享 Data Broker，避免不同认证路由互相消费会话记录。数据库由一次性 `pomerium-database-init` 服务幂等创建，Pomerium 负责维护各自的内部表。删除 PostgreSQL 数据卷、轮换 Cookie/Shared Secret、上游 Token 刷新失败、主动退出或策略撤权仍会提前终止会话。Data Broker 记录不会由 Pomerium 再做静态加密，生产部署必须依赖受保护且加密的 PostgreSQL 存储。
+企业微信工作台首页使用主 Console 的 `/auth/wework`。主 Pomerium 先确认当前平台账号，Console 创建 10 分钟、一次性、只保存 SHA-256 请求/nonce 摘要的绑定事务，并设置主站 host-only 的 `Secure`、`HttpOnly`、`SameSite=Lax` Cookie。Console 服务端把 CorpID、App Secret、请求令牌、内网完成地址和期限封装成 AES-256-GCM 短期票据，通过 `POST /api/wecom/authorizations` 暂存到 Relay；浏览器只得到随机授权 ID。
 
-`WECOM_AUTH_BRIDGE_CONFIG_TOKEN`、`WECOM_OIDC_CLIENT_SECRET`、OIDC issuer/client 绑定与签名密钥属于认证启动信任根，继续由部署密钥提供，不能依赖登录后的 Console 页面。`WECOM_AUTH_PUBLIC_BASE_URL`、`WECOM_AUTH_CALLBACK_URL` 与 `WECOM_EMAIL_DOMAIN` 不再作为 bridge 环境变量；唯一企微配置的默认地址只支持 loopback 本机验证，正式部署由已认证管理员改为可达地址。
+Relay 在内存中一次性消费授权 ID，生成企微 state 与 HttpOnly Cookie，并把浏览器送入 `snsapi_base`。企业微信只回调 Relay 的固定 `/callbacks/wecom`；Relay 从自己的固定公网出口调用 `gettoken/getuserinfo`，要求返回企业 UserID，然后签发 5 分钟加密结果。结果经浏览器返回主站 `/auth/wework/complete`，完成页再次验证主 Pomerium 身份、同浏览器 nonce、未过期未消费数据库请求、结果 AEAD、Relay issuer 和当前 CorpID。成功后只保存平台 `issuer + subject`、Relay issuer、派生的稳定企微 Subject，以及 CorpID/UserID 哈希；同一企微身份不能绑定两个平台账号。
 
-同级独立项目 `ai-auth-relay` 是可选公网边缘，不属于 AI Base Compose，也不是身份提供方。它用 provider adapter 约束公开回调字段和固定本地目标；当前首个 adapter 为企业微信。浏览器先从本地 `/wecom-oidc/authorize` 获得一次性 state 与 HttpOnly Cookie，企微回到 Relay 后，Relay 将白名单字段经 302 带回固定的本地 callback，再由 `wecom-auth-bridge` 完成 Cookie/state 校验和 code 消费。Relay 不保存 CorpID、Secret、身份或 Token，不依赖 Vercel 到本地的永久长连接；浏览器无法访问本地目标时链路关闭失败。
+Relay 不持久化 CorpID、Secret、Access Token 或 UserID，重启会使在途请求安全失效。篡改、过期、重放、Cookie 丢失、中继不可用、企业不匹配或企微 API 失败都关闭失败。当前 HTTP 中继按用户部署约束受支持，AEAD 保护票据内容与完整性，但不等价于 TLS 的完整传输层保护；未来启用 HTTPS 不改变协议。企业微信应用可信 IP 必须配置 Relay 的固定公网出口，而不是 AI Base 内网出口。
+
+普通 Pomerium 会话为 14 小时固定上限，通过 PostgreSQL Data Broker 写入 `ai_base_pomerium`。绑定流程复用同一平台会话，不创建第二套 Pomerium 或 Dex 企微 Connector。数据库由一次性 `pomerium-database-init` 服务幂等创建；删除 PostgreSQL 数据卷、轮换 Cookie/Shared Secret、上游 Token 刷新失败、主动退出或策略撤权仍会提前终止会话。
 
 ## 出口 DNS 与 SSRF
 
@@ -117,7 +121,7 @@ Open Connector 与 RAG MCP 是系统托管的内置上游。RAG MCP 运行在独
 
 ## 全局能力网关边界
 
-全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 转发 Envoy 模型接口，`/mcp` 转发 MCP Access Gateway，`/rag` 转发 LightRAG，`/runtime`、`/connector`、`/knowledge` 与 `/promptfoo` 在转发前移除能力前缀；`/wecom-oidc/authorize` 与 `/wecom-oidc/callback` 是企业微信浏览器认证在 AI Base 内部的唯一入口，公网 callback 可直达该入口，也可经同级 `ai-auth-relay` 由浏览器中继，Token、UserInfo 与 JWKS 始终只供 Dex 通过 Compose 内网调用；工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。Jaeger 只通过 `jaeger.localhost.pomerium.io:8443` 的管理员策略开放；OTLP 与 Prometheus 只在 Compose 网络内可达。
+全局网关是 AI Base 唯一的宿主机网络入口。Caddy 映射 `127.0.0.1:8080` 与 `127.0.0.1:8443`：`/v1` 转发 Envoy 模型接口，`/mcp` 转发 MCP Access Gateway，`/rag` 转发 LightRAG，`/runtime`、`/connector`、`/knowledge` 与 `/promptfoo` 在转发前移除能力前缀；企微身份绑定只使用受主 Pomerium 保护的 Console `/auth/wework` 与 `/auth/wework/complete`，全局网关不再暴露 `/wecom-oidc`。工作台使用 `*.localhost:8080` 域名路由，SSO 入口在 8443 上转发至 Pomerium。Jaeger 只通过 `jaeger.localhost.pomerium.io:8443` 的管理员策略开放；OTLP 与 Prometheus 只在 Compose 网络内可达。
 
 Envoy AI Gateway、AI Console、Agent Runtime、Open Connector、LightRAG、Jaeger、Promptfoo、PostgreSQL 和 Pomerium 均不直接暴露宿主机端口。PostgreSQL 只允许 Compose 内部访问；Open Connector 与 AI Console 管理入口经过 Pomerium，其余 HTTP 工具均由全局网关反向代理。
 
@@ -147,10 +151,10 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 - 通过连接器配置页面管理 OpenConnector 的连接生命周期；Connector 搜索、认证方式和动态字段读取真实 Provider Schema，凭证只经服务端 Admin API 写入且不回显，OAuth 授权成功后才创建卡片；
 - 企业微信 API 模式智能机器人作为 `controlled_shared` 具名连接在连接器配置页面维护；保存时同时写入 `wecom_visibility` 与静态 Action 白名单，员工侧不创建机器人绑定；
 - 通过管理员集成管理页面维护唯一企业微信系统认证配置，以及飞书和钉钉的企业应用；所有 App Secret 经 AES-256-GCM 加密后落 PostgreSQL；
-- 普通员工通过账号绑定页面发起受支持平台的个人 OAuth；OpenConnector 保存个人 Token，PostgreSQL 保存 OIDC 主体到命名连接的映射，当前上游只有飞书支持用户 OAuth；
+- 普通员工通过账号绑定页面发起受支持平台的个人 OAuth，并可从企微工作台或页面建立/解除当前平台账号与企微身份映射；OpenConnector 保存个人 Token，PostgreSQL 保存 OIDC 主体到命名连接或企微身份摘要的映射，当前上游只有飞书支持用户 OAuth；
 - 通过单独修订文件触发网关进程重载，Key 以文件替换方式注入生成过程，不写入路由 YAML 或浏览器响应；
 - 通过系统设置的 LightRAG 二级页面选择网关已发布模型并管理切片、摘要和并发参数；保存后由内部配置控制面完成原子更新、健康等待与失败回滚；
-- 企业微信认证的 CorpID、App Secret、公开入口、回调方式和企业邮箱域在集成管理的独立二级页维护；bridge 每次新登录从受保护内网接口读取并立即应用，启动信任根不进入浏览器配置；
+- 企业微信认证的 CorpID、App Secret 和公网中继回调在集成管理的独立二级页维护；每次绑定由 Console 服务端读取并封装为短期加密请求，Relay 不持久化凭据，共享协议密钥不进入浏览器配置；
 - 服务端聚合全局能力网关、Agent Runtime、Envoy AI Gateway、OpenConnector、LightRAG、RAG MCP、Jaeger 与 Promptfoo 的真实运行摘要；
 - `/observability` 以管理员权限读取固定 PromQL 和 Jaeger v3 Query，提供模型/MCP 分区、最多 24 小时/100 Trace 的有界诊断样本及字段白名单 Trace 时间线；Pomerium 保护的 Jaeger 承担完整 waterfall，不在 Console 复制任意 tag/event 查询；
 - JSON 配置读取、字段白名单校验和原子写入；
@@ -158,7 +162,7 @@ LightRAG 提供文档导入、分块、实体关系抽取、混合检索、知�
 - “同步知识”调用 LightRAG 扫描接口并触发真实索引；评测仍由按需 profile 执行；
 - 未接入或无结果的能力显示“未配置”或真实空状态，不以演示数据补齐。
 
-聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token、大模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 仅存在于服务端环境；集成管理 API 只返回应用 ID、平台、App ID 和时间戳。企业微信公开入口、回调 URL 与邮箱域是管理员可见的非敏感设置，普通员工无页面或 API 权限。Console 通过 LightRAG API 读取文档状态、大小与切片数，不读取知识正文；可观测 API 只返回显式 DTO 白名单，不透传 Jaeger 任意 tag、event、异常正文、Prompt、输出或工具参数/结果。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
+聚合层使用短超时和 10 秒内存缓存，避免单个组件拖慢整个控制台。OpenConnector Runtime/Admin Token、大模型渠道 Key、MCP 上游 Key、LightRAG API Key 与企业应用 Secret 仅存在于服务端环境；集成管理 API 只返回应用 ID、平台、App ID 和时间戳。企业微信中继回调 URL 是管理员可见的非敏感设置，普通员工无页面或 API 权限。Console 通过 LightRAG API 读取文档状态、大小与切片数，不读取知识正文；可观测 API 只返回显式 DTO 白名单，不透传 Jaeger 任意 tag、event、异常正文、Prompt、输出或工具参数/结果。`GET /api/overview` 是页面统一读取面，`refresh=1` 只用于主动刷新和排障。
 
 Portal 负责发现、导航和常用配置治理，专业组件负责 Action 调试、运行策略等深度操作。外部工作台使用明确的新窗口链接，不通过 iframe 嵌入，以保留认证、路由和升级边界。
 

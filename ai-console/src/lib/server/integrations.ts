@@ -136,6 +136,29 @@ type WeComVisibilityResourceRow = QueryResultRow & {
   action_ids: unknown;
 };
 
+type WeComIdentityLinkRow = QueryResultRow & {
+  principal_issuer: string;
+  principal_subject: string;
+  wecom_issuer: string;
+  wecom_subject: string;
+  wecom_corp_id_hash: string;
+  wecom_user_id_hash: string;
+  linked_at: Date | string;
+  updated_at: Date | string;
+};
+
+type WeComIdentityLinkRequestRow = QueryResultRow & {
+  request_hash: string;
+  browser_nonce_hash: string;
+  principal_issuer: string;
+  principal_subject: string;
+  principal_email: string;
+  principal_name: string;
+  created_at: Date | string;
+  expires_at: Date | string;
+  consumed_at: Date | string | null;
+};
+
 declare global {
   var aiBaseIntegrationPool: Pool | undefined;
   var aiBaseIntegrationSchemaPromise: Promise<void> | undefined;
@@ -245,6 +268,34 @@ export async function ensureSchema() {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CHECK (callback_mode = 'direct' OR (relay_callback_url IS NOT NULL AND BTRIM(relay_callback_url) <> ''))
       );
+      CREATE TABLE IF NOT EXISTS wecom_identity_links (
+        principal_issuer TEXT NOT NULL,
+        principal_subject TEXT NOT NULL,
+        principal_email TEXT NOT NULL,
+        principal_name TEXT NOT NULL,
+        wecom_issuer TEXT NOT NULL,
+        wecom_subject TEXT NOT NULL,
+        wecom_corp_id_hash CHAR(64) NOT NULL CHECK (wecom_corp_id_hash ~ '^[a-f0-9]{64}$'),
+        wecom_user_id_hash CHAR(64) NOT NULL CHECK (wecom_user_id_hash ~ '^[a-f0-9]{64}$'),
+        linked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (principal_issuer, principal_subject),
+        UNIQUE (wecom_issuer, wecom_subject),
+        UNIQUE (wecom_corp_id_hash, wecom_user_id_hash)
+      );
+      CREATE TABLE IF NOT EXISTS wecom_identity_link_requests (
+        request_hash CHAR(64) PRIMARY KEY CHECK (request_hash ~ '^[a-f0-9]{64}$'),
+        browser_nonce_hash CHAR(64) NOT NULL CHECK (browser_nonce_hash ~ '^[a-f0-9]{64}$'),
+        principal_issuer TEXT NOT NULL,
+        principal_subject TEXT NOT NULL,
+        principal_email TEXT NOT NULL,
+        principal_name TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        consumed_at TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS wecom_identity_link_requests_principal_idx
+        ON wecom_identity_link_requests(principal_issuer, principal_subject, expires_at);
       CREATE TABLE IF NOT EXISTS employee_connector_bindings (
         id UUID PRIMARY KEY,
         application_id UUID NOT NULL REFERENCES integration_applications(id) ON DELETE RESTRICT,
@@ -934,12 +985,47 @@ function employeeConnectionName(identity: ConsoleIdentity, service: string) {
 }
 
 async function reconcileEmployeeBindings(identity: ConsoleIdentity) {
-  const rows = await getPool().query<EmployeeConnectorBindingRow>(`
+  let rows = await getPool().query<EmployeeConnectorBindingRow>(`
     SELECT id, application_id, platform, service, connection_name, status,
            display_name, account_id, error_message, connected_at, updated_at
     FROM employee_connector_bindings
     WHERE principal_issuer = $1 AND principal_subject = $2 AND status <> 'revoked'
   `, [identity.principalIssuer, identity.principalSubject]);
+  if (!rows.rowCount) {
+    const legacy = await getPool().query<EmployeeConnectorBindingRow>(`
+      SELECT id, application_id, platform, service, connection_name, status,
+             display_name, account_id, error_message, connected_at, updated_at
+      FROM employee_connector_bindings
+      WHERE principal_issuer = $1 AND LOWER(principal_email) = $2 AND status <> 'revoked'
+      ORDER BY service, updated_at DESC
+    `, [identity.principalIssuer, identity.email]);
+    const services = new Set<string>();
+    for (const row of legacy.rows) {
+      if (services.has(row.service)) {
+        throw new IntegrationStoreError("当前邮箱存在冲突的历史 Connector 绑定", 409);
+      }
+      services.add(row.service);
+    }
+    if (legacy.rowCount) {
+      await getPool().query(`
+        UPDATE employee_connector_bindings
+        SET principal_subject = $3, principal_email = $4, principal_name = $5, updated_at = NOW()
+        WHERE principal_issuer = $1 AND LOWER(principal_email) = $2 AND status <> 'revoked'
+      `, [
+        identity.principalIssuer,
+        identity.email,
+        identity.principalSubject,
+        identity.email,
+        identity.name,
+      ]);
+      rows = await getPool().query<EmployeeConnectorBindingRow>(`
+        SELECT id, application_id, platform, service, connection_name, status,
+               display_name, account_id, error_message, connected_at, updated_at
+        FROM employee_connector_bindings
+        WHERE principal_issuer = $1 AND principal_subject = $2 AND status <> 'revoked'
+      `, [identity.principalIssuer, identity.principalSubject]);
+    }
+  }
   if (!rows.rowCount) return [];
 
   const snapshot = await listConnectorConnections();
@@ -979,7 +1065,7 @@ async function reconcileEmployeeBindings(identity: ConsoleIdentity) {
 export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promise<EmployeeIntegrationsSnapshot> {
   await ensureSchema();
   await migrateLegacyWeComBotIntegrations();
-  const [applications, bindings, automaticWeComBots] = await Promise.all([
+  const [applications, bindings, automaticWeComBots, wecomIdentity] = await Promise.all([
     getPool().query<IntegrationApplicationRow>(`
       SELECT id, platform, app_name, app_id, note, action_ids, active, created_at, updated_at
       FROM integration_applications
@@ -993,6 +1079,7 @@ export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promis
         AND authorization_mode = 'wecom_visibility'
         AND enabled
     `),
+    getWeComIdentityLinkSnapshot(identity),
   ]);
   return buildEmployeeIntegrationsSnapshot(
     applications.rows.map(serializeApplication),
@@ -1000,6 +1087,7 @@ export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promis
     { name: identity.name, email: identity.email },
     undefined,
     Number.parseInt(automaticWeComBots.rows[0]?.count || "0", 10) || 0,
+    wecomIdentity,
   );
 }
 
@@ -1076,6 +1164,7 @@ export function buildEmployeeIntegrationsSnapshot(
   identity: EmployeeIntegrationsSnapshot["identity"],
   updatedAt = new Date().toISOString(),
   automaticWeComBotCount = applications.filter((application) => application.platform === "wecom_bot" && application.active).length,
+  wecomIdentity: EmployeeIntegrationsSnapshot["wecomIdentity"] = { linked: false },
 ): EmployeeIntegrationsSnapshot {
   const bindingByApplication = new Map(
     bindings.map((binding) => [binding.applicationId, binding]),
@@ -1097,6 +1186,7 @@ export function buildEmployeeIntegrationsSnapshot(
   );
   return {
     identity,
+    wecomIdentity,
     applications: employeeApplications,
     automaticWeComBotCount,
     updatedAt,
@@ -1203,6 +1293,8 @@ export async function disconnectEmployeeIntegration(identity: ConsoleIdentity, a
 const WECOM_VISIBILITY_CACHE_TTL_MS = 60_000;
 const WECOM_USER_ID_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const WECOM_CORP_GROUP_PATTERN = /^wecom:[a-f0-9]{12}$/;
+const WECOM_IDENTITY_LINK_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const WECOM_IDENTITY_LINK_LIFETIME_MS = 10 * 60 * 1_000;
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -1212,6 +1304,267 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 
 export function hashWeComUserId(userId: string) {
   return createHash("sha256").update(userId, "utf8").digest("hex");
+}
+
+export function hashWeComCorpId(corpId: string) {
+  return createHash("sha256").update(corpId, "utf8").digest("hex");
+}
+
+function hashWeComLinkSecret(value: string) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+export function deriveTrustedWeComRelayIdentity(
+  identity: { corpId: string; userId: string; relayIssuer: string },
+  configuredCorpId: string,
+) {
+  const normalizedCorpId = identity.corpId.trim();
+  const userId = identity.userId.trim();
+  const expectedCorpId = configuredCorpId.trim();
+  const corpIdHash = hashWeComCorpId(normalizedCorpId);
+  let relayIssuer = "";
+  try {
+    const parsed = new URL(identity.relayIssuer);
+    if (
+      !["http:", "https:"].includes(parsed.protocol)
+      || parsed.username
+      || parsed.password
+      || parsed.pathname !== "/wecom"
+      || parsed.search
+      || parsed.hash
+    ) {
+      throw new Error("invalid issuer");
+    }
+    relayIssuer = parsed.toString().replace(/\/$/, "");
+  } catch {
+    throw new IntegrationStoreError("企业微信中继身份签发方无效", 403, "invalid_wecom_identity");
+  }
+  if (!normalizedCorpId || normalizedCorpId !== expectedCorpId || !userId) {
+    throw new IntegrationStoreError(
+      "中继返回的企业微信身份不属于当前配置企业",
+      403,
+      "invalid_wecom_identity",
+    );
+  }
+  if (userId.length > 256) {
+    throw new IntegrationStoreError("企微 UserID 长度无效", 403, "invalid_wecom_identity");
+  }
+  return {
+    wecomIssuer: relayIssuer,
+    wecomSubject: `wecom_${createHash("sha256")
+      .update(`${normalizedCorpId}\0${userId}`, "utf8")
+      .digest("base64url")}`,
+    corpIdHash,
+    userIdHash: hashWeComUserId(userId),
+  };
+}
+
+export async function createWeComIdentityLinkRequest(identity: ConsoleIdentity) {
+  await ensureSchema();
+  const requestToken = randomBytes(32).toString("base64url");
+  const browserNonce = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + WECOM_IDENTITY_LINK_LIFETIME_MS);
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`
+      DELETE FROM wecom_identity_link_requests
+      WHERE expires_at < NOW() - INTERVAL '1 day' OR consumed_at IS NOT NULL
+    `);
+    await client.query(`
+      DELETE FROM wecom_identity_link_requests
+      WHERE principal_issuer = $1 AND principal_subject = $2 AND consumed_at IS NULL
+    `, [identity.principalIssuer, identity.principalSubject]);
+    await client.query(`
+      INSERT INTO wecom_identity_link_requests (
+        request_hash, browser_nonce_hash, principal_issuer, principal_subject,
+        principal_email, principal_name, expires_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      hashWeComLinkSecret(requestToken),
+      hashWeComLinkSecret(browserNonce),
+      identity.principalIssuer,
+      identity.principalSubject,
+      identity.email,
+      identity.name,
+      expiresAt,
+    ]);
+    await client.query("COMMIT");
+    return { requestToken, browserNonce, expiresAt: expiresAt.toISOString() };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function completeWeComIdentityLinkRequest(
+  requestToken: string,
+  browserNonce: string,
+  platformIdentity: ConsoleIdentity,
+  relayIdentity: { corpId: string; userId: string; relayIssuer: string },
+) {
+  if (
+    !WECOM_IDENTITY_LINK_SECRET_PATTERN.test(requestToken)
+    || !WECOM_IDENTITY_LINK_SECRET_PATTERN.test(browserNonce)
+  ) {
+    throw new IntegrationStoreError("企微身份绑定请求无效", 400, "invalid_wecom_link_request");
+  }
+  await ensureSchema();
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const requestResult = await client.query<WeComIdentityLinkRequestRow>(`
+      SELECT request_hash, browser_nonce_hash, principal_issuer, principal_subject,
+             principal_email, principal_name, created_at, expires_at, consumed_at
+      FROM wecom_identity_link_requests
+      WHERE request_hash = $1 AND browser_nonce_hash = $2 AND consumed_at IS NULL
+      FOR UPDATE
+    `, [hashWeComLinkSecret(requestToken), hashWeComLinkSecret(browserNonce)]);
+    const linkRequest = requestResult.rows[0];
+    if (!linkRequest || new Date(linkRequest.expires_at).getTime() <= Date.now()) {
+      throw new IntegrationStoreError(
+        "企微身份绑定请求已失效，请重新发起",
+        410,
+        "expired_wecom_link_request",
+      );
+    }
+    if (
+      linkRequest.principal_issuer !== platformIdentity.principalIssuer
+      || linkRequest.principal_subject !== platformIdentity.principalSubject
+    ) {
+      throw new IntegrationStoreError(
+        "企微身份绑定请求不属于当前平台账号",
+        403,
+        "invalid_wecom_link_request",
+      );
+    }
+    const configuration = await client.query<{ corp_id: string }>(`
+      SELECT corp_id
+      FROM wecom_authentication_configuration
+      WHERE singleton_key = 'default'
+        AND corp_id <> ''
+        AND app_secret_ciphertext IS NOT NULL
+    `);
+    const corpId = configuration.rows[0]?.corp_id;
+    if (!corpId) {
+      throw new IntegrationStoreError("企业微信认证尚未配置", 503, "wecom_authentication_unavailable");
+    }
+    const trusted = deriveTrustedWeComRelayIdentity(relayIdentity, corpId);
+    const existing = await client.query<WeComIdentityLinkRow>(`
+      SELECT principal_issuer, principal_subject, wecom_issuer, wecom_subject,
+             wecom_corp_id_hash, wecom_user_id_hash, linked_at, updated_at
+      FROM wecom_identity_links
+      WHERE (wecom_issuer = $1 AND wecom_subject = $2)
+         OR (wecom_corp_id_hash = $3 AND wecom_user_id_hash = $4)
+      FOR UPDATE
+    `, [trusted.wecomIssuer, trusted.wecomSubject, trusted.corpIdHash, trusted.userIdHash]);
+    if (existing.rows.some((row) => (
+      row.principal_issuer !== linkRequest.principal_issuer
+      || row.principal_subject !== linkRequest.principal_subject
+    ))) {
+      throw new IntegrationStoreError(
+        "该企微身份已绑定到另一个平台账号",
+        409,
+        "wecom_identity_conflict",
+      );
+    }
+    const linked = await client.query<WeComIdentityLinkRow>(`
+      INSERT INTO wecom_identity_links (
+        principal_issuer, principal_subject, principal_email, principal_name,
+        wecom_issuer, wecom_subject, wecom_corp_id_hash, wecom_user_id_hash
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (principal_issuer, principal_subject) DO UPDATE SET
+        principal_email = EXCLUDED.principal_email,
+        principal_name = EXCLUDED.principal_name,
+        wecom_issuer = EXCLUDED.wecom_issuer,
+        wecom_subject = EXCLUDED.wecom_subject,
+        wecom_corp_id_hash = EXCLUDED.wecom_corp_id_hash,
+        wecom_user_id_hash = EXCLUDED.wecom_user_id_hash,
+        linked_at = NOW(),
+        updated_at = NOW()
+      RETURNING principal_issuer, principal_subject, wecom_issuer, wecom_subject,
+                wecom_corp_id_hash, wecom_user_id_hash, linked_at, updated_at
+    `, [
+      linkRequest.principal_issuer,
+      linkRequest.principal_subject,
+      linkRequest.principal_email,
+      linkRequest.principal_name,
+      trusted.wecomIssuer,
+      trusted.wecomSubject,
+      trusted.corpIdHash,
+      trusted.userIdHash,
+    ]);
+    await client.query(`
+      UPDATE wecom_identity_link_requests SET consumed_at = NOW() WHERE request_hash = $1
+    `, [linkRequest.request_hash]);
+    await client.query("COMMIT");
+    return {
+      linked: true as const,
+      linkedAt: new Date(linked.rows[0].linked_at).toISOString(),
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (
+      error
+      && typeof error === "object"
+      && "code" in error
+      && error.code === "23505"
+    ) {
+      throw new IntegrationStoreError(
+        "该企微身份已绑定到另一个平台账号",
+        409,
+        "wecom_identity_conflict",
+      );
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getWeComIdentityLinkSnapshot(
+  identity: Pick<ConsoleIdentity, "principalIssuer" | "principalSubject">,
+): Promise<EmployeeIntegrationsSnapshot["wecomIdentity"]> {
+  await ensureSchema();
+  const result = await getPool().query<Pick<WeComIdentityLinkRow, "linked_at">>(`
+    SELECT linked_at
+    FROM wecom_identity_links
+    WHERE principal_issuer = $1 AND principal_subject = $2
+  `, [identity.principalIssuer, identity.principalSubject]);
+  const row = result.rows[0];
+  return row
+    ? { linked: true, linkedAt: new Date(row.linked_at).toISOString() }
+    : { linked: false };
+}
+
+export async function disconnectWeComIdentityLink(
+  identity: Pick<ConsoleIdentity, "principalIssuer" | "principalSubject">,
+) {
+  await ensureSchema();
+  const result = await getPool().query(`
+    DELETE FROM wecom_identity_links
+    WHERE principal_issuer = $1 AND principal_subject = $2
+  `, [identity.principalIssuer, identity.principalSubject]);
+  if (!result.rowCount) throw new IntegrationStoreError("当前账号尚未绑定企微身份", 404);
+  return { disconnected: true as const };
+}
+
+async function getLinkedWeComIdentityClaims(issuer: string, subject: string) {
+  const result = await getPool().query<Pick<
+    WeComIdentityLinkRow,
+    "wecom_corp_id_hash" | "wecom_user_id_hash"
+  >>(`
+    SELECT wecom_corp_id_hash, wecom_user_id_hash
+    FROM wecom_identity_links
+    WHERE principal_issuer = $1 AND principal_subject = $2
+  `, [issuer, subject]);
+  const row = result.rows[0];
+  return row ? {
+    corpGroup: `wecom:${row.wecom_corp_id_hash.slice(0, 12)}`,
+    userIdHash: row.wecom_user_id_hash,
+  } : undefined;
 }
 
 export function parseWeComVisibleUserIdHashes(value: unknown) {
@@ -1336,6 +1689,13 @@ export async function resolveEmployeeConnectorBindings(input: {
       .map((group) => group.trim().toLowerCase())
       .slice(0, 256),
   ));
+  const linkedWeComIdentity = input.wecomUserIdHash
+    ? undefined
+    : await getLinkedWeComIdentityClaims(issuer, subject);
+  const wecomGroups = linkedWeComIdentity
+    ? Array.from(new Set([...groups, linkedWeComIdentity.corpGroup]))
+    : groups;
+  const wecomUserIdHash = input.wecomUserIdHash || linkedWeComIdentity?.userIdHash;
   let result = await getPool().query<EmployeeConnectorBindingRow>(`
     SELECT binding.id, binding.application_id, binding.platform, binding.service,
            binding.connection_name, binding.status, binding.display_name,
@@ -1349,10 +1709,9 @@ export async function resolveEmployeeConnectorBindings(input: {
     ORDER BY binding.service
   `, [issuer, subject, service || null]);
 
-  // Pomerium and the MCP OAuth broker may expose different opaque subjects for
-  // the same upstream employee. The email fallback is accepted only because it
-  // comes from the broker-verified access token over the authenticated internal
-  // resolver channel. Ambiguous matches fail closed.
+  // Compatibility for rows written before Console and the MCP Broker shared
+  // the same opaque-subject derivation. The email comes from a broker-verified
+  // token over the authenticated internal resolver channel; ambiguity fails closed.
   if (!result.rowCount && email) {
     result = await getPool().query<EmployeeConnectorBindingRow>(`
       SELECT binding.id, binding.application_id, binding.platform, binding.service,
@@ -1413,9 +1772,9 @@ export async function resolveEmployeeConnectorBindings(input: {
       ORDER BY resource.service, resource.connection_name, grant_row.created_at
     `, [issuer, subject, email || null, service || null, groups]),
     resolveWeComVisibilityResources({
-      groups,
+      groups: wecomGroups,
       service,
-      wecomUserIdHash: input.wecomUserIdHash,
+      wecomUserIdHash,
     }),
   ]);
   const valid = new Map(

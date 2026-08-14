@@ -8,7 +8,9 @@ import {
   buildEmployeeIntegrationsSnapshot,
   buildEnterpriseIntegrationsSnapshot,
   decryptIntegrationSecret,
+  deriveTrustedWeComRelayIdentity,
   encryptIntegrationSecret,
+  hashWeComCorpId,
   hashWeComUserId,
   parseWeComVisibleUserIdHashes,
 } from "./integrations";
@@ -183,7 +185,33 @@ describe("enterprise integration store", () => {
     expect(snapshot.applications[1].binding).toBeUndefined();
     expect(snapshot.applications[1].active).toBe(false);
     expect(snapshot.identity.email).toBe("employee01@bluetron.cn");
+    expect(snapshot.wecomIdentity).toEqual({ linked: false });
     expect(snapshot.automaticWeComBotCount).toBe(1);
+  });
+
+  it("derives a trusted WeCom link only from the authenticated relay result", () => {
+    const corpId = "ww-corp";
+    const corpIdHash = hashWeComCorpId(corpId);
+    const relayIdentity = {
+      corpId,
+      userId: "ZhangSan",
+      relayIssuer: "https://tn1.example.com/wecom",
+    };
+
+    expect(deriveTrustedWeComRelayIdentity(relayIdentity, corpId)).toEqual({
+      wecomIssuer: relayIdentity.relayIssuer,
+      wecomSubject: expect.stringMatching(/^wecom_[A-Za-z0-9_-]{43}$/),
+      corpIdHash,
+      userIdHash: hashWeComUserId("ZhangSan"),
+    });
+    expect(() => deriveTrustedWeComRelayIdentity(
+      { ...relayIdentity, corpId: "ww-other" },
+      corpId,
+    )).toThrow("不属于当前配置企业");
+    expect(() => deriveTrustedWeComRelayIdentity(
+      { ...relayIdentity, relayIssuer: "javascript:alert(1)" },
+      corpId,
+    )).toThrow("签发方无效");
   });
 
   it("hashes only WeCom user IDs returned by a successful visibility response", () => {

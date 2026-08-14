@@ -4,7 +4,6 @@ import Link from "next/link";
 import { PageHeader } from "@/components/page-header";
 import { WeComAuthSettingsForm } from "@/components/wecom-auth-settings-form";
 import type { WeComAuthenticationSnapshot } from "@/lib/control-plane/types";
-import { DEFAULT_WECOM_AUTHENTICATION_RUNTIME_SETTINGS } from "@/lib/server/config";
 import { IntegrationStoreError } from "@/lib/server/integrations";
 import { getWeComAuthenticationConfiguration } from "@/lib/server/wecom-authentication";
 
@@ -12,10 +11,10 @@ export const dynamic = "force-dynamic";
 
 const emptySnapshot: WeComAuthenticationSnapshot = {
   corpId: "",
+  relayCallbackUrl: "",
   configured: false,
   secretConfigured: false,
-  ...DEFAULT_WECOM_AUTHENTICATION_RUNTIME_SETTINGS,
-  effectiveCallbackUrl: `${DEFAULT_WECOM_AUTHENTICATION_RUNTIME_SETTINGS.publicBaseUrl}/callback`,
+  effectiveCallbackUrl: "",
   updatedAt: new Date(0).toISOString(),
 };
 

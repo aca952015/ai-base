@@ -10,20 +10,14 @@ describe("WeCom authentication configuration", () => {
     const validation = validateWeComAuthenticationSettings({
       corpId: " ww-example-corp ",
       appSecret: "secret-value",
-      publicBaseUrl: "https://ai.example.com/wecom-oidc/",
-      callbackMode: "relay",
       relayCallbackUrl: "https://tn1.cofly-ai.cn/callbacks/wecom",
-      emailDomain: "Example.COM",
     });
     expect(validation).toEqual({
       ok: true,
       value: {
         corpId: "ww-example-corp",
         appSecret: "secret-value",
-        publicBaseUrl: "https://ai.example.com/wecom-oidc",
-        callbackMode: "relay",
         relayCallbackUrl: "https://tn1.cofly-ai.cn/callbacks/wecom",
-        emailDomain: "example.com",
       },
     });
     if (!validation.ok) return;
@@ -34,17 +28,13 @@ describe("WeCom authentication configuration", () => {
     const validation = validateWeComAuthenticationSettings({
       corpId: "ww-example-corp",
       appSecret: "",
-      publicBaseUrl: "http://127.0.0.1:8080/wecom-oidc",
-      callbackMode: "direct",
-      emailDomain: "example.com",
+      relayCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom",
     });
     expect(validation).toEqual({
       ok: true,
       value: {
         corpId: "ww-example-corp",
-        publicBaseUrl: "http://127.0.0.1:8080/wecom-oidc",
-        callbackMode: "direct",
-        emailDomain: "example.com",
+        relayCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom",
       },
     });
   });
@@ -52,10 +42,7 @@ describe("WeCom authentication configuration", () => {
   it("rejects unsafe callback URLs, invalid domains, and response-only fields", () => {
     const validation = validateWeComAuthenticationSettings({
       corpId: "",
-      publicBaseUrl: "https://user:pass@ai.example.com/wecom-oidc",
-      callbackMode: "relay",
       relayCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom?target=attacker",
-      emailDomain: "https://example.com",
       secretConfigured: true,
     });
     expect(validation.ok).toBe(false);
@@ -63,9 +50,7 @@ describe("WeCom authentication configuration", () => {
     expect(validation.errors).toEqual(expect.arrayContaining([
       "unsupported field: secretConfigured",
       "企业 ID（CorpID）不能为空",
-      "AI Base 公开认证入口必须是绝对 HTTP(S) 地址，且不能包含账号、查询参数或片段",
-      "公网中继回调地址必须是绝对 HTTP(S) 地址，且不能包含账号、查询参数或片段",
-      "企业邮箱域必须是有效的 DNS 域名",
+      "公网认证中继回调地址必须是以 /callbacks/wecom 结尾的绝对 HTTP(S) 地址，且不能包含账号、查询参数或片段",
     ]));
   });
 });

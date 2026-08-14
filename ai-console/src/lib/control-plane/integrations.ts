@@ -158,6 +158,10 @@ export type EmployeeIntegrationsSnapshot = {
     name: string;
     email: string;
   };
+  wecomIdentity: {
+    linked: boolean;
+    linkedAt?: string;
+  };
   applications: EmployeeIntegrationApplication[];
   automaticWeComBotCount: number;
   updatedAt: string;

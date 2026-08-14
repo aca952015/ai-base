@@ -16,13 +16,6 @@ const fallbackConfig: ConsoleConfig = {
       { enabled: service.id !== "promptfoo", endpoint: service.defaultEndpoint },
     ]),
   ),
-  authentication: {
-    wecom: {
-      publicBaseUrl: "http://127.0.0.1:8080/wecom-oidc",
-      callbackMode: "direct",
-      emailDomain: "bluetron.cn",
-    },
-  },
   updatedAt: new Date(0).toISOString(),
 };
 

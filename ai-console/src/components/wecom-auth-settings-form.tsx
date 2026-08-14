@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, KeyRound, Save, ShieldCheck } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import type {
   WeComAuthenticationSettings,
@@ -29,21 +29,12 @@ export function WeComAuthSettingsForm({
   const [settings, setSettings] = useState<WeComAuthenticationSettings>({
     corpId: initialSnapshot.corpId,
     appSecret: "",
-    publicBaseUrl: initialSnapshot.publicBaseUrl,
-    callbackMode: initialSnapshot.callbackMode,
     relayCallbackUrl: initialSnapshot.relayCallbackUrl,
-    emailDomain: initialSnapshot.emailDomain,
   });
   const [secretConfigured, setSecretConfigured] = useState(initialSnapshot.secretConfigured);
   const [updatedAt, setUpdatedAt] = useState(initialSnapshot.updatedAt);
   const [state, setState] = useState<SaveState>(initialError ? "error" : "idle");
-  const [message, setMessage] = useState(initialError || "修改会用于后续新发起的企业微信登录，不需要重启认证桥接。");
-  const effectiveCallbackUrl = useMemo(
-    () => settings.callbackMode === "relay" && settings.relayCallbackUrl
-      ? settings.relayCallbackUrl
-      : `${settings.publicBaseUrl.replace(/\/$/, "")}/callback`,
-    [settings],
-  );
+  const [message, setMessage] = useState(initialError || "修改会立即用于后续新发起的企业微信中继认证，不需要重启 AI Base。");
 
   function update(patch: Partial<WeComAuthenticationSettings>) {
     setSettings((current) => ({ ...current, ...patch }));
@@ -70,10 +61,7 @@ export function WeComAuthSettingsForm({
       setSettings({
         corpId: payload.corpId,
         appSecret: "",
-        publicBaseUrl: payload.publicBaseUrl,
-        callbackMode: payload.callbackMode,
         relayCallbackUrl: payload.relayCallbackUrl,
-        emailDomain: payload.emailDomain,
       });
       setSecretConfigured(payload.secretConfigured);
       setUpdatedAt(payload.updatedAt);
@@ -125,67 +113,24 @@ export function WeComAuthSettingsForm({
 
       <section className="component-settings__section" aria-labelledby="wecom-auth-routing">
         <div className="component-settings__heading">
-          <div><h2 id="wecom-auth-routing">浏览器认证路由</h2><p>这些地址不包含密钥，由认证桥接在每次新登录时从 Console 内网读取。</p></div>
+          <div><h2 id="wecom-auth-routing">公网认证中继</h2><p>企业微信授权和身份交换只在中继完成；AI Base 通过一次性加密请求关联当前平台账号。</p></div>
         </div>
         <div className="component-settings__fields">
           <label className="field-label">
-            <span>AI Base 公开认证入口</span>
+            <span>公网认证中继回调地址</span>
             <input
               type="url"
               required
-              value={settings.publicBaseUrl}
-              placeholder="https://ai.example.com/wecom-oidc"
-              onChange={(event) => update({ publicBaseUrl: event.target.value })}
-            />
-            <small>必须是浏览器可访问的绝对 HTTP(S) 地址，不含查询参数或片段。</small>
-          </label>
-          <label className="field-label">
-            <span>企业邮箱域</span>
-            <input
-              type="text"
-              required
-              inputMode="url"
-              value={settings.emailDomain}
-              placeholder="example.com"
-              onChange={(event) => update({ emailDomain: event.target.value })}
-            />
-            <small>企微未返回企业邮箱时，用于生成稳定的员工登录邮箱。</small>
-          </label>
-        </div>
-      </section>
-
-      <section className="component-settings__section" aria-labelledby="wecom-auth-callback">
-        <div className="component-settings__heading">
-          <div><h2 id="wecom-auth-callback">企业微信回调</h2><p>内网或开发部署可使用公网中继；具有稳定公网入口时可直接回调 AI Base。</p></div>
-        </div>
-        <div className="component-settings__fields">
-          <label className="field-label">
-            <span>回调方式</span>
-            <select
-              value={settings.callbackMode}
-              onChange={(event) => update({ callbackMode: event.target.value as WeComAuthenticationSettings["callbackMode"] })}
-            >
-              <option value="direct">直接回调 AI Base</option>
-              <option value="relay">通过公网认证中继</option>
-            </select>
-            <small>直接回调会使用公开认证入口下的 `/callback`。</small>
-          </label>
-          <label className="field-label">
-            <span>公网中继回调地址</span>
-            <input
-              type="url"
-              required={settings.callbackMode === "relay"}
-              disabled={settings.callbackMode !== "relay"}
-              value={settings.relayCallbackUrl ?? ""}
-              placeholder="https://auth.example.com/callbacks/wecom"
+              value={settings.relayCallbackUrl}
+              placeholder="http://tn1.cofly-ai.cn/callbacks/wecom"
               onChange={(event) => update({ relayCallbackUrl: event.target.value })}
             />
-            <small>必须是绝对 HTTP(S) 地址；正式公网部署应使用 HTTPS。</small>
+            <small>必须以 <code>/callbacks/wecom</code> 结尾。企微可信 IP 应配置为该中继的固定公网出口。</small>
           </label>
         </div>
         <div className="component-settings__effective">
           <ShieldCheck size={16} aria-hidden="true" />
-          <span><strong>当前生效回调</strong><code>{effectiveCallbackUrl}</code></span>
+          <span><strong>当前生效回调</strong><code>{settings.relayCallbackUrl || "尚未配置"}</code></span>
         </div>
       </section>
 

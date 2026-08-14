@@ -25,7 +25,7 @@
 
 - `ai-console/`：Next.js 16、React 19、TypeScript 控制面；默认 Server Component，仅交互区域使用 Client Component。
 - `mcp-access-gateway/`：Go OAuth Broker、MCP 身份验证、连接解析与策略执行边界。
-- `wecom-auth-bridge/`：Go 实现的企业微信网页授权到 OIDC 的桥接；它不是 IdP，也不负责机器人凭证。
+- `../ai-auth-relay/`：外部部署的企业微信身份认证代理；AI Base 通过短期加密协议暂存授权，企微网页授权与身份交换只在 Relay 完成。
 - `agent-runtime/`：FastAPI + PydanticAI 的 Agent 运行边界。
 - `rag-mcp/`：LightRAG 的只读 MCP 适配器。
 - `deploy/` 与 `compose.yaml`：数据库、网关、认证、知识库和本机部署配置。
@@ -55,7 +55,7 @@
 近期会话确定的下一步验收目标：
 
 - API 模式智能机器人是企业共享身份，不提供员工个人 OAuth。Console 中的“账号绑定/启用”表示把已验证员工授权到某个机器人，不得宣称为员工向企业微信授予个人 Token。
-- 员工启用机器人前必须先通过 `wecom-auth-bridge` 获得可信的 `CorpID + UserID`，并与当前 OIDC 身份绑定；普通 OIDC 登录本身不足以证明其属于对应企业或机器人可见范围。
+- 员工启用机器人前必须通过公网 Relay 获得可信的 `CorpID + UserID`，并与当前已登录的平台 OIDC 身份绑定；普通 OIDC 登录本身不足以证明其属于对应企业或机器人可见范围。
 - AI Base 只能处理管理员已经配置的机器人，不能声称发现企业内全部机器人。
 - 机器人可见性应使用该机器人的 `get_userlist` 与可信 `UserID` 做服务端校验：只展示和允许绑定包含该员工的机器人；查询失败按不可见处理；绑定时再次校验，并为移出可见范围后的禁用/撤权保留刷新机制。
 - 企微侧“可见范围”只限制机器人最多能看到什么，不能替代 AI Base 的用户级授权。网关仍需执行“员工/群组 → 机器人连接 → Action → 资源”的逐层判定。
@@ -105,7 +105,7 @@ docker compose config --quiet
 
 # Go（仓库要求的 Go 版本，以各 go.mod 为准）
 (cd mcp-access-gateway && go test ./...)
-(cd wecom-auth-bridge && go test ./...)
+(cd ../ai-auth-relay && go test ./...)
 
 # RAG MCP
 (cd rag-mcp && python3 -m unittest test_server.py)

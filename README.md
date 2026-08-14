@@ -15,13 +15,12 @@ OpenConnector 从 `vendor/open-connector` 中固定的上游提交构建本地�
 | 服务 | 地址 | 用途 |
 | --- | --- | --- |
 | AI Console | https://ai-console.localhost.pomerium.io:8443 | 经 Pomerium 与外部 OIDC 认证的一站式 Portal |
-| 企业微信直达登录 | https://ai-console.localhost.pomerium.io:8443/auth/wework | 跳过认证方式选择，直接进入企业微信认证后打开账号管理 |
+| 企业微信身份绑定 | https://ai-console.localhost.pomerium.io:8443/auth/wework | 先确认当前平台账号，再通过公网认证中继建立身份映射并返回账号管理 |
 | LightRAG | http://knowledge.localhost:8080/webui | 文档、混合检索与知识图谱工作台 |
 | OpenConnector | https://open-connector.localhost.pomerium.io:8443 | 经 Pomerium 单点登录的外部连接管理入口 |
 | 本地 OIDC | http://dex.localtest.me:5556/dex | 独立部署的 Dex 认证中心，不属于 AI Base Stack |
 | 全局网关 | http://localhost:8080 | 模型、MCP、RAG、Runtime、Connector、知识库与可观测统一入口 |
 | MCP Access Gateway | http://127.0.0.1:8080/mcp | Go 实现的 OAuth 保护 MCP 接口 |
-| 企业微信认证桥接 | http://127.0.0.1:8080/wecom-oidc | 将企业微信网页授权转换为 Dex 可接入的标准 OIDC；仅认证端点，无管理 UI |
 | Envoy AI Gateway | 仅容器内访问 | 模型路由，以及内部 `/mcp` 上的外部 MCP 注册、聚合与工具路由 |
 | RAG MCP | 仅容器内访问 | 将 LightRAG 只读查询封装为内置 MCP 工具，不修改 LightRAG |
 | Agent Runtime | http://runtime.localhost:8080/docs | FastAPI、PydanticAI、MCP 与 DBOS 运行边界 |
@@ -55,53 +54,33 @@ POMERIUM_IDP_CLIENT_ID=ai-base-pomerium
 POMERIUM_IDP_CLIENT_SECRET=replace-with-the-real-client-secret
 ```
 
-Dex 中的 `ai-base-pomerium` 客户端需要同时登记 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback` 和 `https://authenticate-wework.localhost.pomerium.io:8443/oauth2/callback`。普通入口保留 Dex 的认证方式选择；`/auth/wework` 转到隔离的 Pomerium 入口，由静态 `connector_id=wecom` 直接进入企业微信认证。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域，Jaeger 进一步只允许默认管理员 `admin@bluetron.cn`；更换企业域名或 `AI_CONSOLE_ADMIN_EMAILS` 时必须同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml) 和 [`deploy/pomerium/wework-config.example.yaml`](./deploy/pomerium/wework-config.example.yaml)，保持 Jaeger 与 Console 管理员集合一致。Pomerium 本机入口使用开发证书和仓库内的本地签名键；正式部署必须替换签名键，并配置受信任证书、正式域名和企业 OIDC。AI Console 会验证 Pomerium 签名的 JWT Assertion、有效期和两个受信入口的 audience，不信任可由客户端直接伪造的身份头。
+Dex 中的 `ai-base-pomerium` 客户端登记 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback`。Pomerium 只负责确认当前内网平台账号；企业微信不会作为 Dex 登录方式，也没有第二套 Pomerium。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域，Jaeger 进一步只允许默认管理员 `admin@bluetron.cn`；更换企业域名或 `AI_CONSOLE_ADMIN_EMAILS` 时必须同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml)。Pomerium 本机入口使用开发证书和仓库内的本地签名键；正式部署必须替换签名键，并配置受信任证书、正式域名和企业 OIDC。AI Console 验证 Pomerium 签名、有效期和精确 audience，不信任客户端可伪造的身份头。
 
-普通入口与企业微信直达入口的浏览器会话上限均显式设置为 14 小时。两套 Pomerium Data Broker 分别使用现有 PostgreSQL 服务中的 `ai_base_pomerium` 与 `ai_base_pomerium_wework` 数据库保存会话，因此容器重启或普通 `docker compose down` / `up` 不再要求员工提前重新登录；两个入口的会话数据互不共享。`pomerium-database-init` 会在启动时以幂等方式补齐数据库，兼容空库和已有数据卷。`docker compose down -v`、删除 PostgreSQL 数据卷，或者轮换 Pomerium Cookie/Shared Secret 仍会使已有会话失效。Data Broker 记录包含登录会话和身份提供方 Token 状态，生产环境必须保护 PostgreSQL、启用静态加密并纳入备份策略。
+普通入口的浏览器会话上限为 14 小时，并通过 PostgreSQL Data Broker 写入 `ai_base_pomerium`。容器或 Docker 重启不会清空会话；删除 PostgreSQL 数据卷、轮换 Pomerium Cookie/Shared Secret、上游 Token 刷新失败、主动退出或策略撤权仍会提前终止会话。
 
-### 企业微信登录桥接
+### 企业微信身份中继
 
-`wecom-auth-bridge` 是独立 Go 容器，作为 Dex 的上游 OIDC Provider。员工从 Console 或 MCP 登录时在 Dex 选择“企业微信”，桥接服务执行企业微信 `snsapi_base` 网页授权，使用返回的企业 `UserID` 生成稳定 OIDC Subject，再由 Dex 统一签发 AI Base 身份。Pomerium、MCP Access Gateway 与账号绑定仍只信任 Dex，因此同一员工在浏览器与 MCP 客户端中保持同一身份边界。
+企业微信工作台应用首页配置为 `https://ai-console.localhost.pomerium.io:8443/auth/wework`。用户先通过主 Pomerium 确认当前平台账号，随后由部署在固定公网出口的 `ai-auth-relay` 完成企业微信网页授权和身份交换；企业微信只访问中继，不访问内网 AI Base。
 
 管理员在 Console 的“集成管理 / 企业微信认证”中维护唯一一套系统认证配置：
 
 - “企业 ID（CorpID）”填写企业微信管理后台的企业 ID；
 - “App Secret”填写该自建应用的 Secret；
 - 自建应用的可见范围应包含允许登录 AI Base 的员工；
-- 在同一表单中维护 AI Base 公开认证入口、企业邮箱域和回调方式；企业微信后台把可信域名与网页授权回调配置为页面展示的“当前生效回调”；正式公网部署可直接使用本地网关，开发机/内网部署则可使用独立公网回调中继；
-- 不使用 Relay 时，将下载的 `WW_verify_*.txt` 原文件放入 `deploy/global-gateway/wecom-verification/`；使用 Relay 时，按其 README 配置校验文件名与内容；
-- 工作台应用主页指向 AI Console 的 `/auth/wework`；该入口不展示认证方式选择页，认证完成后直接进入 `/account`。
+- “公网认证中继回调地址”填写 Relay 的固定 `/callbacks/wecom` 地址，例如 `http://tn1.cofly-ai.cn/callbacks/wecom`；
+- 在企业微信后台把可信域名和网页授权回调配置为该中继，并把中继主机的固定公网出口加入应用可信 IP；
+- 域名验证文件只部署到 Relay；AI Base 全局网关不再提供企微回调或域名验证路径。
 
-桥接服务在每次新登录时通过内网接口读取 Console 中的唯一企微认证配置，保存后无需重启；Secret 不返回浏览器。只有内部接口 Token、Dex 上游客户端密钥和身份拓扑仍属于启动信任根：
+AI Base 在每次绑定开始时从 Console 数据库读取这套凭据，通过服务端连接把 10 分钟加密票据暂存到 Relay。浏览器只携带随机授权 ID，不接触 CorpID、App Secret 或平台请求令牌。Relay 在内存中一次性消费授权 ID 和 state，使用自己的固定公网出口调用企微 `gettoken/getuserinfo`，再把 5 分钟加密身份结果经浏览器带回内网完成页。完成页仍要求当前 Pomerium 会话、同浏览器 HttpOnly nonce、未过期数据库请求和匹配的 CorpID；成功后仅保存 CorpID/UserID 摘要。
+
+两端共享密钥属于启动信任根，不能放进登录后的管理页面：
 
 ```dotenv
-WECOM_AUTH_BRIDGE_CONFIG_TOKEN=replace-with-a-long-random-internal-token
-WECOM_OIDC_CLIENT_SECRET=replace-with-a-random-dex-upstream-client-secret
-WECOM_DEX_REDIRECT_URI=https://id.example.com/dex/callback
+AI_CONSOLE_PUBLIC_URL=https://ai.example.com
+WECOM_RELAY_SHARED_KEY=replace-with-base64url-32-byte-secret-shared-with-relay
 ```
 
-相邻 `local-oidc` 的 Dex 配置已包含 `wecom` OIDC Connector，本地桥接客户端密钥必须与 AI Base 的 `WECOM_OIDC_CLIENT_SECRET` 相同。正式环境需把桥接 `issuer` 和 Dex 回调统一替换为部署对应的稳定地址。OIDC Client Secret、内部配置 Token、签名密钥、issuer/client 绑定不能移入登录后的管理页面，否则会形成认证自举死锁并扩大信任根暴露面。
-
-集成管理中的默认公开入口是 `http://127.0.0.1:8080/wecom-oidc`，并直接回调其 `/callback`，仅适合本机验证。使用公网中继时，把“回调方式”改为“通过公网认证中继”并填写稳定 HTTPS 回调地址；中继仍不持有企微 Secret 或用户身份，只把白名单参数交还浏览器，因此页面中的 AI Base 公开认证入口必须能被发起登录的浏览器访问。
-
-外部 Dex 的 Connector 配置如下；`redirectURI` 必须是 Dex 自身 issuer 下的 `/callback`：
-
-```yaml
-connectors:
-  - type: oidc
-    id: wecom
-    name: 企业微信
-    config:
-      issuer: http://wecom-auth-bridge:8082
-      clientID: ai-base-dex
-      clientSecret: $WECOM_OIDC_CLIENT_SECRET
-      redirectURI: http://dex.localtest.me:5556/dex/callback
-      getUserInfo: true
-      insecureSkipEmailVerified: true
-      scopes: [profile, email, groups, offline_access]
-```
-
-桥接服务的 Access Token 默认 1 小时，Dex 上游 Refresh Token 使用持久卷保存、90 天滑动续期；刷新凭据只保存 SHA-256 哈希。企业微信通讯录权限允许时使用成员企业邮箱；读取受限或邮箱域不匹配时，按集成管理中的企业邮箱域生成 `UserID@<domain>` 稳定登录邮箱。修改该域时还应同步检查 Pomerium 的邮箱域策略。
+Relay 使用同一个值配置 `AI_BASE_WECOM_RELAY_SHARED_KEY`，并把公共回调配置为 `AI_BASE_WECOM_PUBLIC_CALLBACK_URL`。当前部署按用户要求支持 HTTP 中继；加密票据保护应用凭据和身份结果，但 HTTP 不提供完整的传输层防窃听与抗劫持能力。启用 HTTPS 时同步修改 Relay 与 Console 中的回调地址即可。
 
 OpenConnector 的管理请求由独立内部代理注入 Admin Token，Token 不进入浏览器。OpenConnector 不再映射宿主机端口；管理入口经 Pomerium，Agent 功能流量经全局网关 `/connector`，分别使用 Admin Token 与 Runtime Token。
 
@@ -139,9 +118,9 @@ MCP_ADMIN_TOKEN=replace-with-a-random-admin-token
 
 从旧的内存刷新令牌版本升级时，已有客户端需要重新连接一次；新令牌写入持久化存储后，后续网关重启不再要求重新登录。不要通过延长 Access Token 来实现长期登录，长期能力由可复用、可撤销并滑动续期的 Refresh Token 提供。
 
-需要个人 OAuth 的 Connector 仍由员工在 AI Console 的 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account) 完成授权。企业微信 API 模式智能机器人不需要员工再绑定一次：管理员在“连接器配置”维护具名机器人连接和 Action 白名单；员工通过 MCP 的企业微信认证后，Broker 只把 `UserID` 的 SHA-256 摘要写入短期 Access Token，Console 校验当前启用的 CorpID 身份域，并通过每个机器人的 `wecom_bot.get_userlist` 自动筛选可见连接。原始 UserID 不进入解析器请求、浏览器响应或普通日志；查询失败、身份域不匹配或员工不在可见范围时关闭失败。
+需要个人 OAuth 的 Connector 仍由员工在 AI Console 的 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account) 完成授权。企业微信 API 模式智能机器人不做逐机器人绑定：管理员在“连接器配置”维护具名机器人连接和 Action 白名单；员工只需从企微工作台主页或账号页完成一次“当前平台账号 ↔ 企业微信身份”关联。绑定成功后，Console 只保存 CorpID 与 UserID 摘要，MCP 解析器复用该映射，并通过每个机器人的 `wecom_bot.get_userlist` 自动筛选可见连接；如果 MCP Token 本身由企微认证签发，则仍可直接使用其中的可信摘要。原始 UserID 不进入 Broker Token、解析器请求、浏览器响应或普通日志；查询失败、身份域不匹配或员工不在可见范围时关闭失败。
 
-从旧版本升级后，已经登录的 MCP 客户端需要重新完成一次企业微信认证，才能让新签发的 Token 带上可信 UserID 摘要；旧 Refresh Token 不会被补写该身份声明。
+从旧版本升级后，员工可以打开一次企微工作台应用主页建立平台映射，已有 MCP 客户端便不必为了每个机器人重复绑定。尚未建立映射时，重新通过企微完成 MCP 登录仍可让新 Token 自带可信 UserID 摘要；旧 Refresh Token 不会被补写该身份声明。
 
 MCP Access Gateway 会按 Broker JWT 的 `issuer + subject` 查询个人映射和受控共享策略，覆盖客户端提交的 `connectionName`，并只返回当前员工可用的连接。需要凭据的 Connector 在没有个人绑定或共享授权、连接已失效、可见范围查询失败或映射服务不可用时不会回退到共享 `default`；上游明确声明为 `no_auth` 的虚拟公共 Connector 可以按系统 `default` 连接使用。
 
@@ -157,7 +136,6 @@ MCP Access Gateway 会按 Broker JWT 的 `issuer + subject` 查询个人映射�
 | `/mcp`、`/mcp/*` | MCP Access Gateway | OIDC 验证后转发到内部 Envoy MCP，支持 Streamable HTTP |
 | `/.well-known/oauth-protected-resource/mcp` | MCP Access Gateway | OAuth Protected Resource Metadata |
 | `/oauth/*`、OAuth well-known 路径 | MCP Access Gateway | MCP 客户端 OAuth、DCR、PKCE、Token 与 JWKS |
-| `/wecom-oidc/*` | 企业微信认证桥接 | Dex 上游 OIDC 的公开授权与企业微信回调；Token、UserInfo 和 JWKS 走 Compose 内网 |
 | `/rag/*` | LightRAG API | 移除 `/rag` 前缀；提供文档、检索和知识图谱 API |
 | `/runtime/*` | Agent Runtime API | 移除 `/runtime` 前缀 |
 | `/llm-admin/*` | Envoy AI Gateway 管理 API | 移除 `/llm-admin` 前缀，仅供控制台内部使用 |
@@ -234,11 +212,11 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 
 ### 集成管理
 
-[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 仅供管理员使用，并作为企业微信、飞书和钉钉的统一配置目录。企业微信进入独立的 [认证二级页](https://ai-console.localhost.pomerium.io:8443/integrations/wecom-authentication)，集中维护 CorpID、App Secret、公开入口、回调方式和企业邮箱域；飞书与钉钉分别进入 `/integrations/feishu` 和 `/integrations/dingtalk`，独立管理各自的应用凭据、Action 与启用状态。企微机器人的 Bot ID/Secret 与 Action 策略仍在“连接器配置”维护。飞书和钉钉可以登记多个企业应用，但同一平台只有一个启用应用；员工开始授权前，AI Base 会把支持的启用应用 OAuth Client 配置同步到 OpenConnector。
+[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 仅供管理员使用，并作为企业微信、飞书和钉钉的统一配置目录。企业微信进入独立的 [认证二级页](https://ai-console.localhost.pomerium.io:8443/integrations/wecom-authentication)，集中维护 CorpID、App Secret 和公网认证中继回调；飞书与钉钉分别进入 `/integrations/feishu` 和 `/integrations/dingtalk`，独立管理各自的应用凭据、Action 与启用状态。企微机器人的 Bot ID/Secret 与 Action 策略仍在“连接器配置”维护。飞书和钉钉可以登记多个企业应用，但同一平台只有一个启用应用；员工开始授权前，AI Base 会把支持的启用应用 OAuth Client 配置同步到 OpenConnector。
 
 企业微信认证保存在 PostgreSQL 的单例表 `wecom_authentication_configuration`；飞书和钉钉应用保存在 `integration_applications`。所有 App Secret 均使用 `AI_CONSOLE_SECRET_ENCRYPTION_KEY` 在服务端执行 AES-256-GCM 加密，读取接口和编辑表单不回显明文。升级时，旧 `integration_applications.wecom` 的启用凭据与 Console 配置文件中的企微运行参数会迁移到单例表，随后删除旧企微应用记录和配置文件副本。OpenConnector 当前只有飞书 Provider 提供用户级 OAuth；钉钉现有 Provider 不提供个人 OAuth，因此对应员工授权保持不可用。
 
-普通员工登录 Console 后只进入 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account)。页面只为飞书等个人 OAuth 连接提供绑定操作，并以只读说明展示企微机器人会由 MCP 自动筛选。飞书授权成功后：
+普通员工登录 Console 后只进入 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account)。页面同时维护飞书等个人 OAuth 连接，以及唯一的平台账号与企微身份映射；企微映射可从页面发起、从工作台主页自动进入，也可在页面解绑。页面不展示明文 UserID，机器人仍由 MCP 按可见范围自动筛选。飞书授权成功后：
 
 1. OpenConnector 在自己的加密 SQLite 数据中保存 OAuth Token；
 2. PostgreSQL 的 `employee_connector_bindings` 只保存员工 OIDC 主体与命名连接的映射、状态和安全摘要；
@@ -259,8 +237,10 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `GET/POST /api/integrations`、`PUT/DELETE /api/integrations/:id`：读取并管理飞书和钉钉应用凭据。
 - `POST /api/integrations/:id/activate`：将应用设为平台唯一启用配置，并同步支持的 OAuth Client。
 - `GET/PUT /api/integrations/wecom-authentication`：仅管理员读取或保存唯一的企业微信系统认证配置。
-- `GET /api/internal/wecom-auth/config`：仅供桥接容器以内网 Bearer Token 读取同一企微认证配置的运行参数、CorpID 与 Secret，不由全局网关代理。
 - `GET /api/account/integrations`、`POST/DELETE /api/account/integrations/:platform/authorize`：读取、发起或解除当前员工个人绑定。
+- `GET /auth/wework`：在主 Pomerium 会话中创建一次性企微身份绑定请求，服务端向公网中继暂存短期加密授权，再由浏览器进入企微认证。
+- `GET /auth/wework/complete`：验证主平台身份、中继加密结果、同浏览器 HttpOnly nonce、未过期未消费请求和当前 CorpID 后完成关联。
+- `DELETE /api/account/wecom-identity`：解除当前平台账号与企微身份映射；不会删除管理员维护的共享机器人连接。
 - `GET /api/observability/summary?range=15m|1h|24h|7d`：仅管理员读取模型与 MCP 的固定 PromQL 摘要；未被 capability probe 证明的模型错误率和 TTFT 明确返回“不可用”。
 - `GET /api/observability/calls`：仅管理员读取最多 24 小时、扫描最多 100 条 Trace 的安全诊断样本；结果可截断，不提供稳定 cursor，也不是调用账本。
 - `GET /api/observability/traces/:traceId`：仅管理员读取服务端白名单处理后的 Trace 时间线，不透传任意 tag、event 或上游错误正文。

@@ -14,6 +14,7 @@ export type ConsoleIdentity = {
   email: string;
   name: string;
   groups: string[];
+  preferredUsername?: string;
   isAdmin: boolean;
 };
 
@@ -26,6 +27,7 @@ type AssertionClaims = {
   email?: unknown;
   name?: unknown;
   groups?: unknown;
+  preferred_username?: unknown;
 };
 
 type AssertionHeader = {
@@ -132,9 +134,9 @@ export function verifyPomeriumAssertion(
 }
 
 export function brokerSubject(loginIssuer: string, upstreamSubject: string) {
-  return createHash("sha256")
+  return `usr_${createHash("sha256")
     .update(`${loginIssuer.replace(/\/$/, "")}\0${upstreamSubject}`, "utf8")
-    .digest("base64url");
+    .digest("base64url")}`;
 }
 
 function configuredAdminEmails() {
@@ -161,6 +163,7 @@ export function consoleIdentityFromHeaders(input: Headers): ConsoleIdentity {
     || email.split("@")[0]
     || "企业员工";
   const groups = stringArrayClaim(claims.groups);
+  const preferredUsername = stringClaim(claims.preferred_username);
 
   if ((!email || !upstreamSubject) && process.env.AI_CONSOLE_DEV_IDENTITY_ENABLED === "true") {
     const developmentEmail = process.env.AI_CONSOLE_DEV_EMAIL?.trim().toLowerCase() || "admin@bluetron.cn";
@@ -191,11 +194,12 @@ export function consoleIdentityFromHeaders(input: Headers): ConsoleIdentity {
     email,
     name,
     groups,
+    preferredUsername,
     isAdmin: configuredAdminEmails().has(email),
   };
 }
 
-export async function getConsoleIdentity() {
+export async function getConsoleIdentity(options: { audience?: string | string[] } = {}) {
   const requestHeaders = await headers();
   if (process.env.AI_CONSOLE_DEV_IDENTITY_ENABLED !== "true") {
     const assertion = requestHeaders.get("x-pomerium-jwt-assertion");
@@ -205,12 +209,12 @@ export async function getConsoleIdentity() {
     const publicKey = await readFile(publicKeyPath, "utf8").catch(() => {
       throw new ConsoleAuthError("无法读取 Pomerium JWT 公钥", 503);
     });
-    const audiences = (process.env.POMERIUM_JWT_AUDIENCE || "")
+    const configuredAudiences = (process.env.POMERIUM_JWT_AUDIENCE || "")
       .split(",")
       .map((audience) => audience.trim())
       .filter(Boolean);
     verifyPomeriumAssertion(assertion, publicKey, {
-      audience: audiences.length ? audiences : undefined,
+      audience: options.audience || (configuredAudiences.length ? configuredAudiences : undefined),
       issuer: process.env.POMERIUM_JWT_ISSUER?.trim() || undefined,
     });
   }

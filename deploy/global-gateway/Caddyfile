@@ -104,12 +104,6 @@ http://:8080 {
 			}
 		}
 
-		@wecomOIDC path /wecom-oidc/authorize /wecom-oidc/callback
-		handle @wecomOIDC {
-			uri strip_prefix /wecom-oidc
-			reverse_proxy wecom-auth-bridge:8082
-		}
-
 		handle /rag/health {
 			uri strip_prefix /rag
 			reverse_proxy lightrag:9621 {
@@ -169,7 +163,7 @@ http://:8080 {
 
 		handle / {
 			header Content-Type application/json
-			respond `{"service":"ai-base-global-gateway","routes":{"models":"/v1","mcp":"/mcp","mcpOAuth":"/oauth","wecomOIDC":"/wecom-oidc","rag":"/rag","runtime":"/runtime","connector":"/connector","knowledge":"/knowledge","promptfoo":"/promptfoo"}}`
+			respond `{"service":"ai-base-global-gateway","routes":{"models":"/v1","mcp":"/mcp","mcpOAuth":"/oauth","rag":"/rag","runtime":"/runtime","connector":"/connector","knowledge":"/knowledge","promptfoo":"/promptfoo"}}`
 		}
 
 		handle {
@@ -202,26 +196,7 @@ https://jaeger.localhost.pomerium.io:8443,
 https://open-connector.localhost.pomerium.io:8443 {
 	tls internal
 
-	@weworkLogin {
-		host ai-console.localhost.pomerium.io
-		path /auth/wework /auth/wework/
-	}
-	handle @weworkLogin {
-		redir https://wework.localhost.pomerium.io:8443/account 302
-	}
-
 	reverse_proxy https://pomerium:443 {
-		header_up Host {host}:8443
-		transport http {
-			tls_insecure_skip_verify
-		}
-	}
-}
-
-https://authenticate-wework.localhost.pomerium.io:8443,
-https://wework.localhost.pomerium.io:8443 {
-	tls internal
-	reverse_proxy https://pomerium-wework:443 {
 		header_up Host {host}:8443
 		transport http {
 			tls_insecure_skip_verify

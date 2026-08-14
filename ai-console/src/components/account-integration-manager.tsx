@@ -28,6 +28,15 @@ type RequestState = {
   action: "authorizing" | "disconnecting";
 };
 
+const wecomLinkResultMessages: Record<string, { tone: "success" | "error"; text: string }> = {
+  linked: { tone: "success", text: "企业微信身份已与当前平台账号绑定。" },
+  expired: { tone: "error", text: "企业微信身份绑定请求已过期，请重新发起。" },
+  conflict: { tone: "error", text: "该企业微信身份已绑定到另一个平台账号。" },
+  invalid: { tone: "error", text: "未获得本次绑定所需的可信企业微信身份，请重新打开企业微信应用。" },
+  denied: { tone: "error", text: "企业微信认证已取消，当前平台账号未发生变化。" },
+  failed: { tone: "error", text: "企业微信身份绑定失败，请稍后重试或联系管理员。" },
+};
+
 const platformIcons: Partial<Record<EnterpriseIntegrationPlatform, typeof MessageSquareShare>> = {
   feishu: MessageSquareShare,
   wecom: Building2,
@@ -78,11 +87,14 @@ function formatConnectedAt(value?: string | null) {
   }).format(date);
 }
 
-export function AccountIntegrationManager() {
+export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult?: string }) {
   const [snapshot, setSnapshot] = useState<EmployeeIntegrationsSnapshot>();
   const [loading, setLoading] = useState(true);
   const [requestState, setRequestState] = useState<RequestState>();
-  const [message, setMessage] = useState<{ tone: "info" | "success" | "error"; text: string }>();
+  const [wecomBusy, setWecomBusy] = useState(false);
+  const [message, setMessage] = useState<{ tone: "info" | "success" | "error"; text: string } | undefined>(
+    () => wecomLinkResult ? wecomLinkResultMessages[wecomLinkResult] : undefined,
+  );
   const pollingTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const popupRef = useRef<Window | null>(null);
   const mountedRef = useRef(true);
@@ -117,6 +129,32 @@ export function AccountIntegrationManager() {
       stopPolling();
     };
   }, [reload, stopPolling]);
+
+  useEffect(() => {
+    if (!wecomLinkResult) return;
+    const query = new URLSearchParams(window.location.search);
+    query.delete("wecom_link");
+    const suffix = query.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${suffix ? `?${suffix}` : ""}`);
+  }, [wecomLinkResult]);
+
+  async function disconnectWeComIdentity() {
+    if (!window.confirm("确认解绑当前平台账号与企业微信身份？解绑后，企微共享机器人将不再出现在该账号的 MCP 清单中。")) return;
+    setWecomBusy(true);
+    setMessage({ tone: "info", text: "正在解绑企业微信身份…" });
+    try {
+      await fetchJson<unknown>("/api/account/wecom-identity", { method: "DELETE" });
+      await reload();
+      setMessage({ tone: "success", text: "企业微信身份已解绑。" });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "企业微信身份解绑失败",
+      });
+    } finally {
+      setWecomBusy(false);
+    }
+  }
 
   const pollBinding = useCallback((applicationId: string, popup: Window) => {
     stopPolling();
@@ -294,16 +332,34 @@ export function AccountIntegrationManager() {
         <p><LockKeyhole size={14} />个人 OAuth 授权只对当前登录身份生效</p>
       </section>
 
-      {snapshot?.automaticWeComBotCount ? (
-        <section className="account-identity-strip" aria-label="企微机器人自动授权">
-          <span><Bot size={20} /></span>
+      <section className="account-identity-strip" aria-label="企业微信身份绑定">
+          <span><Building2 size={20} /></span>
           <div>
-            <strong>企微机器人无需绑定</strong>
-            <small>{snapshot.automaticWeComBotCount} 个企业共享机器人由管理员在连接器管理中维护</small>
+            <strong>{snapshot?.wecomIdentity.linked ? "企业微信身份已绑定" : "尚未绑定企业微信身份"}</strong>
+            <small>
+              {snapshot?.wecomIdentity.linked
+                ? `${snapshot.automaticWeComBotCount} 个企业共享机器人将按企微可见范围自动筛选`
+                : "从企业微信应用首页进入，或在此发起一次可信身份绑定"}
+            </small>
           </div>
-          <p><ShieldCheck size={14} />MCP 登录后按可信企微身份与机器人可见范围自动筛选</p>
+          <p><ShieldCheck size={14} />{snapshot?.wecomIdentity.linked ? "已建立稳定身份映射" : "不会保存明文 UserID"}</p>
+          {snapshot?.wecomIdentity.linked ? (
+            <button
+              className="button button--secondary account-unbind-button"
+              type="button"
+              onClick={disconnectWeComIdentity}
+              disabled={wecomBusy}
+            >
+              {wecomBusy ? <LoaderCircle className="is-spinning" size={15} /> : <Unlink size={15} />}
+              {wecomBusy ? "解绑中" : "解绑"}
+            </button>
+          ) : (
+            <a className="button button--primary" href="/auth/wework">
+              <Bot size={15} />
+              绑定企微身份
+            </a>
+          )}
         </section>
-      ) : null}
 
       <div className="account-integration-grid">
         {(snapshot?.applications || []).map((application) => (
@@ -318,7 +374,7 @@ export function AccountIntegrationManager() {
         ))}
       </div>
 
-      {!snapshot?.applications.length && !snapshot?.automaticWeComBotCount ? (
+      {!snapshot?.applications.length && !snapshot?.automaticWeComBotCount && snapshot?.wecomIdentity.linked ? (
         <div className="account-integration-loading">
           <Link2 size={20} />
           <span>当前没有需要个人绑定的企业集成。</span>

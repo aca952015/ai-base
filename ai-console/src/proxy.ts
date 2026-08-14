@@ -45,6 +45,8 @@ export function proxy(request: NextRequest) {
   if (
     pathname === "/account"
     || pathname === "/client-setup"
+    || pathname === "/auth/wework"
+    || pathname === "/auth/wework/complete"
     || pathname.startsWith("/api/account/")
   ) {
     return NextResponse.next();

@@ -3,14 +3,20 @@ import { PageHeader } from "@/components/page-header";
 
 export const dynamic = "force-dynamic";
 
-export default function AccountPage() {
+export default async function AccountPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ wecom_link?: string | string[] }>;
+}) {
+  const query = await searchParams;
+  const wecomLinkResult = typeof query.wecom_link === "string" ? query.wecom_link : undefined;
   return (
     <div className="page-stack">
       <PageHeader
         title="账号绑定"
-        description="维护个人 OAuth 账号；企业共享机器人会在 MCP 登录后按可信企微身份自动筛选。"
+        description="维护个人 OAuth 账号，并将可信企业微信身份关联到当前平台账号。"
       />
-      <AccountIntegrationManager />
+      <AccountIntegrationManager wecomLinkResult={wecomLinkResult} />
     </div>
   );
 }

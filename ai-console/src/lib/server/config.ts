@@ -5,9 +5,9 @@ import path from "node:path";
 import { serviceCatalog } from "../control-plane/catalog";
 import type {
   ConsoleConfig,
+  LegacyWeComAuthenticationRuntimeSettings,
   ServiceConfig,
   ServiceId,
-  WeComAuthenticationRuntimeSettings,
 } from "../control-plane/types";
 
 const CONFIG_FILE_NAME = "config.json";
@@ -15,7 +15,7 @@ const MAX_MONTHLY_BUDGET = 1_000_000_000;
 const MAX_DISPLAY_NAME_LENGTH = 100;
 const MAX_NOTES_LENGTH = 2_000;
 
-export const DEFAULT_WECOM_AUTHENTICATION_RUNTIME_SETTINGS: WeComAuthenticationRuntimeSettings = {
+export const DEFAULT_WECOM_AUTHENTICATION_RUNTIME_SETTINGS: LegacyWeComAuthenticationRuntimeSettings = {
   publicBaseUrl: "http://127.0.0.1:8080/wecom-oidc",
   callbackMode: "direct",
   emailDomain: "bluetron.cn",

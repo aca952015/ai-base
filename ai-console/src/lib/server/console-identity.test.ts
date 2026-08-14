@@ -52,7 +52,7 @@ describe("console identity", () => {
   it("derives the same opaque subject contract used by the MCP OAuth broker", () => {
     const issuer = "https://login.example.com/dex";
     const subject = "employee-42";
-    const expected = createHash("sha256").update(`${issuer}\0${subject}`).digest("base64url");
+    const expected = `usr_${createHash("sha256").update(`${issuer}\0${subject}`).digest("base64url")}`;
     expect(brokerSubject(issuer, subject)).toBe(expected);
   });
 
@@ -66,6 +66,7 @@ describe("console identity", () => {
         email: "Admin@Example.com",
         name: "管理员",
         groups: ["platform-admins"],
+        preferred_username: "zhangsan",
       }),
     });
 
@@ -76,6 +77,7 @@ describe("console identity", () => {
       email: "admin@example.com",
       name: "管理员",
       groups: ["platform-admins"],
+      preferredUsername: "zhangsan",
       isAdmin: true,
     });
     expect(identity.principalSubject).toBe(brokerSubject("https://login.example.com/dex", "employee-42"));
