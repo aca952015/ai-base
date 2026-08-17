@@ -33,11 +33,21 @@ class RAGMcpServerTest(unittest.TestCase):
         self.assertEqual(
             [tool["name"] for tool in listed["result"]["tools"]],
             [
-                "query_knowledge",
-                "retrieve_knowledge_context",
-                "list_knowledge_documents",
-                "search_knowledge_labels",
-                "get_knowledge_graph",
+                "answer",
+                "retrieve",
+                "list_documents",
+                "search_entities",
+                "get_entity_graph",
+            ],
+        )
+        self.assertEqual(
+            [tool["description"] for tool in listed["result"]["tools"]],
+            [
+                "回答企业知识库问题并附引用；需要直接答案时使用。",
+                "检索相关知识片段，不生成答案；需要原始上下文时使用。",
+                "列出知识库文档及索引状态，不返回正文。",
+                "按名称查找知识图谱实体，供图谱查询使用。",
+                "返回指定实体周边的节点和关系。",
             ],
         )
 
@@ -49,7 +59,7 @@ class RAGMcpServerTest(unittest.TestCase):
             "id": 3,
             "method": "tools/call",
             "params": {
-                "name": "query_knowledge",
+                "name": "answer",
                 "arguments": {"query": "什么是 AI Base？"},
             },
         })
@@ -81,7 +91,7 @@ class RAGMcpServerTest(unittest.TestCase):
             "jsonrpc": "2.0",
             "id": 4,
             "method": "tools/call",
-            "params": {"name": "list_knowledge_documents", "arguments": {}},
+            "params": {"name": "list_documents", "arguments": {}},
         })
         document = result["result"]["structuredContent"]["documents"][0]
         self.assertNotIn("content_summary", document)
@@ -92,7 +102,7 @@ class RAGMcpServerTest(unittest.TestCase):
             "jsonrpc": "2.0",
             "id": 5,
             "method": "tools/call",
-            "params": {"name": "query_knowledge", "arguments": {"query": "x"}},
+            "params": {"name": "answer", "arguments": {"query": "x"}},
         })
         self.assertTrue(result["result"]["isError"])
 

@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-08-13
+- Last refreshed: 2026-08-17
 - Primary product surfaces: AI 基础设施总览、组件门户、Agent 管理、账号绑定、配置指南、模型配置、MCP配置、集成管理、连接器配置、能力管理、数据与知识、评测、可观测、认证管理、系统设置及组件二级设置
 - Evidence reviewed: `/Users/aca/dev/ai-fde/.omx/plans/sme-agent-infrastructure-v0.1.md`、`.omx/plans/model-mcp-observability-expansion.md`、`docs/observability-schema.md`、`ai-console/src/app/(console)`、`ai-console/src/components`、`ai-console/src/lib/server/observability.ts`、`vendor/open-connector/src/providers/wecom_bot`、Envoy AI Gateway 1.0 standalone 配置契约、用户确认的 Next.js 技术栈与工具链边界
 
@@ -81,6 +81,7 @@
 - LightRAG apply: 保存前验证所选模型仍由启用渠道发布，并使用最小 Embedding 请求确认向量能力与维度；配置更新后等待 LightRAG 重新健康再显示成功，失败时回滚旧配置并保留表单内容
 - WeCom auth apply: 在集成管理保存 CorpID、可选的新 App Secret 和固定 `/callbacks/wecom` 公网中继地址后，页面通过 `aria-live` 明确提示新绑定立即生效；编辑时不回显 Secret，留空保留已加密值；服务端 Schema 验证失败时保留草稿并显示具体字段错误。页面明确提示企微可信 IP 应配置中继固定公网出口，不再展示本地公开认证入口、直接/中继模式或企业邮箱域等无效字段。
 - WeCom identity link: 企业微信工作台首页先通过主 Pomerium 确认当前平台会话，再由公网中继完成一次性企微身份证明；成功、取消、请求过期、身份冲突、企业不匹配和系统失败分别在 `/account` 以页面内 `aria-live` 消息表达。绑定中不展示授权 ID、加密结果、nonce、CorpID 或明文 UserID；解绑需明确确认“企微共享机器人将不再出现在 MCP 清单”，成功后立即刷新状态条。完成页仍位于主 Console，会再次校验当前平台身份。
+- WeCom bot Action policy: 连接器策略抽屉允许管理员显式勾选只读 `wecom_bot.get_userlist`，使已经通过企微身份与机器人可见范围校验的员工查询通讯录；`call_tool` 与旧 Webhook 发送入口继续显示为系统禁止项且不可勾选。通讯录 Action 未授权时不得出现在该连接的 `allowedActionIds` 中。
 - Disabled: 解释为什么不可操作；系统托管的 Open Connector 与企业知识库 RAG MCP 不提供启停、编辑和删除控件，仅保留连接测试和工具查看
 - Offline/slow network, if applicable: 健康检查超时后保留最后成功时间并标记“状态未知”
 - Observability degradation: Metrics 或 Trace 单侧不可用时保留另一侧结果并使用 `aria-live` 说明影响；无诊断样本区分尚未产生、导出失败与筛选无结果；100% sampling 不写成零丢失承诺
@@ -89,7 +90,7 @@
 
 - Tone: 简洁、直接、可执行
 - Terminology: 使用“Agent”“模型配置”“MCP配置”“大模型渠道”“能力”“连接”“知识空间”“评测”“Trace”；Envoy AI 作为组件产品名使用
-- Microcopy rules: 按钮使用完整动词；危险操作包含具体对象；密钥只显示“已配置/未配置”
+- Microcopy rules: 按钮使用完整动词；危险操作包含具体对象；密钥只显示“已配置/未配置”；MCP 工具名使用短动词或名词表达单一职责，说明用一句话区分使用时机和返回结果；公共 MCP 清单中的内置知识库和连接器命名空间固定使用 `kb` 与 `connector`，不向用户暴露 Envoy 内部后端名
 
 ## Implementation constraints
 

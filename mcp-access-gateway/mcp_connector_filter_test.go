@@ -30,6 +30,24 @@ type resolverCall struct {
 	actionID                string
 }
 
+func TestNormalizedOpenConnectorToolRequiresConnectorNamespace(t *testing.T) {
+	tests := map[string]string{
+		"execute":                                   "execute",
+		"open-connector__guide":                     "guide",
+		"mcp-open-connector__connections":           "connections",
+		"mcp__ai-base__mcp-open-connector__execute": "execute",
+		"ai-base_mcp-open-connector__execute":       "execute",
+		"another-mcp__execute":                      "",
+		"attacker__execute":                         "",
+		"open-connector__search":                    "",
+	}
+	for name, expected := range tests {
+		if actual := normalizedOpenConnectorTool(name); actual != expected {
+			t.Errorf("normalizedOpenConnectorTool(%q) = %q, want %q", name, actual, expected)
+		}
+	}
+}
+
 func (r *fakeConnectorResolver) resolve(
 	_ context.Context,
 	caller identity,
@@ -95,7 +113,7 @@ func TestConnectorToolCallInjectsIdentityBoundConnection(t *testing.T) {
 	server := httptest.NewServer(gateway.routes())
 	defer server.Close()
 
-	for index, toolName := range []string{"execute_action", "open-connector__get_action_guide"} {
+	for index, toolName := range []string{"connector__execute", "open-connector__guide"} {
 		requestBody := map[string]any{
 			"jsonrpc": "2.0",
 			"id":      index + 1,
@@ -120,6 +138,9 @@ func TestConnectorToolCallInjectsIdentityBoundConnection(t *testing.T) {
 	}
 	for _, request := range receivedBodies {
 		params := request["params"].(map[string]any)
+		if params["name"] == "connector__execute" {
+			t.Fatalf("public connector alias reached Envoy: %#v", params)
+		}
 		arguments := params["arguments"].(map[string]any)
 		if arguments["connectionName"] != "employee_f3a92b" {
 			t.Fatalf("client connection name was not replaced: %#v", arguments)
@@ -170,7 +191,7 @@ func TestPublicNoAuthConnectorRemovesClientSelectedConnection(t *testing.T) {
 		"id":      1,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "mcp-open-connector__execute_action",
+			"name": "mcp-open-connector__execute",
 			"arguments": map[string]any{
 				"actionId":       "linux_do.get_hot_topics",
 				"connectionName": "forged_employee_alias",
@@ -225,7 +246,7 @@ func TestListConnectionsIsServedLocallyAndFiltered(t *testing.T) {
 		"id":      "connections",
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "mcp-open-connector__list_connections",
+			"name": "mcp-open-connector__connections",
 			"arguments": map[string]any{
 				"service": "feishu",
 			},
@@ -234,7 +255,7 @@ func TestListConnectionsIsServedLocallyAndFiltered(t *testing.T) {
 	defer response.Body.Close()
 
 	if upstreamCalls.Load() != 0 {
-		t.Fatalf("list_connections must not reach upstream, got %d calls", upstreamCalls.Load())
+		t.Fatalf("connections must not reach upstream, got %d calls", upstreamCalls.Load())
 	}
 	var body struct {
 		Result struct {
@@ -315,7 +336,7 @@ func TestConnectorResolutionFailuresFailClosed(t *testing.T) {
 				"id":      1,
 				"method":  "tools/call",
 				"params": map[string]any{
-					"name": "execute_action",
+					"name": "execute",
 					"arguments": map[string]any{
 						"actionId":       "feishu.search_bitable_records",
 						"connectionName": "attacker-selected",
@@ -347,10 +368,13 @@ func TestConnectorResolutionFailuresFailClosed(t *testing.T) {
 }
 
 func TestHardDeniedConnectorActionNeverReachesResolverOrUpstream(t *testing.T) {
-	for _, actionID := range []string{"wecom_bot.call_tool", "wecom_bot.get_userlist"} {
+	for _, actionID := range []string{"wecom_bot.call_tool", "wecom_bot.send_text_message"} {
 		if _, denied := hardDeniedConnectorActions[actionID]; !denied {
 			t.Fatalf("%s must remain system-hard-denied", actionID)
 		}
+	}
+	if _, denied := hardDeniedConnectorActions["wecom_bot.get_userlist"]; denied {
+		t.Fatal("wecom_bot.get_userlist must be governed by the controlled shared Action allowlist")
 	}
 	var upstreamCalls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -377,7 +401,7 @@ func TestHardDeniedConnectorActionNeverReachesResolverOrUpstream(t *testing.T) {
 		"id":      1,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "execute_action",
+			"name": "execute",
 			"arguments": map[string]any{
 				"actionId":       "wecom_bot.call_tool",
 				"connectionName": "wecom_sales_bot",
@@ -391,6 +415,64 @@ func TestHardDeniedConnectorActionNeverReachesResolverOrUpstream(t *testing.T) {
 	}
 	if !strings.Contains(string(payload), "action_not_authorized") {
 		t.Fatalf("unexpected hard-deny response: %s", payload)
+	}
+}
+
+func TestControlledSharedGetUserListReachesUpstreamWhenExplicitlyAllowed(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	var received map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"jsonrpc": "2.0",
+			"id":      received["id"],
+			"result":  map[string]any{},
+		})
+	}))
+	defer upstream.Close()
+
+	resolver := &fakeConnectorResolver{binding: connectorBinding{
+		Service:          "wecom_bot",
+		ConnectionName:   "wecom_sales_bot",
+		AccessMode:       "controlled_shared",
+		ActionRestricted: true,
+		AllowedActionIDs: []string{"wecom_bot.get_userlist"},
+	}}
+	gateway := newMCPGatewayWithResolver(
+		testConfig(t, upstream.URL+"/mcp"),
+		fakeVerifier{identities: map[string]identity{
+			"alice-token": {issuer: "https://id.example", subject: "alice"},
+		}},
+		resolver,
+	)
+	server := httptest.NewServer(gateway.routes())
+	defer server.Close()
+
+	response := authenticatedMCPRequest(t, server.URL, "alice-token", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "execute",
+			"arguments": map[string]any{
+				"actionId":       "wecom_bot.get_userlist",
+				"connectionName": "attacker-selected",
+			},
+		},
+	})
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || upstreamCalls.Load() != 1 {
+		t.Fatalf("authorized get_userlist must reach upstream once, status=%d calls=%d", response.StatusCode, upstreamCalls.Load())
+	}
+	arguments := received["params"].(map[string]any)["arguments"].(map[string]any)
+	if arguments["connectionName"] != "wecom_sales_bot" {
+		t.Fatalf("client-selected alias was not replaced: %#v", arguments)
+	}
+	if len(resolver.resolveCalls) != 1 || resolver.resolveCalls[0].actionID != "wecom_bot.get_userlist" {
+		t.Fatalf("get_userlist was not authorized through the resolver: %#v", resolver.resolveCalls)
 	}
 }
 
@@ -424,7 +506,7 @@ func TestControlledSharedPolicyIsEnforcedAgainAtGateway(t *testing.T) {
 		"id":      1,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name": "execute_action",
+			"name": "execute",
 			"arguments": map[string]any{
 				"actionId":       "wecom_bot.send_message",
 				"connectionName": "wecom_sales_bot",
@@ -468,7 +550,7 @@ func TestProtectedConnectorBatchFailsClosed(t *testing.T) {
 			"id":      1,
 			"method":  "tools/call",
 			"params": map[string]any{
-				"name":      "execute_action",
+				"name":      "execute",
 				"arguments": map[string]any{"actionId": "feishu.list_records"},
 			},
 		},
@@ -518,7 +600,7 @@ func TestUnprotectedMCPToolCallPassesThroughUnchanged(t *testing.T) {
 		"id":      1,
 		"method":  "tools/call",
 		"params": map[string]any{
-			"name":      "open-connector__search_actions",
+			"name":      "open-connector__search",
 			"arguments": map[string]any{"query": "bitable"},
 		},
 	})

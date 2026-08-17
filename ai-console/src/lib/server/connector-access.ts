@@ -22,7 +22,6 @@ const MAX_ACTIONS = 1_000;
 
 export const hardDeniedConnectorActionIds = [
   "wecom_bot.call_tool",
-  "wecom_bot.get_userlist",
   "wecom_bot.send_text_message",
   "wecom_bot.send_markdown_message",
   "wecom_bot.send_markdown_v2_message",

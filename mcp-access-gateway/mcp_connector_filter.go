@@ -12,14 +12,13 @@ import (
 const maxMCPRequestBody = 2 << 20
 
 var protectedOpenConnectorTools = map[string]struct{}{
-	"execute_action":   {},
-	"get_action_guide": {},
-	"list_connections": {},
+	"execute":     {},
+	"guide":       {},
+	"connections": {},
 }
 
 var hardDeniedConnectorActions = map[string]struct{}{
 	"wecom_bot.call_tool":                {},
-	"wecom_bot.get_userlist":             {},
 	"wecom_bot.send_text_message":        {},
 	"wecom_bot.send_markdown_message":    {},
 	"wecom_bot.send_markdown_v2_message": {},
@@ -75,7 +74,7 @@ func (g *mcpGateway) filterSingleConnectorCall(
 		return mcpRequestFilterResult{body: original}
 	}
 
-	if tool == "list_connections" {
+	if tool == "connections" {
 		bindings, err := g.resolver.list(ctx, caller)
 		if err != nil {
 			toolErr := resolverToolError(err)
@@ -258,10 +257,16 @@ func normalizedOpenConnectorTool(name string) string {
 	if _, ok := protectedOpenConnectorTools[name]; ok {
 		return name
 	}
-	for tool := range protectedOpenConnectorTools {
-		if strings.HasSuffix(name, "__"+tool) && len(name) > len(tool)+2 {
-			return tool
-		}
+	separator := strings.LastIndex(name, "__")
+	if separator < 1 {
+		return ""
+	}
+	prefix, tool := name[:separator], name[separator+2:]
+	if prefix != "open-connector" && !strings.HasSuffix(prefix, "mcp-open-connector") {
+		return ""
+	}
+	if _, ok := protectedOpenConnectorTools[tool]; ok {
+		return tool
 	}
 	return ""
 }
@@ -348,7 +353,7 @@ func resolverToolError(err error) toolError {
 	case errors.Is(err, errConnectorSelectionRequired):
 		return toolError{
 			code:    "connector_selection_required",
-			message: "More than one authorized Connector is available. Call list_connections and provide an authorized connectionName.",
+			message: "More than one authorized Connector is available. Call connections and provide an authorized connectionName.",
 		}
 	case errors.Is(err, errConnectorNotAuthorized):
 		return toolError{

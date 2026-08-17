@@ -186,6 +186,10 @@ func (g *mcpGateway) proxyMCP(w http.ResponseWriter, r *http.Request) {
 			body, tracker = g.observe.prepareMessages(r.Context(), body, caller)
 		}
 		ctx := tracker.attach(r.Context())
+		body, aliasesToolList := rewriteExternalToolAliasRequest(body)
+		if aliasesToolList {
+			ctx = context.WithValue(ctx, externalToolListAliasContextKey{}, true)
+		}
 		r = r.WithContext(ctx)
 		filtered := g.filterConnectorRequest(ctx, body, caller)
 		if filtered.handled {
@@ -232,11 +236,17 @@ func (g *mcpGateway) newReverseProxy(upstream *url.URL) *httputil.ReverseProxy {
 			if upstreamSession, ok := request.In.Context().Value(upstreamSessionContextKey).(string); ok {
 				request.Out.Header.Set(sessionHeader, upstreamSession)
 			}
+			if aliases, _ := request.In.Context().Value(externalToolListAliasContextKey{}).(bool); aliases {
+				request.Out.Header.Set("Accept-Encoding", "identity")
+			}
 			request.SetXForwarded()
 		},
 		ModifyResponse: func(response *http.Response) error {
 			tracker, _ := response.Request.Context().Value(messageTrackerContextKey{}).(*mcpMessageTracker)
 			tracker.responseStatus(response.StatusCode)
+			if err := rewriteExternalToolAliasResponse(response); err != nil {
+				return err
+			}
 			observeResponseBody(response, tracker)
 			upstreamSession := response.Header.Get(sessionHeader)
 			if upstreamSession == "" {

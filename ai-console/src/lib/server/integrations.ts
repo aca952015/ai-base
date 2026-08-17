@@ -498,7 +498,6 @@ export function decryptIntegrationSecret(payload: string) {
 const WECOM_BOT_SYSTEM_ONLY_ACTION_IDS = new Set([
   ...WECOM_BOT_WEBHOOK_ACTION_IDS,
   "wecom_bot.call_tool",
-  "wecom_bot.get_userlist",
 ]);
 
 function migratedWeComBotConnectionName(applicationId: string) {

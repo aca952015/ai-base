@@ -24,8 +24,8 @@ MAX_REQUEST_BYTES = 2 * 1024 * 1024
 
 TOOLS: list[dict[str, Any]] = [
     {
-        "name": "query_knowledge",
-        "description": "基于企业知识库生成回答，并返回引用来源。",
+        "name": "answer",
+        "description": "回答企业知识库问题并附引用；需要直接答案时使用。",
         "inputSchema": {
             "type": "object",
             "additionalProperties": False,
@@ -47,8 +47,8 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "retrieve_knowledge_context",
-        "description": "只检索企业知识库上下文，不调用模型生成最终回答。",
+        "name": "retrieve",
+        "description": "检索相关知识片段，不生成答案；需要原始上下文时使用。",
         "inputSchema": {
             "type": "object",
             "additionalProperties": False,
@@ -66,8 +66,8 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "list_knowledge_documents",
-        "description": "分页列出企业知识库文档及其索引状态，不返回文档正文。",
+        "name": "list_documents",
+        "description": "列出知识库文档及索引状态，不返回正文。",
         "inputSchema": {
             "type": "object",
             "additionalProperties": False,
@@ -83,8 +83,8 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "search_knowledge_labels",
-        "description": "按名称搜索知识图谱中的实体标签。",
+        "name": "search_entities",
+        "description": "按名称查找知识图谱实体，供图谱查询使用。",
         "inputSchema": {
             "type": "object",
             "additionalProperties": False,
@@ -96,8 +96,8 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "get_knowledge_graph",
-        "description": "读取指定实体标签周边的知识图谱节点与关系。",
+        "name": "get_entity_graph",
+        "description": "返回指定实体周边的节点和关系。",
         "inputSchema": {
             "type": "object",
             "additionalProperties": False,
@@ -194,7 +194,7 @@ def enum_argument(
     return value
 
 
-def query_knowledge(arguments: dict[str, Any]) -> Any:
+def answer(arguments: dict[str, Any]) -> Any:
     return api_request("/query", payload={
         "query": string_argument(arguments, "query", minimum=3),
         "mode": enum_argument(arguments, "mode", QUERY_MODES, default="mix"),
@@ -210,7 +210,7 @@ def query_knowledge(arguments: dict[str, Any]) -> Any:
     })
 
 
-def retrieve_knowledge_context(arguments: dict[str, Any]) -> Any:
+def retrieve(arguments: dict[str, Any]) -> Any:
     return api_request("/query", payload={
         "query": string_argument(arguments, "query", minimum=3),
         "mode": enum_argument(arguments, "mode", QUERY_MODES, default="mix"),
@@ -228,7 +228,7 @@ def retrieve_knowledge_context(arguments: dict[str, Any]) -> Any:
     })
 
 
-def list_knowledge_documents(arguments: dict[str, Any]) -> Any:
+def list_documents(arguments: dict[str, Any]) -> Any:
     payload: dict[str, Any] = {
         "page": integer_argument(arguments, "page", minimum=1, maximum=100000, default=1),
         "page_size": integer_argument(
@@ -276,14 +276,14 @@ def list_knowledge_documents(arguments: dict[str, Any]) -> Any:
     }
 
 
-def search_knowledge_labels(arguments: dict[str, Any]) -> Any:
+def search_entities(arguments: dict[str, Any]) -> Any:
     return api_request("/graph/label/search", query={
         "q": string_argument(arguments, "query", maximum=200),
         "limit": integer_argument(arguments, "limit", minimum=1, maximum=100, default=20),
     }, timeout=30)
 
 
-def get_knowledge_graph(arguments: dict[str, Any]) -> Any:
+def get_entity_graph(arguments: dict[str, Any]) -> Any:
     return api_request("/graphs", query={
         "label": string_argument(arguments, "label", maximum=200),
         "max_depth": integer_argument(arguments, "max_depth", minimum=1, maximum=5, default=2),
@@ -292,11 +292,11 @@ def get_knowledge_graph(arguments: dict[str, Any]) -> Any:
 
 
 TOOL_HANDLERS: dict[str, Callable[[dict[str, Any]], Any]] = {
-    "query_knowledge": query_knowledge,
-    "retrieve_knowledge_context": retrieve_knowledge_context,
-    "list_knowledge_documents": list_knowledge_documents,
-    "search_knowledge_labels": search_knowledge_labels,
-    "get_knowledge_graph": get_knowledge_graph,
+    "answer": answer,
+    "retrieve": retrieve,
+    "list_documents": list_documents,
+    "search_entities": search_entities,
+    "get_entity_graph": get_entity_graph,
 }
 
 

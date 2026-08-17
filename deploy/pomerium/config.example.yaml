@@ -1,8 +1,8 @@
 # The OIDC provider and client credentials are external to AI Base and are
 # supplied by compose environment variables.
 authenticate_service_url: https://authenticate.localhost.pomerium.io:8443
-idp_scopes: openid,profile,email
-cookie_expire: 14h
+idp_scopes: openid,profile,email,offline_access
+cookie_expire: 2160h
 signing_key_file: /run/secrets/pomerium-signing-key.pem
 signout_redirect_url: https://ai-console.localhost.pomerium.io:8443
 

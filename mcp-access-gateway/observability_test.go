@@ -439,7 +439,7 @@ func TestMCPMessageResultsCoverAllowDenyNotificationAndUnobserved(t *testing.T) 
 			name: "local resolver rejection",
 			payload: map[string]any{
 				"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-				"params": map[string]any{"name": "list_connections", "arguments": map[string]any{}},
+				"params": map[string]any{"name": "connections", "arguments": map[string]any{}},
 			},
 			resolver:         &fakeConnectorResolver{listErr: errConnectorResolverUnavailable},
 			expectedResult:   "denied",
@@ -499,7 +499,7 @@ func TestMCPMessageResultsCoverAllowDenyNotificationAndUnobserved(t *testing.T) 
 				}
 				if test.expectedDecision == "allow" {
 					if attributes["mcp.server.name"] != "feishu" ||
-						attributes["mcp.tool.name"] != "execute_action" ||
+						attributes["mcp.tool.name"] != "execute" ||
 						attributes["mcp.action.name"] != "feishu.search_bitable_records" {
 						t.Fatalf("authorized metric targets were not populated: %#v", attributes)
 					}
@@ -543,7 +543,7 @@ func TestRandomDeniedTargetsDoNotCreateMetricCardinality(t *testing.T) {
 		payload := map[string]any{
 			"jsonrpc": "2.0", "id": index, "method": "tools/call",
 			"params": map[string]any{
-				"name": "attacker" + strconv.Itoa(index) + "__execute_action",
+				"name": "mcp__ai-base__mcp-open-connector__execute",
 				"arguments": map[string]any{
 					"actionId":       actionID,
 					"connectionName": "forged-request-alias-" + strconv.Itoa(index),
@@ -704,7 +704,7 @@ func connectorRequest(id int, action string) map[string]any {
 	return map[string]any{
 		"jsonrpc": "2.0", "id": id, "method": "tools/call",
 		"params": map[string]any{
-			"name":      "execute_action",
+			"name":      "execute",
 			"arguments": map[string]any{"actionId": action},
 		},
 	}

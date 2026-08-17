@@ -56,7 +56,7 @@ POMERIUM_IDP_CLIENT_SECRET=replace-with-the-real-client-secret
 
 Dex 中的 `ai-base-pomerium` 客户端登记 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback`。Pomerium 只负责确认当前内网平台账号；企业微信不会作为 Dex 登录方式，也没有第二套 Pomerium。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域，Jaeger 进一步只允许默认管理员 `admin@bluetron.cn`；更换企业域名或 `AI_CONSOLE_ADMIN_EMAILS` 时必须同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml)。Pomerium 本机入口使用开发证书和仓库内的本地签名键；正式部署必须替换签名键，并配置受信任证书、正式域名和企业 OIDC。AI Console 验证 Pomerium 签名、有效期和精确 audience，不信任客户端可伪造的身份头。
 
-普通入口的浏览器会话上限为 14 小时，并通过 PostgreSQL Data Broker 写入 `ai_base_pomerium`。容器或 Docker 重启不会清空会话；删除 PostgreSQL 数据卷、轮换 Pomerium Cookie/Shared Secret、上游 Token 刷新失败、主动退出或策略撤权仍会提前终止会话。
+普通入口请求 Dex 的 `offline_access`，浏览器会话采用 90 天固定上限，并通过 PostgreSQL Data Broker 写入 `ai_base_pomerium`。Pomerium 在会话期内使用 Dex 刷新令牌续签上游身份，因此浏览器重开、容器或 Docker 重启不会要求重新登录；超过 90 天、删除 PostgreSQL 或 Dex 数据卷、轮换 Pomerium Cookie/Shared Secret、刷新令牌失效、主动退出或策略撤权仍会终止会话。
 
 ### 企业微信身份中继
 
@@ -118,7 +118,7 @@ MCP_ADMIN_TOKEN=replace-with-a-random-admin-token
 
 从旧的内存刷新令牌版本升级时，已有客户端需要重新连接一次；新令牌写入持久化存储后，后续网关重启不再要求重新登录。不要通过延长 Access Token 来实现长期登录，长期能力由可复用、可撤销并滑动续期的 Refresh Token 提供。
 
-需要个人 OAuth 的 Connector 仍由员工在 AI Console 的 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account) 完成授权。企业微信 API 模式智能机器人不做逐机器人绑定：管理员在“连接器配置”维护具名机器人连接和 Action 白名单；员工只需从企微工作台主页或账号页完成一次“当前平台账号 ↔ 企业微信身份”关联。绑定成功后，Console 只保存 CorpID 与 UserID 摘要，MCP 解析器复用该映射，并通过每个机器人的 `wecom_bot.get_userlist` 自动筛选可见连接；如果 MCP Token 本身由企微认证签发，则仍可直接使用其中的可信摘要。原始 UserID 不进入 Broker Token、解析器请求、浏览器响应或普通日志；查询失败、身份域不匹配或员工不在可见范围时关闭失败。
+需要个人 OAuth 的 Connector 仍由员工在 AI Console 的 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account) 完成授权。企业微信 API 模式智能机器人不做逐机器人绑定：管理员在“连接器配置”维护具名机器人连接和 Action 白名单；员工只需从企微工作台主页或账号页完成一次“当前平台账号 ↔ 企业微信身份”关联。绑定成功后，Console 只保存 CorpID 与 UserID 摘要，MCP 解析器复用该映射，并通过每个机器人的 `wecom_bot.get_userlist` 自动筛选可见连接；如果 MCP Token 本身由企微认证签发，则仍可直接使用其中的可信摘要。用于身份映射的原始 UserID 不进入 Broker Token、解析器请求、浏览器响应或普通日志；管理员显式授权 `wecom_bot.get_userlist` 时，企微返回的可见成员 UserID、姓名和别名会作为该次 MCP 工具结果交给调用方，但仍不进入普通日志。查询失败、身份域不匹配或员工不在可见范围时关闭失败。
 
 从旧版本升级后，员工可以打开一次企微工作台应用主页建立平台映射，已有 MCP 客户端便不必为了每个机器人重复绑定。尚未建立映射时，重新通过企微完成 MCP 登录仍可让新 Token 自带可信 UserID 摘要；旧 Refresh Token 不会被补写该身份声明。
 
@@ -133,7 +133,7 @@ MCP Access Gateway 会按 Broker JWT 的 `issuer + subject` 查询个人映射�
 | 路径 | 上游能力 | 路径处理 |
 | --- | --- | --- |
 | `/v1`、`/v1/*` | Envoy AI Gateway 模型 API | 保留路径，支持流式响应 |
-| `/mcp`、`/mcp/*` | MCP Access Gateway | OIDC 验证后转发到内部 Envoy MCP，支持 Streamable HTTP |
+| `/mcp`、`/mcp/*` | MCP Access Gateway | OIDC 验证后转发到内部 Envoy MCP；Access Gateway 在外部协议边界将内置工具命名空间缩短为 `kb` 和 `connector` |
 | `/.well-known/oauth-protected-resource/mcp` | MCP Access Gateway | OAuth Protected Resource Metadata |
 | `/oauth/*`、OAuth well-known 路径 | MCP Access Gateway | MCP 客户端 OAuth、DCR、PKCE、Token 与 JWKS |
 | `/rag/*` | LightRAG API | 移除 `/rag` 前缀；提供文档、检索和知识图谱 API |
@@ -170,14 +170,14 @@ OPENAI_API_KEY=...
 
 打开 [MCP配置页面](https://ai-console.localhost.pomerium.io:8443/mcp)，可以管理 Envoy AI Gateway v1.0 的 MCP Gateway：
 
-- Open Connector 的 `/mcp` 默认接入统一入口，使用系统 Runtime Token，控制台以只读卡片展示；
-- 独立 `rag-mcp` 容器默认接入统一入口，提供知识问答、上下文检索、文档状态和知识图谱只读工具；
+- Open Connector 的 `/mcp` 默认接入统一入口，使用系统 Runtime Token，控制台以只读卡片展示 `apps`、`connections`、`search`、`guide` 和 `execute` 五个元工具；外部客户端看到 `connector__*`，Envoy 内部仍使用 `mcp-open-connector__*`；
+- 独立 `rag-mcp` 容器默认接入统一入口，提供 `answer`、`retrieve`、`list_documents`、`search_entities` 和 `get_entity_graph` 五个知识库只读工具；外部客户端看到 `kb__*`，Envoy 内部仍使用 `mcp-rag__*`；
 - 上游 Streamable HTTP MCP URL 和工具命名空间；
 - 可选 API Key 与注入请求头；
 - 工具允许/排除列表、启停和真实 `tools/list` 连接测试；
 - 保存后生成原生 `MCPRoute`、`Backend`、TLS 和 Secret 资源，并触发网关自动重载。
 
-Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 Envoy 注册的 Open Connector、企业知识库 RAG 和其他 Streamable HTTP MCP 服务。RAG MCP 通过 Compose 内网调用 LightRAG API，不修改或扩展 LightRAG 镜像。员工 Access Token 只在 MCP Access Gateway 验证，不会透传给 Envoy 或外部 MCP；Envoy 使用各上游自身的服务凭据。
+Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 Envoy 注册的 Open Connector、企业知识库 RAG 和其他 Streamable HTTP MCP 服务。MCP Access Gateway 只改写 `tools/list` 返回的内置工具名和 `tools/call` 请求中的对应名称，不改写工具参数、结果或 Envoy 配置。RAG MCP 通过 Compose 内网调用 LightRAG API，不修改或扩展 LightRAG 镜像。员工 Access Token 只在 MCP Access Gateway 验证，不会透传给 Envoy 或外部 MCP；Envoy 使用各上游自身的服务凭据。
 
 `/mcp` 是受 OIDC 保护的 Streamable HTTP 协议端点，不是管理页面。未认证请求返回 `401` 和标准 `WWW-Authenticate` 发现信息。网关把外部 MCP Session 签名并绑定到 `issuer + subject + client_id`，不同员工不能复用彼此会话。管理页面位于 `https://ai-console.localhost.pomerium.io:8443/mcp`。
 
@@ -206,7 +206,7 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - 企微机器人固定使用“企业身份自动筛选”策略，不创建员工绑定或手工授权名单；管理员配置的机器人可见范围只是上限，MCP 调用时仍执行连接与 Action 白名单；
 - 受控共享策略只在 AI Base 的 PostgreSQL 与 MCP Access Gateway 中生效，OpenConnector 仍负责保存凭据和执行 Action，不修改上游代码。
 
-新增或编辑只有在 OpenConnector 校验并保存成功后才会更新卡片列表。受控共享连接必须使用非 `default` 的具名连接；MCP 网关根据已经验证的员工 OIDC 身份选择连接并校验 Action 白名单，客户端提交的连接名不能越权。`wecom_bot.get_userlist` 仅供服务端可见性判定，`wecom_bot.call_tool` 及旧 Webhook 发送入口固定拒绝员工授权，企微共享能力必须按具体静态 Action 开放。可见性结果只缓存 60 秒且不使用过期结果，员工移出机器人可见范围后会自动撤权。
+新增或编辑只有在 OpenConnector 校验并保存成功后才会更新卡片列表。受控共享连接必须使用非 `default` 的具名连接；MCP 网关根据已经验证的员工 OIDC 身份选择连接并校验 Action 白名单，客户端提交的连接名不能越权。`wecom_bot.get_userlist` 始终用于服务端可见性判定，并且只有管理员把它加入机器人 Action 白名单后才作为员工可调用的只读通讯录 Action 出现在授权连接中；`wecom_bot.call_tool` 及旧 Webhook 发送入口继续固定拒绝员工授权。可见性结果只缓存 60 秒且不使用过期结果，员工移出机器人可见范围后会自动撤权。
 
 升级时，旧“集成管理 / 企微机器人”记录会在首次读取 Console 管理数据时迁移为 `wecom_bot_<应用 UUID>` 具名共享连接，Bot ID/Secret 写入 OpenConnector，Action 白名单写入 PostgreSQL；迁移成功后删除旧员工绑定和旧集成记录。OpenConnector 校验或数据库写入失败时保留旧记录并报错，不会把机器人降级成全局连接。
 
@@ -302,5 +302,5 @@ curl -fsS 'http://localhost:8080/health'
 curl -fsS 'http://runtime.localhost:8080/health'
 ```
 
-- 基础设施方案与组件边界见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。
+- 项目目录、Compose 服务、入口路由、完整调用链、安全边界与演进条件见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)。
 - 控制台设计与交互约束见 [`DESIGN.md`](./DESIGN.md)。
