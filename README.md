@@ -56,11 +56,11 @@ POMERIUM_IDP_CLIENT_SECRET=replace-with-the-real-client-secret
 
 Dex 中的 `ai-base-pomerium` 客户端登记 `https://authenticate.localhost.pomerium.io:8443/oauth2/callback`。Pomerium 只负责确认当前内网平台账号；企业微信不会作为 Dex 登录方式，也没有第二套 Pomerium。当前 Pomerium 策略只允许 `bluetron.cn` 邮箱域，Jaeger 进一步只允许默认管理员 `admin@bluetron.cn`；更换企业域名或 `AI_CONSOLE_ADMIN_EMAILS` 时必须同步修改 [`deploy/pomerium/config.example.yaml`](./deploy/pomerium/config.example.yaml)。Pomerium 本机入口使用开发证书和仓库内的本地签名键；正式部署必须替换签名键，并配置受信任证书、正式域名和企业 OIDC。AI Console 验证 Pomerium 签名、有效期和精确 audience，不信任客户端可伪造的身份头。
 
-普通入口请求 Dex 的 `offline_access`，浏览器会话采用 90 天固定上限，并通过 PostgreSQL Data Broker 写入 `ai_base_pomerium`。Pomerium 在会话期内使用 Dex 刷新令牌续签上游身份，因此浏览器重开、容器或 Docker 重启不会要求重新登录；超过 90 天、删除 PostgreSQL 或 Dex 数据卷、轮换 Pomerium Cookie/Shared Secret、刷新令牌失效、主动退出或策略撤权仍会终止会话。
+普通入口请求 Dex 的 `offline_access`，浏览器会话采用 90 天固定上限，并通过 PostgreSQL Data Broker 写入 `ai_base_pomerium`。Pomerium 在会话期内使用 Dex 刷新令牌续签上游身份；只有浏览器继续保留 Pomerium Cookie 时才能跨重开复用。超过 90 天、清除 Cookie、删除 PostgreSQL 或 Dex 数据卷、轮换 Pomerium Cookie/Shared Secret、刷新令牌失效、主动退出或策略撤权都会终止会话。企微内置浏览器不依赖该 Cookie 长期持久化，而使用下述绑定恢复链路。
 
 ### 企业微信身份中继
 
-企业微信工作台应用首页配置为 `https://ai-console.localhost.pomerium.io:8443/auth/wework`。用户先通过主 Pomerium 确认当前平台账号，随后由部署在固定公网出口的 `ai-auth-relay` 完成企业微信网页授权和身份交换；企业微信只访问中继，不访问内网 AI Base。
+企业微信工作台应用首页配置为 `https://ai-console.localhost.pomerium.io:8443/auth/wework`。该受限入口先由部署在固定公网出口的 `ai-auth-relay` 完成企业微信网页授权和身份交换：已有唯一绑定时，AI Console 自动恢复对应平台用户；尚未绑定时才进入主 Pomerium/Dex 登录，并把已验证的企微身份关联到当前平台账号。企业微信只与中继交换身份，不直接回调内网 AI Base。
 
 管理员在 Console 的“集成管理 / 企业微信认证”中维护唯一一套系统认证配置：
 
@@ -71,7 +71,7 @@ Dex 中的 `ai-base-pomerium` 客户端登记 `https://authenticate.localhost.po
 - 在企业微信后台把可信域名和网页授权回调配置为该中继，并把中继主机的固定公网出口加入应用可信 IP；
 - 域名验证文件只部署到 Relay；AI Base 全局网关不再提供企微回调或域名验证路径。
 
-AI Base 在每次绑定开始时从 Console 数据库读取这套凭据，通过服务端连接把 10 分钟加密票据暂存到 Relay。浏览器只携带随机授权 ID，不接触 CorpID、App Secret 或平台请求令牌。Relay 在内存中一次性消费授权 ID 和 state，使用自己的固定公网出口调用企微 `gettoken/getuserinfo`，再把 5 分钟加密身份结果经浏览器带回内网完成页。完成页仍要求当前 Pomerium 会话、同浏览器 HttpOnly nonce、未过期数据库请求和匹配的 CorpID；成功后仅保存 CorpID/UserID 摘要。
+AI Base 在每次工作台登录开始时从 Console 数据库读取这套凭据，创建 30 分钟的平台关联事务，并通过服务端连接把最长 10 分钟的加密授权票据暂存到 Relay。浏览器只携带随机授权 ID，不接触 CorpID、App Secret 或平台请求令牌。Relay 在内存中一次性消费授权 ID 和 state，使用自己的固定公网出口调用企微 `gettoken/getuserinfo`，再把 5 分钟加密身份结果经浏览器带回内网完成页。完成页要求同浏览器 HttpOnly nonce、未过期数据库事务和匹配 CorpID。若 CorpID/UserID 摘要已有唯一映射，Console 签发最长 12 小时的安全 Cookie，并在每次请求时重新确认映射仍存在；若无映射，`/auth/wework/link` 强制经过 Pomerium 确认平台身份后才建立关联。解绑会同时清除该 Cookie。
 
 两端共享密钥属于启动信任根，不能放进登录后的管理页面：
 
@@ -238,8 +238,9 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `POST /api/integrations/:id/activate`：将应用设为平台唯一启用配置，并同步支持的 OAuth Client。
 - `GET/PUT /api/integrations/wecom-authentication`：仅管理员读取或保存唯一的企业微信系统认证配置。
 - `GET /api/account/integrations`、`POST/DELETE /api/account/integrations/:platform/authorize`：读取、发起或解除当前员工个人绑定。
-- `GET /auth/wework`：在主 Pomerium 会话中创建一次性企微身份绑定请求，服务端向公网中继暂存短期加密授权，再由浏览器进入企微认证。
-- `GET /auth/wework/complete`：验证主平台身份、中继加密结果、同浏览器 HttpOnly nonce、未过期未消费请求和当前 CorpID 后完成关联。
+- `GET /auth/wework`：不依赖既有 Pomerium Cookie，创建一次性企微身份识别事务并进入公网中继。
+- `GET /auth/wework/complete`：验证中继加密结果、同浏览器 HttpOnly nonce、未过期事务和当前 CorpID；已有绑定时自动恢复用户，未绑定时转入平台登录。
+- `GET /auth/wework/link`：固定经过 Pomerium，在首次平台登录后消费已验证企微事务并建立唯一映射。
 - `DELETE /api/account/wecom-identity`：解除当前平台账号与企微身份映射；不会删除管理员维护的共享机器人连接。
 - `GET /api/observability/summary?range=15m|1h|24h|7d`：仅管理员读取模型与 MCP 的固定 PromQL 摘要；未被 capability probe 证明的模型错误率和 TTFT 明确返回“不可用”。
 - `GET /api/observability/calls`：仅管理员读取最多 24 小时、扫描最多 100 条 Trace 的安全诊断样本；结果可截断，不提供稳定 cursor，也不是调用账本。

@@ -28,7 +28,7 @@ type RequestState = {
   action: "authorizing" | "disconnecting";
 };
 
-const wecomLinkResultMessages: Record<string, { tone: "success" | "error"; text: string }> = {
+const wecomLinkResultMessages: Partial<Record<string, { tone: "success" | "error"; text: string }>> = {
   linked: { tone: "success", text: "企业微信身份已与当前平台账号绑定。" },
   expired: { tone: "error", text: "企业微信身份绑定请求已过期，请重新发起。" },
   conflict: { tone: "error", text: "该企业微信身份已绑定到另一个平台账号。" },
@@ -36,6 +36,10 @@ const wecomLinkResultMessages: Record<string, { tone: "success" | "error"; text:
   denied: { tone: "error", text: "企业微信认证已取消，当前平台账号未发生变化。" },
   failed: { tone: "error", text: "企业微信身份绑定失败，请稍后重试或联系管理员。" },
 };
+
+export function wecomLinkResultMessage(result?: string) {
+  return result ? wecomLinkResultMessages[result] : undefined;
+}
 
 const platformIcons: Partial<Record<EnterpriseIntegrationPlatform, typeof MessageSquareShare>> = {
   feishu: MessageSquareShare,
@@ -93,7 +97,7 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
   const [requestState, setRequestState] = useState<RequestState>();
   const [wecomBusy, setWecomBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: "info" | "success" | "error"; text: string } | undefined>(
-    () => wecomLinkResult ? wecomLinkResultMessages[wecomLinkResult] : undefined,
+    () => wecomLinkResultMessage(wecomLinkResult),
   );
   const pollingTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const popupRef = useRef<Window | null>(null);
@@ -332,36 +336,13 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
         <p><LockKeyhole size={14} />个人 OAuth 授权只对当前登录身份生效</p>
       </section>
 
-      <section className="account-identity-strip" aria-label="企业微信身份绑定">
-          <span><Building2 size={20} /></span>
-          <div>
-            <strong>{snapshot?.wecomIdentity.linked ? "企业微信身份已绑定" : "尚未绑定企业微信身份"}</strong>
-            <small>
-              {snapshot?.wecomIdentity.linked
-                ? `${snapshot.automaticWeComBotCount} 个企业共享机器人将按企微可见范围自动筛选`
-                : "从企业微信应用首页进入，或在此发起一次可信身份绑定"}
-            </small>
-          </div>
-          <p><ShieldCheck size={14} />{snapshot?.wecomIdentity.linked ? "已建立稳定身份映射" : "不会保存明文 UserID"}</p>
-          {snapshot?.wecomIdentity.linked ? (
-            <button
-              className="button button--secondary account-unbind-button"
-              type="button"
-              onClick={disconnectWeComIdentity}
-              disabled={wecomBusy}
-            >
-              {wecomBusy ? <LoaderCircle className="is-spinning" size={15} /> : <Unlink size={15} />}
-              {wecomBusy ? "解绑中" : "解绑"}
-            </button>
-          ) : (
-            <a className="button button--primary" href="/auth/wework">
-              <Bot size={15} />
-              绑定企微身份
-            </a>
-          )}
-        </section>
-
       <div className="account-integration-grid">
+        <WeComIdentityCard
+          linked={Boolean(snapshot?.wecomIdentity.linked)}
+          automaticBotCount={snapshot?.automaticWeComBotCount || 0}
+          busy={wecomBusy}
+          onDisconnect={disconnectWeComIdentity}
+        />
         {(snapshot?.applications || []).map((application) => (
           <AccountIntegrationCard
             application={application}
@@ -374,13 +355,68 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
         ))}
       </div>
 
-      {!snapshot?.applications.length && !snapshot?.automaticWeComBotCount && snapshot?.wecomIdentity.linked ? (
-        <div className="account-integration-loading">
-          <Link2 size={20} />
-          <span>当前没有需要个人绑定的企业集成。</span>
-        </div>
-      ) : null}
     </>
+  );
+}
+
+export function WeComIdentityCard({
+  linked,
+  automaticBotCount,
+  busy,
+  onDisconnect,
+}: {
+  linked: boolean;
+  automaticBotCount: number;
+  busy: boolean;
+  onDisconnect: () => void;
+}) {
+  return (
+    <article className={`account-integration-card${linked ? " is-connected" : ""}`} aria-label="企业微信身份">
+      <header className="account-integration-card__header">
+        <span className="account-integration-card__icon integration-icon--wecom"><Building2 size={20} /></span>
+        <div>
+          <h2>企业微信身份</h2>
+          <p>企业微信</p>
+        </div>
+        <span className={`account-binding-state ${linked ? "is-connected" : "is-idle"}`}>
+          {linked ? <CheckCircle2 size={14} /> : <Link2 size={14} />}
+          {linked ? "已绑定" : "未绑定"}
+        </span>
+      </header>
+
+      <footer className="account-integration-card__footer">
+        <div>
+          {linked ? (
+            <>
+              <strong>企业身份已关联</strong>
+              <small>{automaticBotCount > 0 ? `${automaticBotCount} 个企业共享机器人按可见范围提供` : "当前没有可用的企业共享机器人"}</small>
+            </>
+          ) : (
+            <>
+              <strong>尚未获得企业微信身份</strong>
+              <small>请从企业微信应用首页进入后完成身份认证</small>
+            </>
+          )}
+        </div>
+
+        {linked ? (
+          <button className="button button--secondary account-unbind-button" type="button" onClick={onDisconnect} disabled={busy}>
+            {busy ? <LoaderCircle className="is-spinning" size={15} /> : <Unlink size={15} />}
+            {busy ? "解绑中" : "解绑"}
+          </button>
+        ) : (
+          <button
+            className="button button--secondary"
+            type="button"
+            disabled
+            aria-label="请从企业微信应用首页进入后绑定身份"
+          >
+            <Bot size={15} />
+            绑定身份
+          </button>
+        )}
+      </footer>
+    </article>
   );
 }
 

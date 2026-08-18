@@ -4,7 +4,9 @@ import {
   aiConsoleAudience,
   wecomIdentityLinkCompletionUrl,
   wecomIdentityLinkCookieOptions,
+  wecomIdentityLinkLoginUrl,
   wecomIdentityLinkResultUrl,
+  wecomIdentityStatusUrl,
 } from "./wecom-identity-link-routing";
 
 const originalConsoleUrl = process.env.AI_CONSOLE_PUBLIC_URL;
@@ -15,9 +17,15 @@ afterEach(() => {
 });
 
 describe("WeCom identity link routing", () => {
-  it("keeps completion and results behind the authenticated main Console", () => {
+  it("separates the public relay completion from the authenticated first-link handoff", () => {
     expect(wecomIdentityLinkCompletionUrl().toString()).toBe(
       "https://ai-console.localhost.pomerium.io:8443/auth/wework/complete",
+    );
+    expect(wecomIdentityLinkLoginUrl("opaque-request").toString()).toBe(
+      "https://ai-console.localhost.pomerium.io:8443/auth/wework/link?request=opaque-request",
+    );
+    expect(wecomIdentityStatusUrl("denied").toString()).toBe(
+      "https://ai-console.localhost.pomerium.io:8443/auth/wework/status?result=denied",
     );
     expect(wecomIdentityLinkResultUrl("linked").toString()).toBe(
       "https://ai-console.localhost.pomerium.io:8443/account?wecom_link=linked",

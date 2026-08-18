@@ -1,6 +1,13 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
+import {
+  readWeComConsoleSessionCookie,
+  verifyWeComConsoleSession,
+  WECOM_CONSOLE_SESSION_COOKIE,
+  wecomConsoleSessionCookieOptions,
+} from "./lib/server/wecom-console-session";
+
 function assertionEmail(request: NextRequest) {
   const direct = request.headers.get("x-pomerium-claim-email")?.trim().toLowerCase();
   if (direct) return direct;
@@ -36,7 +43,33 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const email = assertionEmail(request);
+  if (
+    pathname === "/auth/wework"
+    || pathname === "/auth/wework/complete"
+    || pathname === "/auth/wework/status"
+  ) {
+    return NextResponse.next();
+  }
+
+  const sessionToken = readWeComConsoleSessionCookie(request.headers.get("cookie"));
+  let sessionEmail = "";
+  if (sessionToken) {
+    try {
+      sessionEmail = verifyWeComConsoleSession(sessionToken).email;
+    } catch {
+      const response = pathname.startsWith("/api/")
+        ? NextResponse.json({ error: "企业微信自动登录会话无效" }, { status: 401 })
+        : NextResponse.redirect(new URL("/auth/wework", request.url));
+      response.cookies.set(
+        WECOM_CONSOLE_SESSION_COOKIE,
+        "",
+        wecomConsoleSessionCookieOptions(0),
+      );
+      return response;
+    }
+  }
+
+  const email = assertionEmail(request) || sessionEmail;
   const developmentIdentity = process.env.AI_CONSOLE_DEV_IDENTITY_ENABLED === "true";
   if (!email && !developmentIdentity) {
     return NextResponse.json({ error: "未认证" }, { status: 401 });
@@ -45,8 +78,7 @@ export function proxy(request: NextRequest) {
   if (
     pathname === "/account"
     || pathname === "/client-setup"
-    || pathname === "/auth/wework"
-    || pathname === "/auth/wework/complete"
+    || pathname === "/auth/wework/link"
     || pathname.startsWith("/api/account/")
   ) {
     return NextResponse.next();

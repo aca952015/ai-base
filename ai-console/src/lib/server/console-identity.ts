@@ -6,6 +6,13 @@ import { readFile } from "node:fs/promises";
 
 import { headers } from "next/headers";
 
+import { getWeComLinkedPlatformIdentity } from "./integrations";
+import {
+  readWeComConsoleSessionCookie,
+  verifyWeComConsoleSession,
+  WeComConsoleSessionError,
+} from "./wecom-console-session";
+
 export type ConsoleIdentity = {
   upstreamIssuer: string;
   upstreamSubject: string;
@@ -148,6 +155,10 @@ function configuredAdminEmails() {
   );
 }
 
+export function isConsoleAdminEmail(email: string) {
+  return configuredAdminEmails().has(email.trim().toLowerCase());
+}
+
 export function consoleIdentityFromHeaders(input: Headers): ConsoleIdentity {
   const claims = decodePomeriumAssertion(input.get("x-pomerium-jwt-assertion"));
   const email = (
@@ -195,15 +206,18 @@ export function consoleIdentityFromHeaders(input: Headers): ConsoleIdentity {
     name,
     groups,
     preferredUsername,
-    isAdmin: configuredAdminEmails().has(email),
+    isAdmin: isConsoleAdminEmail(email),
   };
 }
 
 export async function getConsoleIdentity(options: { audience?: string | string[] } = {}) {
   const requestHeaders = await headers();
-  if (process.env.AI_CONSOLE_DEV_IDENTITY_ENABLED !== "true") {
-    const assertion = requestHeaders.get("x-pomerium-jwt-assertion");
-    if (!assertion) throw new ConsoleAuthError("未收到 Pomerium 身份断言");
+  if (process.env.AI_CONSOLE_DEV_IDENTITY_ENABLED === "true") {
+    return consoleIdentityFromHeaders(requestHeaders);
+  }
+
+  const assertion = requestHeaders.get("x-pomerium-jwt-assertion");
+  if (assertion) {
     const publicKeyPath = process.env.POMERIUM_JWT_PUBLIC_KEY_PATH?.trim();
     if (!publicKeyPath) throw new ConsoleAuthError("Pomerium JWT 公钥未配置", 503);
     const publicKey = await readFile(publicKeyPath, "utf8").catch(() => {
@@ -217,8 +231,35 @@ export async function getConsoleIdentity(options: { audience?: string | string[]
       audience: options.audience || (configuredAudiences.length ? configuredAudiences : undefined),
       issuer: process.env.POMERIUM_JWT_ISSUER?.trim() || undefined,
     });
+    return consoleIdentityFromHeaders(requestHeaders);
   }
-  return consoleIdentityFromHeaders(requestHeaders);
+
+  const sessionToken = readWeComConsoleSessionCookie(requestHeaders.get("cookie"));
+  if (!sessionToken) throw new ConsoleAuthError("未收到平台或企业微信自动登录会话");
+  try {
+    const claims = verifyWeComConsoleSession(sessionToken);
+    const linked = await getWeComLinkedPlatformIdentity(
+      claims.principalIssuer,
+      claims.principalSubject,
+    );
+    if (!linked) throw new ConsoleAuthError("企业微信身份绑定已解除");
+    return {
+      upstreamIssuer: linked.principalIssuer,
+      upstreamSubject: linked.principalSubject,
+      principalIssuer: linked.principalIssuer,
+      principalSubject: linked.principalSubject,
+      email: linked.email.toLowerCase(),
+      name: linked.name,
+      groups: [],
+      isAdmin: isConsoleAdminEmail(linked.email),
+    };
+  } catch (error) {
+    if (error instanceof ConsoleAuthError) throw error;
+    if (error instanceof WeComConsoleSessionError) {
+      throw new ConsoleAuthError(error.message);
+    }
+    throw error;
+  }
 }
 
 export async function requireConsoleAdmin() {

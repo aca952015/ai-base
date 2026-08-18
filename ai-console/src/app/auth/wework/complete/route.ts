@@ -1,17 +1,22 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
-import { ConsoleAuthError, getConsoleIdentity } from "@/lib/server/console-identity";
 import {
-  completeWeComIdentityLinkRequest,
   IntegrationStoreError,
+  resolveWeComIdentityLoginRequest,
 } from "@/lib/server/integrations";
 import {
   WECOM_IDENTITY_LINK_COOKIE,
-  aiConsoleAudience,
   wecomIdentityLinkCookieOptions,
+  wecomIdentityLinkLoginUrl,
   wecomIdentityLinkResultUrl,
+  wecomIdentityStatusUrl,
 } from "@/lib/server/wecom-identity-link-routing";
+import {
+  issueWeComConsoleSession,
+  WECOM_CONSOLE_SESSION_COOKIE,
+  wecomConsoleSessionCookieOptions,
+} from "@/lib/server/wecom-console-session";
 import { getWeComRelayCredential } from "@/lib/server/wecom-authentication";
 import {
   verifyWeComRelayResult,
@@ -42,37 +47,52 @@ function resultFor(error: unknown) {
 }
 
 export async function GET(request: NextRequest) {
-  let result = "linked";
+  let location: URL;
+  let consoleSession: string | undefined;
+  let keepBrowserNonce = false;
   try {
     const ticket = request.nextUrl.searchParams.get("result") || "";
     const browserNonce = request.cookies.get(WECOM_IDENTITY_LINK_COOKIE)?.value || "";
-    const platformIdentity = await getConsoleIdentity({ audience: aiConsoleAudience() });
     const credential = await getWeComRelayCredential();
     const relayIdentity = verifyWeComRelayResult(ticket, credential.relayCallbackUrl);
-    await completeWeComIdentityLinkRequest(
+    const resolution = await resolveWeComIdentityLoginRequest(
       relayIdentity.requestToken,
       browserNonce,
-      platformIdentity,
       relayIdentity,
     );
+    if (resolution.status === "linked") {
+      consoleSession = issueWeComConsoleSession(resolution.identity);
+      location = wecomIdentityLinkResultUrl("restored");
+    } else {
+      keepBrowserNonce = true;
+      location = wecomIdentityLinkLoginUrl(relayIdentity.requestToken);
+    }
   } catch (error) {
-    result = resultFor(error);
-    const known = error instanceof ConsoleAuthError
-      || error instanceof IntegrationStoreError
+    location = wecomIdentityStatusUrl(resultFor(error));
+    const known = error instanceof IntegrationStoreError
       || error instanceof WeComRelayError;
     if (!known) console.error("WeCom identity link completion failed", error);
   }
   const response = new NextResponse(null, {
     status: 303,
     headers: {
-      Location: wecomIdentityLinkResultUrl(result).toString(),
+      Location: location.toString(),
     },
   });
-  response.cookies.set(
-    WECOM_IDENTITY_LINK_COOKIE,
-    "",
-    wecomIdentityLinkCookieOptions(0),
-  );
+  if (!keepBrowserNonce) {
+    response.cookies.set(
+      WECOM_IDENTITY_LINK_COOKIE,
+      "",
+      wecomIdentityLinkCookieOptions(0),
+    );
+  }
+  if (consoleSession) {
+    response.cookies.set(
+      WECOM_CONSOLE_SESSION_COOKIE,
+      consoleSession,
+      wecomConsoleSessionCookieOptions(),
+    );
+  }
   response.headers.set("Cache-Control", "no-store, max-age=0");
   return response;
 }

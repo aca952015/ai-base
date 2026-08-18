@@ -45,11 +45,14 @@ describe("WeCom relay protocol", () => {
         app_secret: "app-secret",
         callback_url: "https://ai-console.example.com/auth/wework/complete",
       });
+      expect(Number(payload.expires_at)).toBeLessThanOrEqual(
+        Math.floor((Date.now() + 10 * 60_000) / 1_000),
+      );
       return Response.json({ authorizationId: payload.authorization_id }, { status: 201 });
     });
     const authorization = await provisionWeComRelayAuthorization({
       requestToken: "r".repeat(43),
-      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
       credential: {
         corpId: "ww-example",
         appSecret: "app-secret",

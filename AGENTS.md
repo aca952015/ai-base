@@ -13,7 +13,7 @@
 
 - 本目录是独立 Git 仓库；外层 `..` 是研究工作区。`../ai-auth-relay` 是独立部署边界，不属于 AI Base Compose。
 - `vendor/open-connector` 是固定上游边界。除非任务明确要求升级或修补上游，否则不要修改；进入后遵守其 `AGENTS.md`。
-- Caddy 只负责宿主机入口与路由；Pomerium 负责浏览器访问；MCP Access Gateway 负责公共 MCP OAuth、Session、工具表示和员工授权；Envoy 负责内部模型/MCP 注册与路由。不得互相替代。
+- Caddy 只负责宿主机入口与路由；普通浏览器和首次平台登录由 Pomerium 保护。企微工作台的受限引导与已绑定会话恢复属于 `ARCHITECTURE.md` 明确记录的 Console 例外，Caddy 不验证身份。MCP Access Gateway 负责公共 MCP OAuth、Session、工具表示和员工授权；Envoy 负责内部模型/MCP 注册与路由。不得互相替代。
 - 全局 Caddy 是唯一宿主机能力入口，其他服务默认只在 Compose 网络内可达。
 - 外部 OIDC/Dex 是身份源；稳定员工身份使用已验证的 `issuer + subject`，邮箱不作为长期授权主键。
 - 客户端提交的身份头、Session、连接名、群组、Action 和资源 ID 均不可信，必须在服务端重新解析。无授权、歧义、策略不可用或参数无法识别时关闭失败。

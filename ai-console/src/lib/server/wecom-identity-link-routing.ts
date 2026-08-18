@@ -31,6 +31,18 @@ export function wecomIdentityLinkResultUrl(result: string) {
   return url;
 }
 
+export function wecomIdentityLinkLoginUrl(requestToken: string) {
+  const url = new URL("/auth/wework/link", configuredConsoleOrigin());
+  url.searchParams.set("request", requestToken);
+  return url;
+}
+
+export function wecomIdentityStatusUrl(result: string) {
+  const url = new URL("/auth/wework/status", configuredConsoleOrigin());
+  url.searchParams.set("result", result);
+  return url;
+}
+
 export function wecomIdentityLinkCookieOptions(maxAge: number) {
   return {
     httpOnly: true,

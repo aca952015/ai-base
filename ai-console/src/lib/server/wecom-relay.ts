@@ -10,6 +10,7 @@ import { wecomIdentityLinkCompletionUrl } from "./wecom-identity-link-routing";
 const TICKET_VERSION = 1;
 const TICKET_AAD = Buffer.from("ai-base-wecom-relay:v1", "utf8");
 const TICKET_MAX_LENGTH = 16 << 10;
+const AUTHORIZATION_TICKET_LIFETIME_MS = 10 * 60_000;
 const RESULT_LIFETIME_SECONDS = 5 * 60;
 const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const USER_ID_MAX_LENGTH = 256;
@@ -118,7 +119,12 @@ export async function provisionWeComRelayAuthorization(input: {
 }) {
   const authorizationId = randomBytes(32).toString("base64url");
   const endpoints = relayEndpoints(input.credential.relayCallbackUrl);
-  const expiresAt = Math.floor(new Date(input.expiresAt).getTime() / 1_000);
+  // The platform-side link request may outlive the Relay handoff, but the
+  // credential-bearing ticket must stay within the Relay's 10-minute limit.
+  const expiresAt = Math.floor(Math.min(
+    new Date(input.expiresAt).getTime(),
+    Date.now() + AUTHORIZATION_TICKET_LIFETIME_MS,
+  ) / 1_000);
   const ticket = sealWeComRelayPayload({
     v: TICKET_VERSION,
     authorization_id: authorizationId,

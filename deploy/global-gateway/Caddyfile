@@ -190,8 +190,58 @@ http://promptfoo.localhost:8080 {
 	reverse_proxy promptfoo:3000
 }
 
+https://ai-console.localhost.pomerium.io:8443 {
+	tls internal
+
+	route {
+		@wecomBootstrap path /auth/wework /auth/wework/complete /auth/wework/status
+		handle @wecomBootstrap {
+			reverse_proxy ai-console:3000 {
+				header_up -X-Pomerium-Jwt-Assertion
+				header_up -X-Pomerium-Claim-Email
+				header_up -X-Pomerium-Claim-Sub
+				header_up -X-Pomerium-Claim-User
+				header_up -X-Pomerium-Claim-Name
+				header_up -X-Pomerium-Claim-Groups
+				header_up -X-Pomerium-Authorization
+			}
+		}
+
+		@wecomFirstLink path /auth/wework/link
+		handle @wecomFirstLink {
+			reverse_proxy https://pomerium:443 {
+				header_up Host {host}:8443
+				transport http {
+					tls_insecure_skip_verify
+				}
+			}
+		}
+
+		@wecomSession header_regexp wecomSession Cookie "(^|;[ ]*)ai_base_wecom_session="
+		handle @wecomSession {
+			reverse_proxy ai-console:3000 {
+				header_up -X-Pomerium-Jwt-Assertion
+				header_up -X-Pomerium-Claim-Email
+				header_up -X-Pomerium-Claim-Sub
+				header_up -X-Pomerium-Claim-User
+				header_up -X-Pomerium-Claim-Name
+				header_up -X-Pomerium-Claim-Groups
+				header_up -X-Pomerium-Authorization
+			}
+		}
+
+		handle {
+			reverse_proxy https://pomerium:443 {
+				header_up Host {host}:8443
+				transport http {
+					tls_insecure_skip_verify
+				}
+			}
+		}
+	}
+}
+
 https://authenticate.localhost.pomerium.io:8443,
-https://ai-console.localhost.pomerium.io:8443,
 https://jaeger.localhost.pomerium.io:8443,
 https://open-connector.localhost.pomerium.io:8443 {
 	tls internal

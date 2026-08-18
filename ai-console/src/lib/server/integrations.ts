@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
 
-import { Pool, type QueryResultRow } from "pg";
+import { Pool, type PoolClient, type QueryResultRow } from "pg";
 
 import type {
   EnterpriseIntegrationGroup,
@@ -139,12 +139,34 @@ type WeComVisibilityResourceRow = QueryResultRow & {
 type WeComIdentityLinkRow = QueryResultRow & {
   principal_issuer: string;
   principal_subject: string;
+  principal_email?: string;
+  principal_name?: string;
   wecom_issuer: string;
   wecom_subject: string;
   wecom_corp_id_hash: string;
   wecom_user_id_hash: string;
   linked_at: Date | string;
   updated_at: Date | string;
+};
+
+type WeComIdentityLoginRequestRow = QueryResultRow & {
+  request_hash: string;
+  browser_nonce_hash: string;
+  wecom_issuer: string | null;
+  wecom_subject: string | null;
+  wecom_corp_id_hash: string | null;
+  wecom_user_id_hash: string | null;
+  created_at: Date | string;
+  expires_at: Date | string;
+  verified_at: Date | string | null;
+  consumed_at: Date | string | null;
+};
+
+export type WeComLinkedPlatformIdentity = {
+  principalIssuer: string;
+  principalSubject: string;
+  email: string;
+  name: string;
 };
 
 type WeComIdentityLinkRequestRow = QueryResultRow & {
@@ -296,6 +318,23 @@ export async function ensureSchema() {
       );
       CREATE INDEX IF NOT EXISTS wecom_identity_link_requests_principal_idx
         ON wecom_identity_link_requests(principal_issuer, principal_subject, expires_at);
+      CREATE TABLE IF NOT EXISTS wecom_identity_login_requests (
+        request_hash CHAR(64) PRIMARY KEY CHECK (request_hash ~ '^[a-f0-9]{64}$'),
+        browser_nonce_hash CHAR(64) NOT NULL CHECK (browser_nonce_hash ~ '^[a-f0-9]{64}$'),
+        wecom_issuer TEXT,
+        wecom_subject TEXT,
+        wecom_corp_id_hash CHAR(64) CHECK (wecom_corp_id_hash IS NULL OR wecom_corp_id_hash ~ '^[a-f0-9]{64}$'),
+        wecom_user_id_hash CHAR(64) CHECK (wecom_user_id_hash IS NULL OR wecom_user_id_hash ~ '^[a-f0-9]{64}$'),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        verified_at TIMESTAMPTZ,
+        consumed_at TIMESTAMPTZ,
+        CHECK (
+          (wecom_issuer IS NULL AND wecom_subject IS NULL AND wecom_corp_id_hash IS NULL AND wecom_user_id_hash IS NULL AND verified_at IS NULL)
+          OR
+          (wecom_issuer IS NOT NULL AND wecom_subject IS NOT NULL AND wecom_corp_id_hash IS NOT NULL AND wecom_user_id_hash IS NOT NULL AND verified_at IS NOT NULL)
+        )
+      );
       CREATE TABLE IF NOT EXISTS employee_connector_bindings (
         id UUID PRIMARY KEY,
         application_id UUID NOT NULL REFERENCES integration_applications(id) ON DELETE RESTRICT,
@@ -1294,6 +1333,7 @@ const WECOM_USER_ID_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const WECOM_CORP_GROUP_PATTERN = /^wecom:[a-f0-9]{12}$/;
 const WECOM_IDENTITY_LINK_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const WECOM_IDENTITY_LINK_LIFETIME_MS = 10 * 60 * 1_000;
+const WECOM_IDENTITY_LOGIN_LIFETIME_MS = 30 * 60 * 1_000;
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -1356,6 +1396,276 @@ export function deriveTrustedWeComRelayIdentity(
     corpIdHash,
     userIdHash: hashWeComUserId(userId),
   };
+}
+
+function validateWeComIdentityLoginSecrets(requestToken: string, browserNonce: string) {
+  if (
+    !WECOM_IDENTITY_LINK_SECRET_PATTERN.test(requestToken)
+    || !WECOM_IDENTITY_LINK_SECRET_PATTERN.test(browserNonce)
+  ) {
+    throw new IntegrationStoreError("企微自动登录请求无效", 400, "invalid_wecom_link_request");
+  }
+}
+
+async function configuredWeComCorpId(client: PoolClient) {
+  const configuration = await client.query<{ corp_id: string }>(`
+    SELECT corp_id
+    FROM wecom_authentication_configuration
+    WHERE singleton_key = 'default'
+      AND corp_id <> ''
+      AND app_secret_ciphertext IS NOT NULL
+  `);
+  const corpId = configuration.rows[0]?.corp_id;
+  if (!corpId) {
+    throw new IntegrationStoreError(
+      "企业微信认证尚未配置",
+      503,
+      "wecom_authentication_unavailable",
+    );
+  }
+  return corpId;
+}
+
+function linkedPlatformIdentity(row: WeComIdentityLinkRow): WeComLinkedPlatformIdentity {
+  if (!row.principal_email || !row.principal_name) {
+    throw new IntegrationStoreError("企业微信绑定缺少平台身份", 500, "invalid_wecom_identity");
+  }
+  return {
+    principalIssuer: row.principal_issuer,
+    principalSubject: row.principal_subject,
+    email: row.principal_email,
+    name: row.principal_name,
+  };
+}
+
+export async function createWeComIdentityLoginRequest() {
+  await ensureSchema();
+  const requestToken = randomBytes(32).toString("base64url");
+  const browserNonce = randomBytes(32).toString("base64url");
+  const expiresAt = new Date(Date.now() + WECOM_IDENTITY_LOGIN_LIFETIME_MS);
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`
+      DELETE FROM wecom_identity_login_requests
+      WHERE expires_at < NOW() - INTERVAL '1 day' OR consumed_at IS NOT NULL
+    `);
+    await client.query(`
+      INSERT INTO wecom_identity_login_requests (
+        request_hash, browser_nonce_hash, expires_at
+      ) VALUES ($1, $2, $3)
+    `, [
+      hashWeComLinkSecret(requestToken),
+      hashWeComLinkSecret(browserNonce),
+      expiresAt,
+    ]);
+    await client.query("COMMIT");
+    return { requestToken, browserNonce, expiresAt: expiresAt.toISOString() };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function resolveWeComIdentityLoginRequest(
+  requestToken: string,
+  browserNonce: string,
+  relayIdentity: { corpId: string; userId: string; relayIssuer: string },
+): Promise<
+  | { status: "linked"; identity: WeComLinkedPlatformIdentity }
+  | { status: "login_required" }
+> {
+  validateWeComIdentityLoginSecrets(requestToken, browserNonce);
+  await ensureSchema();
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const requestResult = await client.query<WeComIdentityLoginRequestRow>(`
+      SELECT request_hash, browser_nonce_hash, wecom_issuer, wecom_subject,
+             wecom_corp_id_hash, wecom_user_id_hash, created_at, expires_at,
+             verified_at, consumed_at
+      FROM wecom_identity_login_requests
+      WHERE request_hash = $1 AND browser_nonce_hash = $2 AND consumed_at IS NULL
+      FOR UPDATE
+    `, [hashWeComLinkSecret(requestToken), hashWeComLinkSecret(browserNonce)]);
+    const loginRequest = requestResult.rows[0];
+    if (!loginRequest || new Date(loginRequest.expires_at).getTime() <= Date.now()) {
+      throw new IntegrationStoreError(
+        "企微自动登录请求已失效，请重新打开应用",
+        410,
+        "expired_wecom_link_request",
+      );
+    }
+
+    const corpId = await configuredWeComCorpId(client);
+    const trusted = deriveTrustedWeComRelayIdentity(relayIdentity, corpId);
+    const existing = await client.query<WeComIdentityLinkRow>(`
+      SELECT principal_issuer, principal_subject, principal_email, principal_name,
+             wecom_issuer, wecom_subject, wecom_corp_id_hash, wecom_user_id_hash,
+             linked_at, updated_at
+      FROM wecom_identity_links
+      WHERE (wecom_issuer = $1 AND wecom_subject = $2)
+         OR (wecom_corp_id_hash = $3 AND wecom_user_id_hash = $4)
+      FOR UPDATE
+    `, [trusted.wecomIssuer, trusted.wecomSubject, trusted.corpIdHash, trusted.userIdHash]);
+    if (existing.rows.length > 1) {
+      throw new IntegrationStoreError(
+        "企业微信身份存在冲突绑定",
+        409,
+        "wecom_identity_conflict",
+      );
+    }
+
+    await client.query(`
+      UPDATE wecom_identity_login_requests
+      SET wecom_issuer = $2,
+          wecom_subject = $3,
+          wecom_corp_id_hash = $4,
+          wecom_user_id_hash = $5,
+          verified_at = NOW(),
+          consumed_at = CASE WHEN $6::BOOLEAN THEN NOW() ELSE NULL END
+      WHERE request_hash = $1
+    `, [
+      loginRequest.request_hash,
+      trusted.wecomIssuer,
+      trusted.wecomSubject,
+      trusted.corpIdHash,
+      trusted.userIdHash,
+      existing.rows.length === 1,
+    ]);
+    await client.query("COMMIT");
+    return existing.rows[0]
+      ? { status: "linked", identity: linkedPlatformIdentity(existing.rows[0]) }
+      : { status: "login_required" };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function completeVerifiedWeComIdentityLinkRequest(
+  requestToken: string,
+  browserNonce: string,
+  platformIdentity: ConsoleIdentity,
+) {
+  validateWeComIdentityLoginSecrets(requestToken, browserNonce);
+  await ensureSchema();
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const requestResult = await client.query<WeComIdentityLoginRequestRow>(`
+      SELECT request_hash, browser_nonce_hash, wecom_issuer, wecom_subject,
+             wecom_corp_id_hash, wecom_user_id_hash, created_at, expires_at,
+             verified_at, consumed_at
+      FROM wecom_identity_login_requests
+      WHERE request_hash = $1 AND browser_nonce_hash = $2 AND consumed_at IS NULL
+      FOR UPDATE
+    `, [hashWeComLinkSecret(requestToken), hashWeComLinkSecret(browserNonce)]);
+    const loginRequest = requestResult.rows[0];
+    if (
+      !loginRequest
+      || !loginRequest.verified_at
+      || !loginRequest.wecom_issuer
+      || !loginRequest.wecom_subject
+      || !loginRequest.wecom_corp_id_hash
+      || !loginRequest.wecom_user_id_hash
+      || new Date(loginRequest.expires_at).getTime() <= Date.now()
+    ) {
+      throw new IntegrationStoreError(
+        "企微身份登录交接已失效，请重新打开应用",
+        410,
+        "expired_wecom_link_request",
+      );
+    }
+
+    const existing = await client.query<WeComIdentityLinkRow>(`
+      SELECT principal_issuer, principal_subject, principal_email, principal_name,
+             wecom_issuer, wecom_subject, wecom_corp_id_hash, wecom_user_id_hash,
+             linked_at, updated_at
+      FROM wecom_identity_links
+      WHERE (wecom_issuer = $1 AND wecom_subject = $2)
+         OR (wecom_corp_id_hash = $3 AND wecom_user_id_hash = $4)
+      FOR UPDATE
+    `, [
+      loginRequest.wecom_issuer,
+      loginRequest.wecom_subject,
+      loginRequest.wecom_corp_id_hash,
+      loginRequest.wecom_user_id_hash,
+    ]);
+    if (existing.rows.some((row) => (
+      row.principal_issuer !== platformIdentity.principalIssuer
+      || row.principal_subject !== platformIdentity.principalSubject
+    ))) {
+      throw new IntegrationStoreError(
+        "该企微身份已绑定到另一个平台账号",
+        409,
+        "wecom_identity_conflict",
+      );
+    }
+
+    await client.query(`
+      INSERT INTO wecom_identity_links (
+        principal_issuer, principal_subject, principal_email, principal_name,
+        wecom_issuer, wecom_subject, wecom_corp_id_hash, wecom_user_id_hash
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (principal_issuer, principal_subject) DO UPDATE SET
+        principal_email = EXCLUDED.principal_email,
+        principal_name = EXCLUDED.principal_name,
+        wecom_issuer = EXCLUDED.wecom_issuer,
+        wecom_subject = EXCLUDED.wecom_subject,
+        wecom_corp_id_hash = EXCLUDED.wecom_corp_id_hash,
+        wecom_user_id_hash = EXCLUDED.wecom_user_id_hash,
+        linked_at = NOW(),
+        updated_at = NOW()
+    `, [
+      platformIdentity.principalIssuer,
+      platformIdentity.principalSubject,
+      platformIdentity.email,
+      platformIdentity.name,
+      loginRequest.wecom_issuer,
+      loginRequest.wecom_subject,
+      loginRequest.wecom_corp_id_hash,
+      loginRequest.wecom_user_id_hash,
+    ]);
+    await client.query(`
+      UPDATE wecom_identity_login_requests
+      SET consumed_at = NOW()
+      WHERE request_hash = $1 AND consumed_at IS NULL
+    `, [loginRequest.request_hash]);
+    await client.query("COMMIT");
+    return { linked: true as const };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error && typeof error === "object" && "code" in error && error.code === "23505") {
+      throw new IntegrationStoreError(
+        "该企微身份已绑定到另一个平台账号",
+        409,
+        "wecom_identity_conflict",
+      );
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getWeComLinkedPlatformIdentity(
+  principalIssuer: string,
+  principalSubject: string,
+): Promise<WeComLinkedPlatformIdentity | undefined> {
+  await ensureSchema();
+  const result = await getPool().query<WeComIdentityLinkRow>(`
+    SELECT principal_issuer, principal_subject, principal_email, principal_name,
+           wecom_issuer, wecom_subject, wecom_corp_id_hash, wecom_user_id_hash,
+           linked_at, updated_at
+    FROM wecom_identity_links
+    WHERE principal_issuer = $1 AND principal_subject = $2
+  `, [principalIssuer, principalSubject]);
+  return result.rows[0] ? linkedPlatformIdentity(result.rows[0]) : undefined;
 }
 
 export async function createWeComIdentityLinkRequest(identity: ConsoleIdentity) {
