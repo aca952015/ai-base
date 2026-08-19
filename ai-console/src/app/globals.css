@@ -978,6 +978,14 @@ svg { flex: 0 0 auto; }
 .integration-credential-form { gap: 16px; }
 .integration-form-fields { padding: 0 !important; }
 .integration-delete-button { width: auto; margin-right: auto; padding: 0 10px; grid-auto-flow: column; gap: 6px; }
+.wecom-organization-card .integration-application-note { margin-bottom: 8px; }
+.wecom-auth-editor-footer { justify-content: flex-end; }
+.wecom-auth-editor-footer .integration-delete-button { margin-right: 0; }
+.wecom-auth-editor-status { display: grid; min-width: 0; margin-right: auto; gap: 3px; }
+.wecom-auth-editor-status p { margin: 0; }
+.wecom-auth-editor-status small { color: var(--ink-faint); font-size: calc(8.5px + var(--font-size-step)); }
+.resource-detail-section__header > .secret-state.is-ready { color: var(--teal-dark); }
+.resource-detail-section__header > .secret-state.is-warning { color: var(--amber); }
 .integration-action-section { padding-top: 16px; border-top: 1px solid var(--line); }
 .integration-action-help {
   margin: 0;
@@ -1466,6 +1474,21 @@ svg { flex: 0 0 auto; }
 .account-connection-drawer { width: min(620px, calc(100vw - 48px)); }
 .account-connection-drawer__footer { justify-content: flex-start; }
 .account-connection-drawer__close { margin-left: auto; }
+.account-wecom-identity-list { display: grid; gap: 8px; }
+.account-wecom-identity-row {
+  display: grid;
+  min-width: 0;
+  padding: 10px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.account-wecom-identity-row > div { display: grid; min-width: 0; gap: 2px; }
+.account-wecom-identity-row strong { overflow: hidden; color: var(--ink); font-size: calc(9.5px + var(--font-size-step)); text-overflow: ellipsis; white-space: nowrap; }
+.account-wecom-identity-row small { color: var(--ink-faint); font-size: calc(8px + var(--font-size-step)); }
 .account-wecom-qr-modal-backdrop {
   position: fixed;
   z-index: 70;
@@ -2650,6 +2673,14 @@ body {
   gap: 12px;
 }
 .settings-subpage-row:hover { background: rgb(255 255 255 / 5%); }
+.component-settings .settings-subpage-row {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.component-settings .settings-subpage-row.is-active { background: rgb(10 132 255 / 13%); }
 .settings-subpage-row__icon,
 .lightrag-settings__icon {
   display: grid;
@@ -2758,6 +2789,9 @@ body {
   gap: 16px;
 }
 .component-settings__footer > div { display: grid; gap: 4px; }
+.component-settings__footer > .button-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.field-label--toggle { align-content: start; }
+.field-label--toggle input { width: 18px; height: 18px; min-height: 0; accent-color: var(--teal); }
 .component-settings__meta {
   color: #727278;
   font-size: calc(8.5px + var(--font-size-step));

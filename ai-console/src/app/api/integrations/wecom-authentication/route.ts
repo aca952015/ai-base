@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { ConsoleAuthError, requireConsoleAdmin } from "@/lib/server/console-identity";
 import { IntegrationStoreError } from "@/lib/server/integrations";
 import {
+  createWeComAuthenticationConfiguration,
+  deleteWeComAuthenticationConfiguration,
   getWeComAuthenticationConfiguration,
   updateWeComAuthenticationConfiguration,
   validateWeComAuthenticationSettings,
@@ -51,5 +53,36 @@ export async function PUT(request: Request) {
     return NextResponse.json(await updateWeComAuthenticationConfiguration(validation.value));
   } catch (error) {
     return errorResponse(error, "保存企业微信认证配置失败");
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    await requireConsoleAdmin();
+  } catch (error) {
+    return errorResponse(error, "无权新增企业微信认证组织");
+  }
+  const body = await request.json().catch(() => undefined);
+  const validation = validateWeComAuthenticationSettings(body);
+  if (!validation.ok) {
+    return NextResponse.json(
+      { error: "invalid WeCom authentication settings", details: validation.errors },
+      { status: 400 },
+    );
+  }
+  try {
+    return NextResponse.json(await createWeComAuthenticationConfiguration(validation.value), { status: 201 });
+  } catch (error) {
+    return errorResponse(error, "新增企业微信认证组织失败");
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    await requireConsoleAdmin();
+    const id = new URL(request.url).searchParams.get("id") || "";
+    return NextResponse.json(await deleteWeComAuthenticationConfiguration(id));
+  } catch (error) {
+    return errorResponse(error, "删除企业微信认证组织失败");
   }
 }

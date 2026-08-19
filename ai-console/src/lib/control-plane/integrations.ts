@@ -177,7 +177,12 @@ export type EmployeeIntegrationsSnapshot = {
   };
   wecomIdentity: {
     linked: boolean;
-    linkedAt?: string;
+    identities: Array<{
+      id: string;
+      organizationId: string;
+      organizationName: string;
+      linkedAt: string;
+    }>;
   };
   applications: EmployeeIntegrationApplication[];
   availableConnections: EmployeeAvailableConnection[];

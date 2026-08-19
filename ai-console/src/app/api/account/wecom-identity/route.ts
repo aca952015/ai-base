@@ -5,24 +5,15 @@ import {
   disconnectWeComIdentityLink,
   IntegrationStoreError,
 } from "@/lib/server/integrations";
-import {
-  WECOM_CONSOLE_SESSION_COOKIE,
-  wecomConsoleSessionCookieOptions,
-} from "@/lib/server/wecom-console-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
   try {
     const identity = await getConsoleIdentity();
-    const response = NextResponse.json(await disconnectWeComIdentityLink(identity));
-    response.cookies.set(
-      WECOM_CONSOLE_SESSION_COOKIE,
-      "",
-      wecomConsoleSessionCookieOptions(0),
-    );
-    return response;
+    const linkId = new URL(request.url).searchParams.get("id") || "";
+    return NextResponse.json(await disconnectWeComIdentityLink(identity, linkId));
   } catch (error) {
     const known = error instanceof ConsoleAuthError || error instanceof IntegrationStoreError;
     if (!known) console.error("WeCom identity unlink failed", error);

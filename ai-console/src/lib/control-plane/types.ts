@@ -62,17 +62,30 @@ export type LegacyWeComAuthenticationRuntimeSettings = {
 };
 
 export type WeComAuthenticationSettings = {
+  id?: string;
+  organizationName: string;
   corpId: string;
   appSecret?: string;
   relayCallbackUrl: string;
+  active: boolean;
 };
 
-export type WeComAuthenticationSnapshot = {
+export type WeComAuthenticationOrganizationSnapshot = {
+  id: string;
+  organizationName: string;
   corpId: string;
   relayCallbackUrl: string;
+  active: boolean;
   configured: boolean;
   secretConfigured: boolean;
   effectiveCallbackUrl: string;
+  applicationHomepageUrl: string;
+  updatedAt: string;
+};
+
+export type WeComAuthenticationSnapshot = {
+  organizations: WeComAuthenticationOrganizationSnapshot[];
+  configuredCount: number;
   updatedAt: string;
 };
 
@@ -90,7 +103,7 @@ export type ConsoleConfig = {
   currency: "CNY" | "USD";
   monthlyBudget: number;
   services: Partial<Record<ServiceId, ServiceConfig>>;
-  /** @deprecated Migrated into the singleton PostgreSQL WeCom authentication configuration. */
+  /** @deprecated Migrated into administrator-managed PostgreSQL WeCom authentication organizations. */
   authentication?: {
     wecom?: LegacyWeComAuthenticationRuntimeSettings;
   };

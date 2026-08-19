@@ -29,10 +29,9 @@ describe("WeCom identity card", () => {
   it("does not allow binding before a trusted WeCom identity is received", () => {
     const html = renderToStaticMarkup(createElement(WeComIdentityCard, {
       linked: false,
+      identityCount: 0,
       availableConnectionCount: 0,
-      busy: false,
       onOpen: () => undefined,
-      onDisconnect: () => undefined,
     }));
 
     expect(html).toContain("尚未获得企业微信身份");
@@ -46,7 +45,15 @@ describe("WeCom identity card", () => {
 describe("integration permission details", () => {
   const snapshot: EmployeeIntegrationsSnapshot = {
     identity: { name: "employee01", email: "employee01@example.com" },
-    wecomIdentity: { linked: true },
+    wecomIdentity: {
+      linked: true,
+      identities: [{
+        id: "11111111-1111-4111-8111-111111111111",
+        organizationId: "22222222-2222-4222-8222-222222222222",
+        organizationName: "示例组织",
+        linkedAt: "2026-08-18T00:00:00.000Z",
+      }],
+    },
     applications: [{
       id: "feishu-app",
       platform: "feishu",

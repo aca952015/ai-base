@@ -28,10 +28,11 @@ const messages: Record<string, { title: string; detail: string }> = {
 export default async function WeComAuthStatusPage({
   searchParams,
 }: {
-  searchParams: Promise<{ result?: string | string[] }>;
+  searchParams: Promise<{ result?: string | string[]; organization?: string | string[] }>;
 }) {
   const query = await searchParams;
   const result = typeof query.result === "string" ? query.result : "failed";
+  const organizationId = typeof query.organization === "string" ? query.organization : "";
   const message = messages[result] || messages.failed;
   return (
     <main className="auth-status-page">
@@ -39,7 +40,14 @@ export default async function WeComAuthStatusPage({
         <span className="auth-status-card__eyebrow">AI Base · 企业微信</span>
         <h1>{message.title}</h1>
         <p>{message.detail}</p>
-        <Link className="button button--primary" href="/auth/wework">重新认证</Link>
+        {organizationId ? (
+          <Link
+            className="button button--primary"
+            href={`/auth/wework?organization=${encodeURIComponent(organizationId)}`}
+          >
+            重新认证
+          </Link>
+        ) : null}
       </section>
     </main>
   );

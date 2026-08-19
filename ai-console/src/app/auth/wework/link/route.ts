@@ -43,8 +43,8 @@ export async function GET(request: NextRequest) {
     const requestToken = request.nextUrl.searchParams.get("request") || "";
     const browserNonce = request.cookies.get(WECOM_IDENTITY_LINK_COOKIE)?.value || "";
     const platformIdentity = await getConsoleIdentity({ audience: aiConsoleAudience() });
-    await completeVerifiedWeComIdentityLinkRequest(requestToken, browserNonce, platformIdentity);
-    consoleSession = issueWeComConsoleSession(platformIdentity);
+    const linked = await completeVerifiedWeComIdentityLinkRequest(requestToken, browserNonce, platformIdentity);
+    consoleSession = issueWeComConsoleSession(platformIdentity, linked.linkId);
   } catch (error) {
     result = resultFor(error);
     const known = error instanceof ConsoleAuthError || error instanceof IntegrationStoreError;

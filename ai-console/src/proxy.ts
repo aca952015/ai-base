@@ -59,7 +59,7 @@ export function proxy(request: NextRequest) {
     } catch {
       const response = pathname.startsWith("/api/")
         ? NextResponse.json({ error: "企业微信自动登录会话无效" }, { status: 401 })
-        : NextResponse.redirect(new URL("/auth/wework", request.url));
+        : NextResponse.redirect(new URL(pathname, request.url));
       response.cookies.set(
         WECOM_CONSOLE_SESSION_COOKIE,
         "",

@@ -41,6 +41,13 @@ describe("WeCom Console session", () => {
     expect(token).not.toContain(identity.principalSubject);
   });
 
+  it("can bind the session to the concrete organization identity link", () => {
+    const now = 1_800_000_000;
+    const linkId = "11111111-1111-4111-8111-111111111111";
+    const token = issueWeComConsoleSession(identity, linkId, now);
+    expect(verifyWeComConsoleSession(token, now + 60)).toMatchObject({ linkId });
+  });
+
   it("rejects tampering, expiry and tokens signed by a rotated key", () => {
     const now = 1_800_000_000;
     const token = issueWeComConsoleSession(identity, now);

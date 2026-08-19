@@ -21,6 +21,8 @@ export type SharedConnectorResource = {
   displayName: string;
   securityDomain: string;
   authorizationMode: SharedConnectorAuthorizationMode;
+  wecomOrganizationId: string | null;
+  wecomOrganizationName: string | null;
   actionIds: string[];
   enabled: boolean;
   grants: SharedConnectorGrant[];
@@ -29,6 +31,7 @@ export type SharedConnectorResource = {
 
 export type SharedConnectorAccessSnapshot = {
   resources: SharedConnectorResource[];
+  wecomOrganizations: Array<{ id: string; name: string; configured: boolean }>;
   hardDeniedActionIds: string[];
   updatedAt: string;
 };
@@ -50,6 +53,7 @@ export type SharedConnectorResourceInput = {
   displayName: string;
   securityDomain?: string;
   authorizationMode?: SharedConnectorAuthorizationMode;
+  wecomOrganizationId?: string;
   actionIds?: string[];
   enabled?: boolean;
   grants: SharedConnectorGrantInput[];

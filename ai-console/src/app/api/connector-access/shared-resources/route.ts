@@ -62,6 +62,7 @@ export async function PUT(request: Request) {
       displayName: typeof body.displayName === "string" ? body.displayName : "",
       securityDomain: typeof body.securityDomain === "string" ? body.securityDomain : undefined,
       authorizationMode: body.authorizationMode === "wecom_visibility" ? "wecom_visibility" : "manual",
+      wecomOrganizationId: typeof body.wecomOrganizationId === "string" ? body.wecomOrganizationId : undefined,
       actionIds: Array.isArray(body.actionIds)
         ? body.actionIds.filter((action): action is string => typeof action === "string")
         : [],

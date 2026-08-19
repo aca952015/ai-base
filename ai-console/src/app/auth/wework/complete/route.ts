@@ -17,8 +17,9 @@ import {
   WECOM_CONSOLE_SESSION_COOKIE,
   wecomConsoleSessionCookieOptions,
 } from "@/lib/server/wecom-console-session";
-import { getWeComRelayCredential } from "@/lib/server/wecom-authentication";
+import { getWeComRelayCredentialForLoginRequest } from "@/lib/server/wecom-authentication";
 import {
+  readWeComRelayResultRequestToken,
   verifyWeComRelayResult,
   WeComRelayError,
 } from "@/lib/server/wecom-relay";
@@ -50,10 +51,13 @@ export async function GET(request: NextRequest) {
   let location: URL;
   let consoleSession: string | undefined;
   let keepBrowserNonce = false;
+  let organizationId: string | undefined;
   try {
     const ticket = request.nextUrl.searchParams.get("result") || "";
     const browserNonce = request.cookies.get(WECOM_IDENTITY_LINK_COOKIE)?.value || "";
-    const credential = await getWeComRelayCredential();
+    const requestToken = readWeComRelayResultRequestToken(ticket);
+    const credential = await getWeComRelayCredentialForLoginRequest(requestToken);
+    organizationId = credential.organizationId;
     const relayIdentity = verifyWeComRelayResult(ticket, credential.relayCallbackUrl);
     const resolution = await resolveWeComIdentityLoginRequest(
       relayIdentity.requestToken,
@@ -61,14 +65,14 @@ export async function GET(request: NextRequest) {
       relayIdentity,
     );
     if (resolution.status === "linked") {
-      consoleSession = issueWeComConsoleSession(resolution.identity);
+      consoleSession = issueWeComConsoleSession(resolution.identity, resolution.identity.linkId);
       location = wecomIdentityLinkResultUrl("restored");
     } else {
       keepBrowserNonce = true;
       location = wecomIdentityLinkLoginUrl(relayIdentity.requestToken);
     }
   } catch (error) {
-    location = wecomIdentityStatusUrl(resultFor(error));
+    location = wecomIdentityStatusUrl(resultFor(error), organizationId);
     const known = error instanceof IntegrationStoreError
       || error instanceof WeComRelayError;
     if (!known) console.error("WeCom identity link completion failed", error);

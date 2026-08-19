@@ -90,7 +90,7 @@ describe("console proxy", () => {
     expect(admin.headers.get("location")).toBe("https://ai-console.example.com/account");
   });
 
-  it("clears a forged WeCom session before restarting the relay flow", () => {
+  it("clears a forged WeCom session before returning to the protected route", () => {
     process.env.AI_CONSOLE_SECRET_ENCRYPTION_KEY = "test-proxy-wecom-session-secret-key-value";
     process.env.AI_CONSOLE_DEV_IDENTITY_ENABLED = "false";
     const request = new NextRequest("https://ai-console.example.com/account", {
@@ -100,7 +100,7 @@ describe("console proxy", () => {
     const response = proxy(request);
 
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("https://ai-console.example.com/auth/wework");
+    expect(response.headers.get("location")).toBe("https://ai-console.example.com/account");
     expect(response.headers.get("set-cookie")).toContain(`${WECOM_CONSOLE_SESSION_COOKIE}=`);
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
   });

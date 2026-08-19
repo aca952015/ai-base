@@ -79,6 +79,8 @@ type SharedAccessEditorState = {
   actionIds: string[];
   provider?: ConnectorProviderDetail;
   hardDeniedActionIds: string[];
+  wecomOrganizations: SharedConnectorAccessSnapshot["wecomOrganizations"];
+  wecomOrganizationId: string;
   loading: boolean;
   saving: boolean;
   error?: string;
@@ -736,6 +738,8 @@ export function ConnectorManager({
       principals: "",
       actionIds: [],
       hardDeniedActionIds: [],
+      wecomOrganizations: [],
+      wecomOrganizationId: connection.sharedAccess?.wecomOrganizationId || "",
       loading: true,
       saving: false,
     });
@@ -765,6 +769,10 @@ export function ConnectorManager({
         actionIds,
         provider,
         hardDeniedActionIds: snapshot.hardDeniedActionIds,
+        wecomOrganizations: snapshot.wecomOrganizations,
+        wecomOrganizationId: resource?.wecomOrganizationId
+          || snapshot.wecomOrganizations.find((organization) => organization.configured)?.id
+          || "",
         loading: false,
       } : current);
     } catch (error) {
@@ -818,6 +826,10 @@ export function ConnectorManager({
       patchAccessEditor({ error: "至少为授权对象选择一个 Action" });
       return;
     }
+    if (weComVisibility && !accessEditor.wecomOrganizationId) {
+      patchAccessEditor({ error: "请选择企业微信认证组织" });
+      return;
+    }
     let grants;
     try {
       grants = weComVisibility ? [] : principalLines.map((line) => {
@@ -847,6 +859,7 @@ export function ConnectorManager({
           displayName: accessEditor.displayName,
           securityDomain: accessEditor.securityDomain,
           authorizationMode: weComVisibility ? "wecom_visibility" : "manual",
+          wecomOrganizationId: weComVisibility ? accessEditor.wecomOrganizationId : undefined,
           actionIds: weComVisibility ? accessEditor.actionIds : [],
           enabled: true,
           grants,
@@ -1071,7 +1084,10 @@ export function ConnectorManager({
                       <label className="field-label"><span>显示名称</span><input value={accessEditor.displayName} onChange={(event) => patchAccessEditor({ displayName: event.target.value })} /></label>
                       <label className="field-label"><span>安全域</span><input value={accessEditor.securityDomain} onChange={(event) => patchAccessEditor({ securityDomain: event.target.value })} placeholder="general / sales / hr" /></label>
                       {accessEditor.connection.service === "wecom_bot" ? (
-                        <div className="connector-auth-note connector-field--wide"><ShieldCheck size={16} /><div><strong>企业身份自动筛选</strong><p>不配置员工绑定或手工名单。服务端用企微认证得到的 UserID 摘要调用该机器人的 get_userlist；查询失败或员工不在可见范围时连接不会出现在 MCP 清单中。</p></div></div>
+                        <>
+                          <label className="field-label connector-field--wide"><span>企业微信组织</span><select value={accessEditor.wecomOrganizationId} onChange={(event) => patchAccessEditor({ wecomOrganizationId: event.target.value })}><option value="">请选择认证组织</option>{accessEditor.wecomOrganizations.map((organization) => <option value={organization.id} disabled={!organization.configured} key={organization.id}>{organization.name}{organization.configured ? "" : "（未完成配置）"}</option>)}</select><small>该 Bot 的可见成员只会与所选组织中的企微身份匹配。</small></label>
+                          <div className="connector-auth-note connector-field--wide"><ShieldCheck size={16} /><div><strong>企业身份自动筛选</strong><p>服务端使用所选组织的 UserID 摘要校验机器人可见范围；查询失败或员工不在范围时关闭失败。</p></div></div>
+                        </>
                       ) : (
                         <label className="field-label connector-field--wide"><span>授权对象</span><textarea rows={5} value={accessEditor.principals} onChange={(event) => patchAccessEditor({ principals: event.target.value })} placeholder={"每行一个，例如：\nuser:employee01@company.com\ngroup:sales"} /><small className="connector-field-help">员工使用 user:邮箱或可信 Subject；群组使用 group:OIDC 群组名。</small></label>
                       )}

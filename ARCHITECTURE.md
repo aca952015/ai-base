@@ -113,21 +113,21 @@ Prometheus、OTLP、PostgreSQL 及各服务原生管理端口只在 Compose 网�
 - Open Connector 加密保存凭据和个人 OAuth Token；PostgreSQL 只保存 `issuer + subject` 到具名连接的映射以及共享授权策略。
 - `no_auth`、`account_bound`、`controlled_shared` 和 `global` 分别处理。需要凭据的 Provider 不得使用共享 `default`。
 - `controlled_shared` 必须同时通过员工/群组、连接、Action 和资源约束；动态入口 `wecom_bot.call_tool` 固定拒绝。
-- 企微机器人通过可信 CorpID/UserID 摘要和 `get_userlist` 校验可见性；查询失败、身份域不匹配或缓存过期时不可见。只有管理员显式加入白名单的静态 Action 才可调用。
+- 企微机器人归属一个明确的企微认证组织，并通过该组织的可信 CorpID/UserID 摘要和 `get_userlist` 校验可见性；不同组织中的同名 UserID 不共享授权。查询失败、身份域不匹配、组织停用或缓存过期时不可见。只有管理员显式加入白名单的静态 Action 才可调用。
 - 已完成企微身份绑定的员工也可在账号页发起官方机器人扫码：Console 创建五分钟会话并轮询企业微信结果，取得 Bot ID/Secret 后先以二维码来源完成企业微信 `get_cli_config` 鉴权引导，再仅在服务端写入 Open Connector；随后以有限重试的 `get_userlist` 等待权限传播，按已认证 UserID 精确定位当前成员并确认其位于机器人可使用成员中。个人连接默认显示为“绑定成员姓名绑定的企微机器人 · 连接短标识”，员工可修改显示名；稳定 `connection_name` 和凭据不随改名变化。员工也可逐连接解绑；服务端必须校验当前稳定主体是该个人连接所有者。PostgreSQL 只保存员工主体、具名连接、显示名、Bot ID 指纹和服务端发现出的只读 Action 白名单，扫码完成或过期即清除临时会话码。
 - 管理员维护的企微机器人仍是 `controlled_shared`，员工扫码创建的机器人是 `account_bound`，两者不互相降级。同一员工可拥有多个个人机器人；调用未指定连接且存在多个候选时，Gateway 返回 `connector_selection_required`，指定连接后仍逐 Action 校验。
 - 管理 UI 经 Pomerium 后由内部代理注入 Admin Token；Runtime/Admin Token 不进入 Prompt、Trace 或浏览器响应。
 
 ### 企业微信身份绑定与自动恢复
 
-企业微信不是平台账号源，也不能创建或任意选择平台账号。管理员在 `/integrations/wecom-authentication` 维护唯一 CorpID、App Secret 和 Relay 地址；Secret 使用 AES-256-GCM 存入 PostgreSQL，浏览器、Pomerium、Dex 和 MCP Broker 均不接触明文。
+企业微信不是平台账号源，也不能创建或任意选择平台账号。管理员在 `/integrations/wecom-authentication` 按组织维护 CorpID、App Secret 和 Relay 地址；每个组织生成带稳定 `organization` ID 的独立应用首页。Secret 使用 AES-256-GCM 存入 PostgreSQL，浏览器、Pomerium、Dex 和 MCP Broker 均不接触明文。
 
-链路为：企微工作台 → Console 创建一次性事务 → Relay 完成企微网页授权与 `gettoken/getuserinfo` → Console 验证加密结果并查找唯一绑定。已有绑定时，Console 签发 12 小时 HttpOnly 会话并按绑定的 `issuer + subject` 恢复用户；没有绑定时，才进入 Pomerium/Dex 确认平台账号并完成首次关联。
+链路为：指定组织的企微工作台应用首页 → Console 将组织 ID 固化到一次性事务 → Relay 完成企微网页授权与 `gettoken/getuserinfo` → Console 先从认证票据读取事务令牌，再按事务回查组织凭据并验证 CorpID。已有绑定时，Console 签发 12 小时 HttpOnly 会话并按绑定的 `issuer + subject` 恢复用户；没有绑定时，才进入 Pomerium/Dex 确认平台账号并完成首次关联。
 
 - Console 与 Relay 只交换短期 AEAD 票据和随机授权 ID；企业微信只回调 Relay 的固定 `/callbacks/wecom`。
 - Relay 使用固定公网出口，不接受浏览器指定回调，不持久化 CorpID、Secret、Access Token 或 UserID。
-- Console 只保存平台 `issuer + subject`、派生企微 Subject 及 CorpID/UserID 哈希；同一企微身份不能绑定多个平台账号。
-- 企微 Console 会话使用从服务端配置密钥域分离派生的 HMAC 密钥签名；Caddy 只按 Cookie 是否存在分流，Console 每次请求都验证签名、固定有效期，并重新查询绑定。解绑后立即失效，不能依靠 Cookie 恢复已撤销映射。
+- Console 只保存平台 `issuer + subject`、认证组织 ID、派生企微 Subject 及 CorpID/UserID 哈希；一个平台账号可在多个组织各绑定一个企微身份，同一具体企微身份仍只能归属一个平台账号。
+- 企微 Console 会话使用从服务端配置密钥域分离派生的 HMAC 密钥签名，并记录触发会话的具体绑定 ID；Caddy 只按 Cookie 是否存在分流，Console 每次请求都验证签名、固定有效期，并重新查询该绑定。解除其他组织绑定不影响当前会话，解除当前绑定后立即失效。
 - `/auth/wework/link` 固定经过 Pomerium，已有企微会话也不能绕过首次平台账号确认。过期、篡改、重放、企业不匹配、身份冲突、中继不可用或企微 API 失败均关闭失败。
 
 ### 知识与可观测
@@ -148,8 +148,8 @@ Prometheus、OTLP、PostgreSQL 及各服务原生管理端口只在 Compose 网�
 | 模型 Provider Key | AI Console 服务端配置 | 以文件进入 Envoy 生成流程，不写入路由 YAML 或浏览器响应 |
 | SaaS 凭据、个人 OAuth Token 和企微个人机器人凭据 | Open Connector | 使用其静态加密键保存；企微 Bot Secret 不写入 Console 数据库或浏览器响应 |
 | 员工连接和共享授权 | AI Console + PostgreSQL | Gateway 每次调用重新解析，异常关闭失败 |
-| 企业微信认证 Secret | AI Console + PostgreSQL | 单例配置，AES-256-GCM 加密；Relay 仅短期使用 |
-| 企业微信员工映射 | AI Console + PostgreSQL | 只保存派生 Subject 和 CorpID/UserID 哈希 |
+| 企业微信认证 Secret | AI Console + PostgreSQL | 按组织配置，AES-256-GCM 加密；Relay 仅在对应一次性事务中短期使用 |
+| 企业微信员工映射 | AI Console + PostgreSQL | 平台主体到多个组织身份的一对多映射；只保存组织 ID、派生 Subject 和 CorpID/UserID 哈希 |
 | 知识数据 | LightRAG + PostgreSQL/pgvector/AGE | RAG MCP 只读，Console 不读取正文 |
 | Trace 和指标 | OTel Collector → Jaeger/Prometheus | 先净化，只作诊断，不作审计账本 |
 

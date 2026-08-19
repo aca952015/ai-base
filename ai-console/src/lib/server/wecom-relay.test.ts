@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   openWeComRelayPayload,
+  readWeComRelayResultRequestToken,
   provisionWeComRelayAuthorization,
   sealWeComRelayPayload,
   verifyWeComRelayResult,
@@ -54,6 +55,8 @@ describe("WeCom relay protocol", () => {
       requestToken: "r".repeat(43),
       expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
       credential: {
+        organizationId: "11111111-1111-4111-8111-111111111111",
+        organizationName: "示例组织",
         corpId: "ww-example",
         appSecret: "app-secret",
         relayCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom",
@@ -78,6 +81,7 @@ describe("WeCom relay protocol", () => {
       expires_at: now + 300,
     };
     const success = sealWeComRelayPayload({ ...base, corp_id: "ww-example", user_id: "ZhangSan" });
+    expect(readWeComRelayResultRequestToken(success)).toBe("r".repeat(43));
     expect(verifyWeComRelayResult(success, "http://tn1.cofly-ai.cn/callbacks/wecom", now)).toEqual({
       requestToken: "r".repeat(43),
       corpId: "ww-example",

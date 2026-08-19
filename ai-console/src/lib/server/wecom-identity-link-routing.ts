@@ -25,6 +25,12 @@ export function wecomIdentityLinkCompletionUrl() {
   return new URL("/auth/wework/complete", configuredConsoleOrigin());
 }
 
+export function wecomIdentityStartUrl(organizationId: string) {
+  const url = new URL("/auth/wework", configuredConsoleOrigin());
+  url.searchParams.set("organization", organizationId);
+  return url;
+}
+
 export function wecomIdentityLinkResultUrl(result: string) {
   const url = new URL("/account", configuredConsoleOrigin());
   url.searchParams.set("wecom_link", result);
@@ -37,9 +43,10 @@ export function wecomIdentityLinkLoginUrl(requestToken: string) {
   return url;
 }
 
-export function wecomIdentityStatusUrl(result: string) {
+export function wecomIdentityStatusUrl(result: string, organizationId?: string) {
   const url = new URL("/auth/wework/status", configuredConsoleOrigin());
   url.searchParams.set("result", result);
+  if (organizationId) url.searchParams.set("organization", organizationId);
   return url;
 }
 

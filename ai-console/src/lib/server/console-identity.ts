@@ -241,6 +241,7 @@ export async function getConsoleIdentity(options: { audience?: string | string[]
     const linked = await getWeComLinkedPlatformIdentity(
       claims.principalIssuer,
       claims.principalSubject,
+      claims.linkId,
     );
     if (!linked) throw new ConsoleAuthError("企业微信身份绑定已解除");
     return {

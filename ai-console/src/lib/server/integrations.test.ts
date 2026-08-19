@@ -192,7 +192,7 @@ describe("enterprise integration store", () => {
     expect(snapshot.applications[1].binding).toBeUndefined();
     expect(snapshot.applications[1].active).toBe(false);
     expect(snapshot.identity.email).toBe("employee01@bluetron.cn");
-    expect(snapshot.wecomIdentity).toEqual({ linked: false });
+    expect(snapshot.wecomIdentity).toEqual({ linked: false, identities: [] });
     expect(snapshot.availableConnections).toEqual([]);
     expect(snapshot.automaticWeComBotCount).toBe(1);
   });

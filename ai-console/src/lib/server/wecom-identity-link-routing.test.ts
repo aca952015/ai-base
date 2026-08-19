@@ -7,6 +7,7 @@ import {
   wecomIdentityLinkLoginUrl,
   wecomIdentityLinkResultUrl,
   wecomIdentityStatusUrl,
+  wecomIdentityStartUrl,
 } from "./wecom-identity-link-routing";
 
 const originalConsoleUrl = process.env.AI_CONSOLE_PUBLIC_URL;
@@ -18,14 +19,18 @@ afterEach(() => {
 
 describe("WeCom identity link routing", () => {
   it("separates the public relay completion from the authenticated first-link handoff", () => {
+    const organizationId = "11111111-1111-4111-8111-111111111111";
     expect(wecomIdentityLinkCompletionUrl().toString()).toBe(
       "https://ai-console.localhost.pomerium.io:8443/auth/wework/complete",
+    );
+    expect(wecomIdentityStartUrl(organizationId).toString()).toBe(
+      `https://ai-console.localhost.pomerium.io:8443/auth/wework?organization=${organizationId}`,
     );
     expect(wecomIdentityLinkLoginUrl("opaque-request").toString()).toBe(
       "https://ai-console.localhost.pomerium.io:8443/auth/wework/link?request=opaque-request",
     );
-    expect(wecomIdentityStatusUrl("denied").toString()).toBe(
-      "https://ai-console.localhost.pomerium.io:8443/auth/wework/status?result=denied",
+    expect(wecomIdentityStatusUrl("denied", organizationId).toString()).toBe(
+      `https://ai-console.localhost.pomerium.io:8443/auth/wework/status?result=denied&organization=${organizationId}`,
     );
     expect(wecomIdentityLinkResultUrl("linked").toString()).toBe(
       "https://ai-console.localhost.pomerium.io:8443/account?wecom_link=linked",

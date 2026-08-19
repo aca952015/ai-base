@@ -45,7 +45,9 @@ export default async function IntegrationsPage() {
   const snapshot = "snapshot" in result ? result.snapshot : emptySnapshot;
   const enterpriseReadFailed = "error" in result;
   const wecomStatus = "snapshot" in wecomResult
-    ? wecomResult.snapshot.configured ? "已配置" : "未配置"
+    ? wecomResult.snapshot.configuredCount
+      ? `已配置 · ${wecomResult.snapshot.configuredCount} 个组织`
+      : "未配置"
     : "读取失败";
   const platformStatus = (platform: "feishu" | "dingtalk") => {
     if (enterpriseReadFailed) return "读取失败";

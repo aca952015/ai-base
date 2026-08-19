@@ -60,9 +60,9 @@ Dex 中的 `ai-base-pomerium` 客户端登记 `https://authenticate.localhost.po
 
 ### 企业微信身份中继
 
-企业微信工作台应用首页配置为 `https://ai-console.localhost.pomerium.io:8443/auth/wework`。该受限入口先由部署在固定公网出口的 `ai-auth-relay` 完成企业微信网页授权和身份交换：已有唯一绑定时，AI Console 自动恢复对应平台用户；尚未绑定时才进入主 Pomerium/Dex 登录，并把已验证的企微身份关联到当前平台账号。企业微信只与中继交换身份，不直接回调内网 AI Base。
+管理员先在“集成管理 / 企业微信认证”新增组织，再把页面为该组织生成的 `https://ai-console.localhost.pomerium.io:8443/auth/wework?organization=<组织 ID>` 配置为对应企业微信应用首页。该受限入口先由固定公网出口的 `ai-auth-relay` 完成网页授权和身份交换：已有绑定时自动恢复平台用户，尚未绑定时才进入 Pomerium/Dex。企业微信只与中继交换身份，不直接回调内网 AI Base。
 
-管理员在 Console 的“集成管理 / 企业微信认证”中维护唯一一套系统认证配置：
+管理员在 Console 的“集成管理 / 企业微信认证”中按组织维护系统认证配置：
 
 - “企业 ID（CorpID）”填写企业微信管理后台的企业 ID；
 - “App Secret”填写该自建应用的 Secret；
@@ -71,7 +71,7 @@ Dex 中的 `ai-base-pomerium` 客户端登记 `https://authenticate.localhost.po
 - 在企业微信后台把可信域名和网页授权回调配置为该中继，并把中继主机的固定公网出口加入应用可信 IP；
 - 域名验证文件只部署到 Relay；AI Base 全局网关不再提供企微回调或域名验证路径。
 
-AI Base 在每次工作台登录开始时从 Console 数据库读取这套凭据，创建 30 分钟的平台关联事务，并通过服务端连接把最长 10 分钟的加密授权票据暂存到 Relay。浏览器只携带随机授权 ID，不接触 CorpID、App Secret 或平台请求令牌。Relay 在内存中一次性消费授权 ID 和 state，使用自己的固定公网出口调用企微 `gettoken/getuserinfo`，再把 5 分钟加密身份结果经浏览器带回内网完成页。完成页要求同浏览器 HttpOnly nonce、未过期数据库事务和匹配 CorpID。若 CorpID/UserID 摘要已有唯一映射，Console 签发最长 12 小时的安全 Cookie，并在每次请求时重新确认映射仍存在；若无映射，`/auth/wework/link` 强制经过 Pomerium 确认平台身份后才建立关联。解绑会同时清除该 Cookie。
+AI Base 在每次工作台登录开始时把组织 ID 固化到 30 分钟的平台关联事务，并把最长 10 分钟的加密授权票据暂存到 Relay。完成页先从认证票据取得事务令牌，再按事务回查组织配置并验证 CorpID、HttpOnly nonce 和有效期。若该组织的 CorpID/UserID 摘要已有映射，Console 签发绑定到具体映射记录的最长 12 小时安全 Cookie；若无映射，`/auth/wework/link` 强制经过 Pomerium 确认平台身份。一个平台账号可在多个组织各绑定一个企微身份，同一具体企微身份不能绑定多个平台账号。
 
 两端共享密钥属于启动信任根，不能放进登录后的管理页面：
 
@@ -207,7 +207,7 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - OpenConnector 自带的免认证连接以只读系统卡片展示。
 - 管理员可以把具名凭据连接设置为“受控共享”，按员工账号、OIDC Subject 或用户组授权，并限制可调用的 Action；
 - `wecom_bot` 的 Bot ID/Secret 也在本页按具名连接维护，不进入“集成管理”；保存机器人时必须同时选择员工可调用的静态 Action；
-- 管理员配置的企微机器人固定使用“企业身份自动筛选”策略，不创建员工绑定或手工授权名单；员工自行扫码创建的机器人独立记录为个人连接。两者均在 MCP 调用时执行连接与 Action 白名单；
+- 管理员配置的企微机器人固定使用“企业身份自动筛选”策略，并必须选择所属企微认证组织；共享 Bot 只与同组织身份匹配。员工扫码创建的机器人仍独立记录为个人连接；
 - 受控共享策略只在 AI Base 的 PostgreSQL 与 MCP Access Gateway 中生效，OpenConnector 仍负责保存凭据和执行 Action，不修改上游代码。
 
 新增或编辑只有在 OpenConnector 校验并保存成功后才会更新卡片列表。受控共享连接必须使用非 `default` 的具名连接；MCP 网关根据已经验证的员工 OIDC 身份选择连接并校验 Action 白名单，客户端提交的连接名不能越权。`wecom_bot.get_userlist` 始终用于服务端可见性判定，并且只有管理员把它加入机器人 Action 白名单后才作为员工可调用的只读通讯录 Action 出现在授权连接中；`wecom_bot.call_tool` 及旧 Webhook 发送入口继续固定拒绝员工授权。可见性结果只缓存 60 秒且不使用过期结果，员工移出机器人可见范围后会自动撤权。
@@ -216,11 +216,11 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 
 ### 集成管理
 
-[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 仅供管理员使用，并作为企业微信、飞书和钉钉的统一配置目录。企业微信进入独立的 [认证二级页](https://ai-console.localhost.pomerium.io:8443/integrations/wecom-authentication)，集中维护 CorpID、App Secret 和公网认证中继回调；飞书与钉钉分别进入 `/integrations/feishu` 和 `/integrations/dingtalk`，独立管理各自的应用凭据、Action 与启用状态。企微机器人的 Bot ID/Secret 与 Action 策略仍在“连接器配置”维护。飞书和钉钉可以登记多个企业应用，但同一平台只有一个启用应用；员工开始授权前，AI Base 会把支持的启用应用 OAuth Client 配置同步到 OpenConnector。
+[集成管理页面](https://ai-console.localhost.pomerium.io:8443/integrations) 仅供管理员使用。企业微信进入独立的 [认证二级页](https://ai-console.localhost.pomerium.io:8443/integrations/wecom-authentication)，按组织维护 CorpID、App Secret、中继回调、启用状态和各自的应用首页；飞书与钉钉分别进入独立二级页。企微机器人的 Bot ID/Secret 与 Action 策略仍在“连接器配置”维护。
 
-企业微信认证保存在 PostgreSQL 的单例表 `wecom_authentication_configuration`；飞书和钉钉应用保存在 `integration_applications`。所有 App Secret 均使用 `AI_CONSOLE_SECRET_ENCRYPTION_KEY` 在服务端执行 AES-256-GCM 加密，读取接口和编辑表单不回显明文。升级时，旧 `integration_applications.wecom` 的启用凭据与 Console 配置文件中的企微运行参数会迁移到单例表，随后删除旧企微应用记录和配置文件副本。OpenConnector 当前只有飞书 Provider 提供用户级 OAuth；钉钉现有 Provider 不提供个人 OAuth，因此对应员工授权保持不可用。
+企业微信认证组织保存在 `wecom_authentication_organizations`，员工映射由 `wecom_identity_links.organization_id` 归属组织；旧单例配置与既有绑定会迁移为“默认组织”。共享企微 Bot 的 `shared_connector_resources.wecom_organization_id` 同步迁移并作为可见性边界。所有 App Secret 均使用 `AI_CONSOLE_SECRET_ENCRYPTION_KEY` 执行 AES-256-GCM 加密，读取接口和编辑表单不回显明文。
 
-普通员工登录 Console 后只进入 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account)。页面同时维护飞书等个人 OAuth 连接，以及唯一的平台账号与企微身份映射；企微映射可从页面发起、从工作台主页自动进入，也可在页面解绑。页面不展示明文 UserID。完成企微身份认证后，员工可在企微权限抽屉通过官方二维码创建个人机器人；管理员共享机器人仍由 MCP 按可见范围自动筛选。个人连接建立后：
+普通员工登录 Console 后只进入 [账号绑定页面](https://ai-console.localhost.pomerium.io:8443/account)。页面同时维护个人 OAuth 连接和多个企微组织身份；企微身份只能从对应工作台应用首页建立，并在企微抽屉逐组织解绑。页面不展示明文 UserID。完成任一企微身份认证后，员工可创建个人机器人；管理员共享机器人由 MCP 按组织和可见范围自动筛选。个人连接建立后：
 
 1. OpenConnector 在自己的加密 SQLite 数据中保存 OAuth Token；
 2. PostgreSQL 的 `employee_connector_bindings` 只保存员工 OIDC 主体与命名连接的映射、状态和安全摘要；
@@ -240,13 +240,13 @@ Agent 连接 `http://127.0.0.1:8080/mcp`，通过 OAuth 登录后即可使用 En
 - `GET/PUT /api/connector-access/shared-resources`、`DELETE /api/connector-access/shared-resources/:id`：管理具名 Connector 的受控共享资源、身份授权和 Action 白名单。
 - `GET/POST /api/integrations`、`PUT/DELETE /api/integrations/:id`：读取并管理飞书和钉钉应用凭据。
 - `POST /api/integrations/:id/activate`：将应用设为平台唯一启用配置，并同步支持的 OAuth Client。
-- `GET/PUT /api/integrations/wecom-authentication`：仅管理员读取或保存唯一的企业微信系统认证配置。
+- `GET/POST/PUT/DELETE /api/integrations/wecom-authentication`：仅管理员读取、新增、编辑或删除企业微信认证组织；存在引用时只能停用。
 - `GET /api/account/integrations`、`POST/DELETE /api/account/integrations/:applicationId/authorize`：读取、发起或解除当前员工个人应用绑定。
 - `POST /api/account/wecom-bots/authorize`、`GET /api/account/wecom-bots/authorize?request=...`：为已认证企微身份创建官方机器人扫码会话并轮询，成功后建立个人连接；Bot ID/Secret 不进入浏览器响应。
-- `GET /auth/wework`：不依赖既有 Pomerium Cookie，创建一次性企微身份识别事务并进入公网中继。
+- `GET /auth/wework?organization=<UUID>`：按组织创建一次性企微身份识别事务并进入公网中继；省略参数只兼容恰好一个已配置组织的部署。
 - `GET /auth/wework/complete`：验证中继加密结果、同浏览器 HttpOnly nonce、未过期事务和当前 CorpID；已有绑定时自动恢复用户，未绑定时转入平台登录。
-- `GET /auth/wework/link`：固定经过 Pomerium，在首次平台登录后消费已验证企微事务并建立唯一映射。
-- `DELETE /api/account/wecom-identity`：解除当前平台账号与企微身份映射；不会删除管理员维护的共享机器人连接。
+- `GET /auth/wework/link`：固定经过 Pomerium，在首次平台登录后消费已验证企微事务并建立该组织映射。
+- `DELETE /api/account/wecom-identity?id=<绑定 UUID>`：只解除当前平台账号的指定组织身份；不会删除其他组织身份或管理员共享机器人。
 - `GET /api/observability/summary?range=15m|1h|24h|7d`：仅管理员读取模型与 MCP 的固定 PromQL 摘要；未被 capability probe 证明的模型错误率和 TTFT 明确返回“不可用”。
 - `GET /api/observability/calls`：仅管理员读取最多 24 小时、扫描最多 100 条 Trace 的安全诊断样本；结果可截断，不提供稳定 cursor，也不是调用账本。
 - `GET /api/observability/traces/:traceId`：仅管理员读取服务端白名单处理后的 Trace 时间线，不透传任意 tag、event 或上游错误正文。

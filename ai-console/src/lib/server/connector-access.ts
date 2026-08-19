@@ -38,6 +38,8 @@ type SharedResourceRow = QueryResultRow & {
   display_name: string;
   security_domain: string;
   authorization_mode: SharedConnectorAuthorizationMode;
+  wecom_organization_id: string | null;
+  wecom_organization_name: string | null;
   action_ids: unknown;
   enabled: boolean;
   updated_at: Date | string;
@@ -104,6 +106,8 @@ function serializeResource(row: SharedResourceRow, grants: SharedConnectorGrant[
     displayName: row.display_name,
     securityDomain: row.security_domain,
     authorizationMode: row.authorization_mode,
+    wecomOrganizationId: row.wecom_organization_id,
+    wecomOrganizationName: row.wecom_organization_name,
     actionIds: stringArray(row.action_ids),
     enabled: row.enabled,
     grants,
@@ -114,10 +118,15 @@ function serializeResource(row: SharedResourceRow, grants: SharedConnectorGrant[
 async function readResources(): Promise<SharedConnectorResource[]> {
   const [resources, grants] = await Promise.all([
     getPool().query<SharedResourceRow>(`
-      SELECT id, service, connection_name, display_name, security_domain,
-             authorization_mode, action_ids, enabled, updated_at
-      FROM shared_connector_resources
-      ORDER BY service, connection_name
+      SELECT resource.id, resource.service, resource.connection_name, resource.display_name,
+             resource.security_domain, resource.authorization_mode,
+             resource.wecom_organization_id,
+             organization.organization_name AS wecom_organization_name,
+             resource.action_ids, resource.enabled, resource.updated_at
+      FROM shared_connector_resources AS resource
+      LEFT JOIN wecom_authentication_organizations AS organization
+        ON organization.id = resource.wecom_organization_id
+      ORDER BY resource.service, resource.connection_name
     `),
     getPool().query<SharedGrantRow>(`
       SELECT id, resource_id, principal_type, principal_issuer, principal_subject,
@@ -137,8 +146,28 @@ async function readResources(): Promise<SharedConnectorResource[]> {
 
 export async function getSharedConnectorAccess(): Promise<SharedConnectorAccessSnapshot> {
   await ensureSchema();
+  const organizations = await getPool().query<{
+    id: string;
+    organization_name: string;
+    corp_id: string;
+    app_secret_ciphertext: string | null;
+    relay_callback_url: string | null;
+    active: boolean;
+  }>(`
+    SELECT id, organization_name, corp_id, app_secret_ciphertext, relay_callback_url, active
+    FROM wecom_authentication_organizations
+    ORDER BY organization_name, id
+  `);
   return {
     resources: await readResources(),
+    wecomOrganizations: organizations.rows.map((organization) => ({
+      id: organization.id,
+      name: organization.organization_name,
+      configured: Boolean(
+        organization.active && organization.corp_id
+        && organization.app_secret_ciphertext && organization.relay_callback_url
+      ),
+    })),
     hardDeniedActionIds: [...hardDeniedConnectorActionIds],
     updatedAt: new Date().toISOString(),
   };
@@ -298,6 +327,16 @@ export async function saveSharedConnectorResource(
   if (service !== "wecom_bot" && authorizationMode !== "manual") {
     throw new IntegrationStoreError("当前 Connector 不支持企微可见范围筛选", 409);
   }
+  let wecomOrganizationId: string | null = null;
+  if (authorizationMode === "wecom_visibility") {
+    wecomOrganizationId = requiredText(input.wecomOrganizationId, "企业微信组织", 64);
+    const organization = await getPool().query(`
+      SELECT 1 FROM wecom_authentication_organizations
+      WHERE id = $1 AND active AND corp_id <> ''
+        AND app_secret_ciphertext IS NOT NULL AND relay_callback_url IS NOT NULL
+    `, [wecomOrganizationId]);
+    if (!organization.rowCount) throw new IntegrationStoreError("企业微信认证组织不存在、未完成配置或已停用", 409);
+  }
   const actionIds = authorizationMode === "wecom_visibility"
     ? await validateSharedConnectorActionIds(service, input.actionIds)
     : [];
@@ -312,12 +351,13 @@ export async function saveSharedConnectorResource(
     const result = await client.query<{ id: string }>(`
       INSERT INTO shared_connector_resources (
         id, service, connection_name, display_name, security_domain,
-        authorization_mode, action_ids, enabled, created_by, updated_by
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7::JSONB, $8, $9, $9)
+        authorization_mode, wecom_organization_id, action_ids, enabled, created_by, updated_by
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::JSONB, $9, $10, $10)
       ON CONFLICT (service, connection_name) DO UPDATE SET
         display_name = EXCLUDED.display_name,
         security_domain = EXCLUDED.security_domain,
         authorization_mode = EXCLUDED.authorization_mode,
+        wecom_organization_id = EXCLUDED.wecom_organization_id,
         action_ids = EXCLUDED.action_ids,
         enabled = EXCLUDED.enabled,
         updated_by = EXCLUDED.updated_by,
@@ -330,6 +370,7 @@ export async function saveSharedConnectorResource(
       displayName,
       securityDomain,
       authorizationMode,
+      wecomOrganizationId,
       JSON.stringify(actionIds),
       input.enabled !== false,
       actor,

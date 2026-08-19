@@ -6,18 +6,22 @@ import {
 } from "./wecom-authentication";
 
 describe("WeCom authentication configuration", () => {
-  it("normalizes the single administrator-managed relay configuration", () => {
+  it("normalizes an administrator-managed organization configuration", () => {
     const validation = validateWeComAuthenticationSettings({
+      organizationName: " 示例组织 ",
       corpId: " ww-example-corp ",
       appSecret: "secret-value",
       relayCallbackUrl: "https://tn1.cofly-ai.cn/callbacks/wecom",
+      active: true,
     });
     expect(validation).toEqual({
       ok: true,
       value: {
+        organizationName: "示例组织",
         corpId: "ww-example-corp",
         appSecret: "secret-value",
         relayCallbackUrl: "https://tn1.cofly-ai.cn/callbacks/wecom",
+        active: true,
       },
     });
     if (!validation.ok) return;
@@ -26,24 +30,30 @@ describe("WeCom authentication configuration", () => {
 
   it("allows an empty secret only for preserving an existing encrypted value", () => {
     const validation = validateWeComAuthenticationSettings({
+      organizationName: "示例组织",
       corpId: "ww-example-corp",
       appSecret: "",
       relayCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom",
+      active: true,
     });
     expect(validation).toEqual({
       ok: true,
       value: {
+        organizationName: "示例组织",
         corpId: "ww-example-corp",
         relayCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom",
+        active: true,
       },
     });
   });
 
   it("rejects unsafe callback URLs, invalid domains, and response-only fields", () => {
     const validation = validateWeComAuthenticationSettings({
+      organizationName: "示例组织",
       corpId: "",
       relayCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom?target=attacker",
       secretConfigured: true,
+      active: true,
     });
     expect(validation.ok).toBe(false);
     if (validation.ok) return;

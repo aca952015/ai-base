@@ -10,11 +10,8 @@ import { getWeComAuthenticationConfiguration } from "@/lib/server/wecom-authenti
 export const dynamic = "force-dynamic";
 
 const emptySnapshot: WeComAuthenticationSnapshot = {
-  corpId: "",
-  relayCallbackUrl: "",
-  configured: false,
-  secretConfigured: false,
-  effectiveCallbackUrl: "",
+  organizations: [],
+  configuredCount: 0,
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -33,7 +30,7 @@ export default async function WeComAuthenticationPage() {
     <div className="page-stack">
       <PageHeader
         title="企业微信认证"
-        description="维护 AI Base 唯一的企业微信系统认证配置。"
+        description="按组织维护企业微信系统认证；一个平台用户可绑定多个组织身份。"
         actions={(
           <Link className="button button--secondary" href="/integrations">
             <ArrowLeft size={16} /> 返回集成管理

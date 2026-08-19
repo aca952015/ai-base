@@ -298,12 +298,12 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
     };
   }, [closeWeComBotAuthorization, wecomBotDialogOpen]);
 
-  async function disconnectWeComIdentity() {
-    if (!window.confirm("确认解绑当前平台账号与企业微信身份？解绑后，企微共享机器人将不再出现在该账号的 MCP 清单中。")) return;
+  async function disconnectWeComIdentity(linkId: string, organizationName: string) {
+    if (!window.confirm(`确认解绑“${organizationName}”中的企业微信身份？`)) return;
     setWecomBusy(true);
     setMessage({ tone: "info", text: "正在解绑企业微信身份…" });
     try {
-      await fetchJson<unknown>("/api/account/wecom-identity", { method: "DELETE" });
+      await fetchJson<unknown>(`/api/account/wecom-identity?id=${encodeURIComponent(linkId)}`, { method: "DELETE" });
       await reload();
       setMessage({ tone: "success", text: "企业微信身份已解绑。" });
     } catch (error) {
@@ -610,12 +610,11 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
       <div className="account-integration-grid">
         <WeComIdentityCard
           linked={Boolean(snapshot?.wecomIdentity.linked)}
+          identityCount={snapshot?.wecomIdentity.identities.length || 0}
           availableConnectionCount={(snapshot?.availableConnections || []).filter((connection) => (
             connection.service === "wecom_bot"
           )).length}
-          busy={wecomBusy}
           onOpen={() => setSelectedIntegrationId("wecom")}
-          onDisconnect={disconnectWeComIdentity}
         />
         {(snapshot?.applications || []).map((application) => (
           <AccountIntegrationCard
@@ -663,6 +662,23 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
                   <div><dt>可用连接</dt><dd>{selectedConnections.length} 个</dd></div>
                 </dl>
               </section>
+
+              {selectedIntegrationId === "wecom" && snapshot?.wecomIdentity.identities.length ? (
+                <section className="resource-detail-section">
+                  <div className="resource-detail-section__header"><strong>已绑定身份</strong><span>{snapshot.wecomIdentity.identities.length} 个组织</span></div>
+                  <div className="account-wecom-identity-list">
+                    {snapshot.wecomIdentity.identities.map((identityLink) => (
+                      <div className="account-wecom-identity-row" key={identityLink.id}>
+                        <span className="account-integration-card__icon integration-icon--wecom"><Building2 size={17} /></span>
+                        <div><strong>{identityLink.organizationName}</strong><small>绑定于 {formatConnectedAt(identityLink.linkedAt)}</small></div>
+                        <button className="button button--secondary" type="button" disabled={wecomBusy} onClick={() => void disconnectWeComIdentity(identityLink.id, identityLink.organizationName)}>
+                          {wecomBusy ? <LoaderCircle className="is-spinning" size={14} /> : <Unlink size={14} />}解绑
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
 
               {selectedConnections.length ? selectedConnections.map((connection, index) => {
                 const presentation = connectionDetailPresentation(
@@ -946,16 +962,14 @@ export function connectionsForIntegration(snapshot: EmployeeIntegrationsSnapshot
 
 export function WeComIdentityCard({
   linked,
+  identityCount,
   availableConnectionCount,
-  busy,
   onOpen,
-  onDisconnect,
 }: {
   linked: boolean;
+  identityCount: number;
   availableConnectionCount: number;
-  busy: boolean;
   onOpen: () => void;
-  onDisconnect: () => void;
 }) {
   return (
     <article className={`account-integration-card${linked ? " is-connected" : ""}`} aria-label="企业微信身份">
@@ -977,7 +991,7 @@ export function WeComIdentityCard({
           {linked ? (
             <>
               <strong>企业身份已关联</strong>
-              <small>{availableConnectionCount > 0 ? `${availableConnectionCount} 个可用机器人连接` : "当前没有可用的机器人连接"}</small>
+              <small>{identityCount} 个组织身份 · {availableConnectionCount > 0 ? `${availableConnectionCount} 个可用机器人连接` : "暂无可用机器人连接"}</small>
             </>
           ) : (
             <>
@@ -987,12 +1001,7 @@ export function WeComIdentityCard({
           )}
         </div>
 
-        {linked ? (
-          <button className="button button--secondary account-unbind-button" type="button" onClick={onDisconnect} disabled={busy}>
-            {busy ? <LoaderCircle className="is-spinning" size={15} /> : <Unlink size={15} />}
-            {busy ? "解绑中" : "解绑"}
-          </button>
-        ) : (
+        {!linked ? (
           <button
             className="button button--secondary"
             type="button"
@@ -1002,7 +1011,7 @@ export function WeComIdentityCard({
             <Bot size={15} />
             绑定身份
           </button>
-        )}
+        ) : null}
       </footer>
     </article>
   );

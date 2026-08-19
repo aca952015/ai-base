@@ -168,6 +168,14 @@ function resultPayload(value: unknown): RelayResultPayload {
   return record as RelayResultPayload;
 }
 
+export function readWeComRelayResultRequestToken(ticket: string) {
+  const payload = resultPayload(openWeComRelayPayload(ticket));
+  if (payload.v !== TICKET_VERSION || !SECRET_PATTERN.test(payload.request_token)) {
+    throw new WeComRelayError("企业微信中继结果格式无效", "invalid_relay_result");
+  }
+  return payload.request_token;
+}
+
 export function verifyWeComRelayResult(
   ticket: string,
   relayCallbackUrl: string,

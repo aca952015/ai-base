@@ -1,3 +1,4 @@
+import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 import {
@@ -18,10 +19,11 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const organizationId = request.nextUrl.searchParams.get("organization") || undefined;
   try {
-    const credential = await getWeComRelayCredential();
-    const linkRequest = await createWeComIdentityLoginRequest();
+    const credential = await getWeComRelayCredential(organizationId);
+    const linkRequest = await createWeComIdentityLoginRequest(credential.organizationId);
     const authorizationUrl = await provisionWeComRelayAuthorization({
       requestToken: linkRequest.requestToken,
       expiresAt: linkRequest.expiresAt,
@@ -42,6 +44,6 @@ export async function GET() {
     const known = error instanceof IntegrationStoreError
       || error instanceof WeComRelayError;
     if (!known) console.error("WeCom identity link request failed", error);
-    return NextResponse.redirect(wecomIdentityStatusUrl("failed"), 303);
+    return NextResponse.redirect(wecomIdentityStatusUrl("failed", organizationId), 303);
   }
 }

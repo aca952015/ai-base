@@ -66,6 +66,7 @@ describe("Console identity from a linked WeCom session", () => {
     expect(mocks.getLinkedIdentity).toHaveBeenCalledWith(
       "https://ai.example.com/oauth",
       "usr_employee",
+      undefined,
     );
   });
 

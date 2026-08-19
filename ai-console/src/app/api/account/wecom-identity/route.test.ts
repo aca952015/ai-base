@@ -27,7 +27,7 @@ vi.mock("@/lib/server/wecom-console-session", () => ({
 describe("WeCom identity unlink", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("clears the automatic Console session after revoking the binding", async () => {
+  it("revokes only the requested organization identity", async () => {
     const identity = {
       principalIssuer: "https://ai.example.com/oauth",
       principalSubject: "usr_employee",
@@ -36,11 +36,11 @@ describe("WeCom identity unlink", () => {
     mocks.disconnect.mockResolvedValue({ disconnected: true });
     const { DELETE } = await import("./route");
 
-    const response = await DELETE();
+    const linkId = "11111111-1111-4111-8111-111111111111";
+    const response = await DELETE(new Request(`https://console.example/api/account/wecom-identity?id=${linkId}`));
 
-    expect(mocks.disconnect).toHaveBeenCalledWith(identity);
+    expect(mocks.disconnect).toHaveBeenCalledWith(identity, linkId);
     expect(response.status).toBe(200);
-    expect(response.headers.get("set-cookie")).toContain("ai_base_wecom_session=");
-    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+    expect(response.headers.get("set-cookie")).toBeNull();
   });
 });

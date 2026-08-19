@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   getCredential: vi.fn(),
   verifyRelayResult: vi.fn(),
+  readRequestToken: vi.fn(),
   resolveLogin: vi.fn(),
   issueSession: vi.fn(),
 }));
@@ -21,7 +22,7 @@ vi.mock("@/lib/server/integrations", () => ({
   resolveWeComIdentityLoginRequest: mocks.resolveLogin,
 }));
 vi.mock("@/lib/server/wecom-authentication", () => ({
-  getWeComRelayCredential: mocks.getCredential,
+  getWeComRelayCredentialForLoginRequest: mocks.getCredential,
 }));
 vi.mock("@/lib/server/wecom-identity-link-routing", async () => (
   import("../../../../lib/server/wecom-identity-link-routing")
@@ -29,6 +30,7 @@ vi.mock("@/lib/server/wecom-identity-link-routing", async () => (
 vi.mock("@/lib/server/wecom-relay", () => ({
   WeComRelayError: class WeComRelayError extends Error { code = "invalid_relay_result"; },
   verifyWeComRelayResult: mocks.verifyRelayResult,
+  readWeComRelayResultRequestToken: mocks.readRequestToken,
 }));
 vi.mock("@/lib/server/wecom-console-session", () => ({
   WECOM_CONSOLE_SESSION_COOKIE: "ai_base_wecom_session",
@@ -53,6 +55,7 @@ describe("WeCom relay completion", () => {
     vi.clearAllMocks();
     process.env.AI_CONSOLE_PUBLIC_URL = "https://ai-console.example.com";
     mocks.getCredential.mockResolvedValue({ relayCallbackUrl: "https://relay.example.com/callbacks/wecom" });
+    mocks.readRequestToken.mockReturnValue("r".repeat(43));
     mocks.verifyRelayResult.mockReturnValue({
       requestToken: "r".repeat(43),
       corpId: "ww-example",
@@ -68,6 +71,8 @@ describe("WeCom relay completion", () => {
       principalSubject: "usr_employee",
       email: "employee@example.com",
       name: "张三",
+      linkId: "11111111-1111-4111-8111-111111111111",
+      organizationId: "22222222-2222-4222-8222-222222222222",
     };
     mocks.resolveLogin.mockResolvedValue({ status: "linked", identity });
     const { GET } = await import("./route");
@@ -78,7 +83,7 @@ describe("WeCom relay completion", () => {
     expect(response.headers.get("location")).toBe(
       "https://ai-console.example.com/account?wecom_link=restored",
     );
-    expect(mocks.issueSession).toHaveBeenCalledWith(identity);
+    expect(mocks.issueSession).toHaveBeenCalledWith(identity, identity.linkId);
     const setCookie = response.headers.get("set-cookie") || "";
     expect(setCookie).toContain("ai_base_wecom_session=signed-console-session");
     expect(setCookie).toContain("ai_base_wecom_identity_link=");
