@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   classifyConnectorConnections,
   connectorActionIsAuthorized,
+  connectorConnectionMatchesView,
+  nextConnectorActionSelection,
   type ConnectorActionDefinition,
   type ConnectorConnection,
 } from "./connectors";
@@ -55,6 +57,20 @@ describe("connector action authorization", () => {
         action(["scope:not-reported-by-credential-connections"]),
       )).toBe(true);
     }
+  });
+
+  it("selects and clears every allowed action without including hard-denied actions", () => {
+    const actionIds = ["wecom_bot.get_userlist", "wecom_bot.create_document", "wecom_bot.call_tool"];
+    const deniedActionIds = ["wecom_bot.call_tool"];
+
+    expect(nextConnectorActionSelection(actionIds, deniedActionIds, [])).toEqual([
+      "wecom_bot.get_userlist",
+      "wecom_bot.create_document",
+    ]);
+    expect(nextConnectorActionSelection(actionIds, deniedActionIds, [
+      "wecom_bot.get_userlist",
+      "wecom_bot.create_document",
+    ])).toEqual([]);
   });
 });
 
@@ -122,5 +138,23 @@ describe("connector access classification", () => {
       grantCount: 2,
     });
     expect(classified[3].localAccount).toBeUndefined();
+  });
+
+  it("keeps employee connections in their dedicated management view", () => {
+    const employeeConnection = { ...oauthConnection, accessMode: "account_bound" as const };
+    const managedConnection = { ...oauthConnection, accessMode: "global" as const };
+
+    expect(connectorConnectionMatchesView(employeeConnection, "managed")).toBe(false);
+    expect(connectorConnectionMatchesView(employeeConnection, "user-connections")).toBe(true);
+    expect(connectorConnectionMatchesView(managedConnection, "managed")).toBe(true);
+    expect(connectorConnectionMatchesView(managedConnection, "user-connections")).toBe(false);
+  });
+
+  it("keeps no-auth connections in their dedicated management view", () => {
+    const publicConnection = { ...oauthConnection, authType: "no_auth" as const, accessMode: "no_auth" as const };
+
+    expect(connectorConnectionMatchesView(publicConnection, "managed")).toBe(false);
+    expect(connectorConnectionMatchesView(publicConnection, "no-auth")).toBe(true);
+    expect(connectorConnectionMatchesView(oauthConnection, "no-auth")).toBe(false);
   });
 });

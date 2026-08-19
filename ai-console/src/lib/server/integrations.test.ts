@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   EmployeeConnectorBinding,
   IntegrationApplication,
 } from "../control-plane/integrations";
 import {
+  buildEmployeeAvailableConnections,
   buildEmployeeIntegrationsSnapshot,
   buildEnterpriseIntegrationsSnapshot,
   decryptIntegrationSecret,
@@ -12,8 +13,14 @@ import {
   encryptIntegrationSecret,
   hashWeComCorpId,
   hashWeComUserId,
+  personalWeComBotDisplayName,
+  parseWeComBotPersonalActionIds,
+  parseWeComVisibleUsers,
   parseWeComVisibleUserIdHashes,
+  readWeComBotVisibleUsersWithRetry,
+  readWeComBotVisibleUserIdsWithRetry,
 } from "./integrations";
+import { OpenConnectorError } from "./open-connector";
 
 const originalEncryptionKey = process.env.AI_CONSOLE_SECRET_ENCRYPTION_KEY;
 
@@ -186,7 +193,83 @@ describe("enterprise integration store", () => {
     expect(snapshot.applications[1].active).toBe(false);
     expect(snapshot.identity.email).toBe("employee01@bluetron.cn");
     expect(snapshot.wecomIdentity).toEqual({ linked: false });
+    expect(snapshot.availableConnections).toEqual([]);
     expect(snapshot.automaticWeComBotCount).toBe(1);
+  });
+
+  it("builds the employee connection list from effective personal and shared Action grants", () => {
+    const connections = buildEmployeeAvailableConnections([
+      {
+        service: "feishu",
+        connectionName: "usr_employee",
+        displayName: "employee01",
+        accessMode: "account_bound",
+        allowedActionIds: ["feishu.get_document"],
+      },
+      {
+        service: "wecom_bot",
+        connectionName: "sales-bot",
+        displayName: "销售机器人",
+        accessMode: "controlled_shared",
+        allowedActionIds: ["wecom_bot.get_userlist"],
+        policyIds: ["manual-grant"],
+      },
+      {
+        service: "wecom_bot",
+        connectionName: "sales-bot",
+        displayName: "销售机器人",
+        accessMode: "controlled_shared",
+        allowedActionIds: ["wecom_bot.get_calendar"],
+        policyIds: ["wecom-visibility:resource-id"],
+      },
+      {
+        service: "wecom_bot",
+        connectionName: "no-actions",
+        displayName: "无权限机器人",
+        accessMode: "controlled_shared",
+        allowedActionIds: [],
+        policyIds: ["manual-empty"],
+      },
+    ], [
+      {
+        service: "feishu",
+        displayName: "飞书",
+        actions: [{
+          id: "feishu.get_document",
+          name: "get_document",
+          description: "读取文档",
+          requiredScopes: [],
+          providerPermissions: [],
+        }],
+      },
+      {
+        service: "wecom_bot",
+        displayName: "企业微信机器人",
+        actions: [{
+          id: "wecom_bot.get_userlist",
+          name: "get_userlist",
+          description: "查询可见通讯录",
+          requiredScopes: [],
+          providerPermissions: [],
+        }],
+      },
+    ]);
+
+    expect(connections).toHaveLength(2);
+    expect(connections.find((connection) => connection.service === "feishu")).toMatchObject({
+      accessMode: "account_bound",
+      authorizationSources: ["personal"],
+      serviceDisplayName: "飞书",
+      actions: [{ id: "feishu.get_document", name: "get_document", description: "读取文档" }],
+    });
+    expect(connections.find((connection) => connection.service === "wecom_bot")).toMatchObject({
+      accessMode: "controlled_shared",
+      authorizationSources: ["manual", "wecom_visibility"],
+      actions: [
+        { id: "wecom_bot.get_calendar", name: "get_calendar" },
+        { id: "wecom_bot.get_userlist", name: "get_userlist", description: "查询可见通讯录" },
+      ],
+    });
   });
 
   it("derives a trusted WeCom link only from the authenticated relay result", () => {
@@ -233,5 +316,100 @@ describe("enterprise integration store", () => {
     expect(hashes.has(hashWeComUserId("zhangsan"))).toBe(false);
     expect(() => parseWeComVisibleUserIdHashes({ errcode: 40013, userlist: [] }))
       .toThrow("企微机器人可见范围查询失败");
+  });
+
+  it("retains only the matched WeCom display fields without exposing raw user IDs", () => {
+    expect(parseWeComVisibleUsers({
+      errcode: 0,
+      userlist: [
+        { userid: "ZhangSan", name: " 张三 ", alias: "zhangsan" },
+        { userid: "LiSi", name: "" },
+      ],
+    })).toEqual([
+      { userIdHash: hashWeComUserId("ZhangSan"), name: "张三" },
+      { userIdHash: hashWeComUserId("LiSi") },
+    ]);
+  });
+
+  it("builds a readable personal WeCom bot name from the binding employee", () => {
+    expect(personalWeComBotDisplayName({
+      binderName: "陈英杰",
+      connectionName: "usr_2584d27f2876ac74ad508050938826a6fe0152ef",
+    })).toBe("陈英杰绑定的企微机器人 · 52ef");
+    expect(personalWeComBotDisplayName({
+      binderName: "陈英杰",
+      connectionName: "usr_2584d27f2876ac74ad508050938826a6fe0152ef",
+    })).not.toContain("WeCom Smart Bot");
+  });
+
+  it("retries the first WeCom visibility read while QR authorization propagates", async () => {
+    const run = vi.fn()
+      .mockRejectedValueOnce(new OpenConnectorError("authorization pending", 403))
+      .mockRejectedValueOnce(new OpenConnectorError("authorization pending", 409))
+      .mockResolvedValue({ errcode: 0, userlist: [{ userid: "ZhangSan" }] });
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(readWeComBotVisibleUserIdsWithRetry(run, [0, 100, 200], wait)).resolves.toEqual(
+      new Set([hashWeComUserId("ZhangSan")]),
+    );
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(wait.mock.calls).toEqual([[100], [200]]);
+  });
+
+  it("returns matched WeCom names after visibility propagation", async () => {
+    const run = vi.fn()
+      .mockRejectedValueOnce(new OpenConnectorError("authorization pending", 403))
+      .mockResolvedValue({ errcode: 0, userlist: [{ userid: "ZhangSan", name: "张三" }] });
+
+    await expect(readWeComBotVisibleUsersWithRetry(run, [0, 1], vi.fn().mockResolvedValue(undefined)))
+      .resolves.toEqual([{ userIdHash: hashWeComUserId("ZhangSan"), name: "张三" }]);
+  });
+
+  it("does not retry a non-transient WeCom visibility failure", async () => {
+    const run = vi.fn().mockRejectedValue(new OpenConnectorError("invalid request", 400));
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await expect(readWeComBotVisibleUserIdsWithRetry(run, [0, 100], wait)).rejects.toThrow("invalid request");
+    expect(run).toHaveBeenCalledOnce();
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("grants only discovered read actions to a QR-created personal WeCom bot", () => {
+    const actions = [
+      "list_tools",
+      "get_userlist",
+      "get_message",
+      "download_message_media",
+      "send_message",
+      "delete_todo",
+      "call_tool",
+    ].map((name) => ({
+      id: `wecom_bot.${name}`,
+      name,
+      requiredScopes: [],
+      providerPermissions: [],
+    }));
+
+    expect(parseWeComBotPersonalActionIds({
+      categories: [{
+        category: "contact",
+        tools: [{ name: "get_userlist" }],
+      }, {
+        category: "msg",
+        tools: [
+          { name: "get_message" },
+          { name: "get_msg_media" },
+          { name: "send_message" },
+        ],
+      }, {
+        category: "todo",
+        tools: [{ name: "delete_todo" }],
+      }],
+    }, actions)).toEqual([
+      "wecom_bot.download_message_media",
+      "wecom_bot.get_message",
+      "wecom_bot.get_userlist",
+      "wecom_bot.list_tools",
+    ]);
   });
 });

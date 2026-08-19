@@ -18,7 +18,7 @@ func TestExternalToolAliasRequestOnlyRewritesToolSelector(t *testing.T) {
 	}
 	text := string(rewritten)
 	for _, expected := range []string{
-		`"name":"mcp-open-connector__execute"`,
+		`"name":"mcp-open-connector__execute_action"`,
 		`"name":"mcp-rag__answer"`,
 		`"arguments":{"name":"kb__unchanged"}`,
 	} {
@@ -28,8 +28,26 @@ func TestExternalToolAliasRequestOnlyRewritesToolSelector(t *testing.T) {
 	}
 }
 
+func TestConnectorToolAliasesMatchFormalUpstreamNames(t *testing.T) {
+	tests := map[string]string{
+		"apps":        "list_apps",
+		"connections": "list_connections",
+		"search":      "search_actions",
+		"guide":       "get_action_guide",
+		"execute":     "execute_action",
+	}
+	for public, upstream := range tests {
+		if actual := upstreamConnectorToolName(public); actual != upstream {
+			t.Errorf("upstreamConnectorToolName(%q) = %q, want %q", public, actual, upstream)
+		}
+		if actual := publicConnectorToolName(upstream); actual != public {
+			t.Errorf("publicConnectorToolName(%q) = %q, want %q", upstream, actual, public)
+		}
+	}
+}
+
 func TestExternalToolAliasResponseRewritesJSONAndSSE(t *testing.T) {
-	internal := `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"mcp-rag__answer"},{"name":"mcp-open-connector__execute"},{"name":"mcp-custom__read"}]}}`
+	internal := `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"mcp-rag__answer"},{"name":"mcp-open-connector__execute_action","title":"Execute Action","description":"Execute one local provider action by id with a JSON input object."},{"name":"mcp-custom__read"}]}}`
 
 	t.Run("json", func(t *testing.T) {
 		response := aliasTestResponse("application/json", internal)
@@ -57,6 +75,27 @@ func TestExternalToolAliasResponseRewritesJSONAndSSE(t *testing.T) {
 			t.Fatalf("SSE framing changed unexpectedly: %s", body)
 		}
 	})
+}
+
+func TestConnectorDiscoveryDescriptionsRequireIdentityScopedAppsFirst(t *testing.T) {
+	internal := `{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"mcp-open-connector__list_apps"},{"name":"mcp-open-connector__list_connections"},{"name":"mcp-open-connector__search_actions"}]}}`
+	rewritten, changed := rewriteExternalToolAliasResponseJSON([]byte(internal))
+	if !changed {
+		t.Fatal("expected connector discovery tools to be rewritten")
+	}
+	body := string(rewritten)
+	for _, expected := range []string{
+		`"name":"connector__apps"`,
+		`authorized for the current signed-in user`,
+		`"name":"connector__connections"`,
+		`provider service id such as wecom_bot`,
+		`"name":"connector__search"`,
+		`First call connector__apps or connector__connections`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("missing identity-aware discovery contract %q: %s", expected, body)
+		}
+	}
 }
 
 func TestExternalToolAliasResponseIsLimitedToToolsListRequests(t *testing.T) {
@@ -90,12 +129,18 @@ func aliasTestResponse(contentType, body string) *http.Response {
 
 func assertExternalToolNames(t *testing.T, body string) {
 	t.Helper()
-	for _, expected := range []string{"kb__answer", "connector__execute", "mcp-custom__read"} {
+	for _, expected := range []string{
+		"kb__answer",
+		"connector__execute",
+		"mcp-custom__read",
+		`"title":"Execute"`,
+		`"description":"Run one authorized Action with JSON input. Call guide first if the input shape is unclear."`,
+	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("missing tool name %q: %s", expected, body)
 		}
 	}
-	for _, internal := range []string{"mcp-rag__answer", "mcp-open-connector__execute"} {
+	for _, internal := range []string{"mcp-rag__answer", "mcp-open-connector__execute_action"} {
 		if strings.Contains(body, internal) {
 			t.Fatalf("internal tool name %q leaked: %s", internal, body)
 		}

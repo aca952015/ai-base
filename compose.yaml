@@ -310,7 +310,7 @@ services:
       start_period: 5s
 
   open-connector:
-    image: ai-base/open-connector:main-27b111b
+    image: ai-base/open-connector:v1.3.5
     build:
       context: ./vendor/open-connector
       dockerfile: docker/Dockerfile

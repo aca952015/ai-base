@@ -1,5 +1,6 @@
 export type ConnectorAuthType = "no_auth" | "api_key" | "custom_credential" | "oauth2";
 export type ConnectorAccessMode = "no_auth" | "account_bound" | "controlled_shared" | "global";
+export type ConnectorManagerView = "all" | "managed" | "user-connections" | "no-auth";
 
 export type ConnectorCredentialField = {
   key: string;
@@ -147,8 +148,30 @@ export function connectorActionIsAuthorized(
   return action.providerPermissions.every((permission) => grantedScopes.has(permission));
 }
 
+export function nextConnectorActionSelection(
+  actionIds: string[],
+  hardDeniedActionIds: string[],
+  selectedActionIds: string[],
+) {
+  const hardDenied = new Set(hardDeniedActionIds);
+  const selectable = actionIds.filter((actionId) => !hardDenied.has(actionId));
+  const selected = new Set(selectedActionIds);
+  const allSelected = selectable.length > 0 && selectable.every((actionId) => selected.has(actionId));
+  return allSelected ? [] : selectable;
+}
+
 export function connectorConnectionKey(service: string, connectionName: string) {
   return `${service}\0${connectionName}`;
+}
+
+export function connectorConnectionMatchesView(
+  connection: ConnectorConnection,
+  view: ConnectorManagerView,
+) {
+  if (view === "managed") return connection.accessMode === "controlled_shared" || connection.accessMode === "global";
+  if (view === "user-connections") return connection.accessMode === "account_bound";
+  if (view === "no-auth") return connection.accessMode === "no_auth";
+  return true;
 }
 
 export function classifyConnectorConnections(

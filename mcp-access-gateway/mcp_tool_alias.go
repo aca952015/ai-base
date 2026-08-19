@@ -15,6 +15,40 @@ const maxMCPToolListResponseBody = 2 << 20
 
 type externalToolListAliasContextKey struct{}
 
+type connectorToolAlias struct {
+	upstream    string
+	title       string
+	description string
+}
+
+var connectorToolAliases = map[string]connectorToolAlias{
+	"apps": {
+		upstream:    "list_apps",
+		title:       "Apps",
+		description: "List Connector apps authorized for the current signed-in user. Use this first to discover personal, shared, and public apps, including wecom_bot.",
+	},
+	"connections": {
+		upstream:    "list_connections",
+		title:       "Connections",
+		description: "List connections authorized for the current signed-in user, optionally filtered by provider service id such as wecom_bot. Use this to select a personal or shared connection.",
+	},
+	"search": {
+		upstream:    "search_actions",
+		title:       "Search",
+		description: "Find Actions by capability or provider service id. First call connector__apps or connector__connections, then filter search by an authorized service.",
+	},
+	"guide": {
+		upstream:    "get_action_guide",
+		title:       "Guide",
+		description: "Get parameters and examples for one Action.",
+	},
+	"execute": {
+		upstream:    "execute_action",
+		title:       "Execute",
+		description: "Run one authorized Action with JSON input. Call guide first if the input shape is unclear.",
+	},
+}
+
 // rewriteExternalToolAliasRequest translates only the public tool selector.
 // Tool arguments and all other JSON values remain untouched.
 func rewriteExternalToolAliasRequest(body []byte) ([]byte, bool) {
@@ -79,7 +113,8 @@ func externalToInternalToolName(name string) string {
 	case strings.HasPrefix(name, "kb__"):
 		return "mcp-rag__" + strings.TrimPrefix(name, "kb__")
 	case strings.HasPrefix(name, "connector__"):
-		return "mcp-open-connector__" + strings.TrimPrefix(name, "connector__")
+		tool := strings.TrimPrefix(name, "connector__")
+		return "mcp-open-connector__" + upstreamConnectorToolName(tool)
 	default:
 		return name
 	}
@@ -90,10 +125,27 @@ func internalToExternalToolName(name string) string {
 	case strings.HasPrefix(name, "mcp-rag__"):
 		return "kb__" + strings.TrimPrefix(name, "mcp-rag__")
 	case strings.HasPrefix(name, "mcp-open-connector__"):
-		return "connector__" + strings.TrimPrefix(name, "mcp-open-connector__")
+		tool := strings.TrimPrefix(name, "mcp-open-connector__")
+		return "connector__" + publicConnectorToolName(tool)
 	default:
 		return name
 	}
+}
+
+func upstreamConnectorToolName(name string) string {
+	if alias, ok := connectorToolAliases[name]; ok {
+		return alias.upstream
+	}
+	return name
+}
+
+func publicConnectorToolName(name string) string {
+	for public, alias := range connectorToolAliases {
+		if alias.upstream == name {
+			return public
+		}
+	}
+	return name
 }
 
 func rewriteExternalToolAliasResponse(response *http.Response) error {
@@ -178,6 +230,14 @@ func rewriteToolListPayload(payload any) bool {
 			if rewritten != name {
 				tool["name"] = rewritten
 				changed = true
+			}
+			if strings.HasPrefix(rewritten, "connector__") {
+				publicName := strings.TrimPrefix(rewritten, "connector__")
+				if alias, ok := connectorToolAliases[publicName]; ok {
+					tool["title"] = alias.title
+					tool["description"] = alias.description
+					changed = true
+				}
 			}
 		}
 		return changed

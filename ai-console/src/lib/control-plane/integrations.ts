@@ -132,7 +132,7 @@ export type EmployeeConnectorBindingStatus = "pending" | "connected" | "error" |
 
 export type EmployeeConnectorBinding = {
   id: string;
-  applicationId: string;
+  applicationId?: string;
   platform: EnterpriseIntegrationPlatform;
   service: string;
   connectionName: string;
@@ -153,6 +153,23 @@ export type EmployeeIntegrationApplication = Pick<
   binding?: EmployeeConnectorBinding;
 };
 
+export type EmployeeAvailableConnectionAction = {
+  id: string;
+  name: string;
+  description?: string;
+};
+
+export type EmployeeAvailableConnection = {
+  id: string;
+  service: string;
+  serviceDisplayName: string;
+  connectionName: string;
+  displayName: string;
+  accessMode: "account_bound" | "controlled_shared";
+  authorizationSources: Array<"personal" | "manual" | "wecom_visibility">;
+  actions: EmployeeAvailableConnectionAction[];
+};
+
 export type EmployeeIntegrationsSnapshot = {
   identity: {
     name: string;
@@ -163,6 +180,7 @@ export type EmployeeIntegrationsSnapshot = {
     linkedAt?: string;
   };
   applications: EmployeeIntegrationApplication[];
+  availableConnections: EmployeeAvailableConnection[];
   automaticWeComBotCount: number;
   updatedAt: string;
 };

@@ -6,6 +6,7 @@ import type {
   EnterpriseIntegrationGroup,
   EnterpriseIntegrationPlatform,
   EnterpriseIntegrationsSnapshot,
+  EmployeeAvailableConnection,
   EmployeeConnectorBinding,
   EmployeeConnectorBindingStatus,
   EmployeeIntegrationApplication,
@@ -16,6 +17,7 @@ import type {
 import {
   classifyConnectorConnections,
   connectorConnectionKey,
+  type ConnectorProviderDetail,
   type ConnectorConnectionsSnapshot,
 } from "../control-plane/connectors";
 import type { ConsoleIdentity } from "./console-identity";
@@ -28,11 +30,17 @@ import {
   deleteConnectorConnection,
   getConnectorProvider,
   listConnectorConnections,
+  OpenConnectorError,
   runConnectorAction,
   saveConnectorConnection,
   saveConnectorOAuthConfig,
   startConnectorOAuthAuthorization,
 } from "./open-connector";
+import {
+  bootstrapWeComBotQrCredential,
+  createWeComBotQrSession,
+  pollWeComBotQrSession,
+} from "./wecom-bot-qr";
 
 const APP_ID_MAX_LENGTH = 255;
 const APP_NAME_MAX_LENGTH = 120;
@@ -56,6 +64,27 @@ const WECOM_BOT_WEBHOOK_ACTION_IDS = new Set([
   "wecom_bot.send_image_message",
   "wecom_bot.send_news_message",
 ]);
+const WECOM_BOT_PERSONAL_READ_ACTION_NAMES = new Set([
+  "list_tools",
+  "get_userlist",
+  "get_msg_chat_list",
+  "get_message",
+  "download_message_media",
+  "search_todo_userid",
+  "get_todo_list",
+  "get_todo_detail",
+  "list_user_meetings",
+  "get_meeting_info",
+  "get_schedule_list_by_range",
+  "get_schedule_detail",
+  "check_availability",
+  "get_doc_content",
+  "sheet_get_info",
+  "smartsheet_get_sheet",
+  "smartsheet_get_fields",
+  "smartsheet_get_records",
+]);
+const WECOM_BOT_TOOL_CATEGORIES = ["contact", "doc", "meeting", "msg", "schedule", "todo"] as const;
 
 type EmployeeBindingMode = "oauth2" | "unsupported";
 
@@ -104,7 +133,7 @@ type IntegrationApplicationRow = QueryResultRow & {
 
 type EmployeeConnectorBindingRow = QueryResultRow & {
   id: string;
-  application_id: string;
+  application_id: string | null;
   platform: EnterpriseIntegrationPlatform;
   service: string;
   connection_name: string;
@@ -117,6 +146,18 @@ type EmployeeConnectorBindingRow = QueryResultRow & {
   connected_at: Date | string | null;
   updated_at: Date | string;
   action_ids?: unknown;
+  credential_fingerprint?: string | null;
+};
+
+type WeComBotAuthorizationRequestRow = QueryResultRow & {
+  request_hash: string;
+  scode: string | null;
+  principal_issuer: string;
+  principal_subject: string;
+  expires_at: Date | string;
+  processing_at: Date | string | null;
+  completed_at: Date | string | null;
+  connection_name: string | null;
 };
 
 type SharedConnectorGrantResolutionRow = QueryResultRow & {
@@ -337,7 +378,7 @@ export async function ensureSchema() {
       );
       CREATE TABLE IF NOT EXISTS employee_connector_bindings (
         id UUID PRIMARY KEY,
-        application_id UUID NOT NULL REFERENCES integration_applications(id) ON DELETE RESTRICT,
+        application_id UUID REFERENCES integration_applications(id) ON DELETE RESTRICT,
         principal_issuer TEXT NOT NULL,
         principal_subject TEXT NOT NULL,
         principal_email TEXT NOT NULL,
@@ -349,19 +390,74 @@ export async function ensureSchema() {
         display_name TEXT,
         account_id TEXT,
         error_message TEXT,
+        action_ids JSONB,
+        credential_fingerprint CHAR(64) CHECK (
+          credential_fingerprint IS NULL OR credential_fingerprint ~ '^[a-f0-9]{64}$'
+        ),
         connected_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (principal_issuer, principal_subject, service),
         UNIQUE (service, connection_name)
       );
+      ALTER TABLE employee_connector_bindings
+        ALTER COLUMN application_id DROP NOT NULL;
+      ALTER TABLE employee_connector_bindings
+        ADD COLUMN IF NOT EXISTS action_ids JSONB;
+      ALTER TABLE employee_connector_bindings
+        ADD COLUMN IF NOT EXISTS credential_fingerprint CHAR(64);
       ALTER TABLE employee_connector_bindings
         DROP CONSTRAINT IF EXISTS employee_connector_bindings_platform_check;
       ALTER TABLE employee_connector_bindings
         ADD CONSTRAINT employee_connector_bindings_platform_check
         CHECK (platform IN ('feishu', 'wecom', 'wecom_bot', 'dingtalk'));
+      ALTER TABLE employee_connector_bindings
+        DROP CONSTRAINT IF EXISTS employee_connector_bindings_credential_fingerprint_check;
+      ALTER TABLE employee_connector_bindings
+        ADD CONSTRAINT employee_connector_bindings_credential_fingerprint_check
+        CHECK (credential_fingerprint IS NULL OR credential_fingerprint ~ '^[a-f0-9]{64}$');
+      ALTER TABLE employee_connector_bindings
+        DROP CONSTRAINT IF EXISTS employee_connector_bindings_application_check;
+      ALTER TABLE employee_connector_bindings
+        ADD CONSTRAINT employee_connector_bindings_application_check
+        CHECK (application_id IS NOT NULL OR platform = 'wecom_bot');
+      DO $$
+      DECLARE legacy_constraint TEXT;
+      BEGIN
+        SELECT constraint_row.conname INTO legacy_constraint
+        FROM pg_constraint AS constraint_row
+        JOIN pg_class AS relation_row ON relation_row.oid = constraint_row.conrelid
+        WHERE relation_row.relname = 'employee_connector_bindings'
+          AND constraint_row.contype = 'u'
+          AND pg_get_constraintdef(constraint_row.oid) = 'UNIQUE (principal_issuer, principal_subject, service)'
+        LIMIT 1;
+        IF legacy_constraint IS NOT NULL THEN
+          EXECUTE format('ALTER TABLE employee_connector_bindings DROP CONSTRAINT %I', legacy_constraint);
+        END IF;
+      END $$;
+      CREATE UNIQUE INDEX IF NOT EXISTS employee_connector_bindings_one_application_service_per_user
+        ON employee_connector_bindings(principal_issuer, principal_subject, service)
+        WHERE application_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS employee_connector_bindings_active_credential_fingerprint
+        ON employee_connector_bindings(credential_fingerprint)
+        WHERE credential_fingerprint IS NOT NULL AND status <> 'revoked';
       CREATE INDEX IF NOT EXISTS employee_connector_bindings_principal_idx
         ON employee_connector_bindings(principal_issuer, principal_subject, status);
+      CREATE TABLE IF NOT EXISTS wecom_bot_authorization_requests (
+        request_hash CHAR(64) PRIMARY KEY CHECK (request_hash ~ '^[a-f0-9]{64}$'),
+        scode TEXT,
+        principal_issuer TEXT NOT NULL,
+        principal_subject TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        processing_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        connection_name TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK ((completed_at IS NULL AND connection_name IS NULL) OR (completed_at IS NOT NULL AND connection_name IS NOT NULL))
+      );
+      ALTER TABLE wecom_bot_authorization_requests
+        ALTER COLUMN scode DROP NOT NULL;
+      CREATE INDEX IF NOT EXISTS wecom_bot_authorization_requests_principal_idx
+        ON wecom_bot_authorization_requests(principal_issuer, principal_subject, expires_at);
       CREATE TABLE IF NOT EXISTS shared_connector_resources (
         id UUID PRIMARY KEY,
         service TEXT NOT NULL,
@@ -1001,7 +1097,7 @@ export async function activateIntegrationApplication(id: string) {
 function serializeBinding(row: EmployeeConnectorBindingRow): EmployeeConnectorBinding {
   return {
     id: row.id,
-    applicationId: row.application_id,
+    ...(row.application_id ? { applicationId: row.application_id } : {}),
     platform: row.platform,
     service: row.service,
     connectionName: row.connection_name,
@@ -1014,9 +1110,12 @@ function serializeBinding(row: EmployeeConnectorBindingRow): EmployeeConnectorBi
   };
 }
 
-function employeeConnectionName(identity: ConsoleIdentity, service: string) {
+function employeeConnectionName(identity: ConsoleIdentity, service: string, discriminator = "") {
+  const material = discriminator
+    ? `${identity.principalIssuer}\0${identity.principalSubject}\0${service}\0${discriminator}`
+    : `${identity.principalIssuer}\0${identity.principalSubject}\0${service}`;
   const digest = createHash("sha256")
-    .update(`${identity.principalIssuer}\0${identity.principalSubject}\0${service}`, "utf8")
+    .update(material, "utf8")
     .digest("hex")
     .slice(0, 40);
   return `usr_${digest}`;
@@ -1039,7 +1138,7 @@ async function reconcileEmployeeBindings(identity: ConsoleIdentity) {
     `, [identity.principalIssuer, identity.email]);
     const services = new Set<string>();
     for (const row of legacy.rows) {
-      if (services.has(row.service)) {
+      if (services.has(row.service) && row.platform !== "wecom_bot") {
         throw new IntegrationStoreError("当前邮箱存在冲突的历史 Connector 绑定", 409);
       }
       services.add(row.service);
@@ -1103,29 +1202,59 @@ async function reconcileEmployeeBindings(identity: ConsoleIdentity) {
 export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promise<EmployeeIntegrationsSnapshot> {
   await ensureSchema();
   await migrateLegacyWeComBotIntegrations();
-  const [applications, bindings, automaticWeComBots, wecomIdentity] = await Promise.all([
+  const [applications, bindings, wecomIdentity] = await Promise.all([
     getPool().query<IntegrationApplicationRow>(`
       SELECT id, platform, app_name, app_id, note, action_ids, active, created_at, updated_at
       FROM integration_applications
       ORDER BY created_at, app_name, app_id
     `),
     reconcileEmployeeBindings(identity),
-    getPool().query<{ count: string }>(`
-      SELECT COUNT(*)::TEXT AS count
-      FROM shared_connector_resources
-      WHERE service = 'wecom_bot'
-        AND authorization_mode = 'wecom_visibility'
-        AND enabled
-    `),
     getWeComIdentityLinkSnapshot(identity),
   ]);
+  const resolved = await resolveEmployeeConnectorBindings({
+    issuer: identity.principalIssuer,
+    subject: identity.principalSubject,
+    email: identity.email,
+    groups: identity.groups,
+  });
+  const identityScopedConnections: EmployeeResolvedConnection[] = "connections" in resolved
+    ? resolved.connections.flatMap((connection) => {
+      if (connection.accessMode !== "account_bound" && connection.accessMode !== "controlled_shared") return [];
+      return [{
+        service: connection.service,
+        connectionName: connection.connectionName,
+        displayName: connection.displayName,
+        accessMode: connection.accessMode,
+        allowedActionIds: "allowedActionIds" in connection && Array.isArray(connection.allowedActionIds)
+          ? connection.allowedActionIds.filter((actionId): actionId is string => typeof actionId === "string")
+          : undefined,
+        policyIds: "policyIds" in connection && Array.isArray(connection.policyIds)
+          ? connection.policyIds.filter((policyId): policyId is string => typeof policyId === "string")
+          : undefined,
+      }];
+    })
+    : [];
+  const services = Array.from(new Set(identityScopedConnections.map((connection) => connection.service)));
+  const providers = (await Promise.all(services.map(async (service) => {
+    try {
+      return await getConnectorProvider(service);
+    } catch {
+      return undefined;
+    }
+  }))).filter((provider): provider is ConnectorProviderDetail => Boolean(provider));
+  const availableConnections = buildEmployeeAvailableConnections(identityScopedConnections, providers);
+  const automaticWeComBotCount = availableConnections.filter((connection) => (
+    connection.service === "wecom_bot"
+      && connection.authorizationSources.includes("wecom_visibility")
+  )).length;
   return buildEmployeeIntegrationsSnapshot(
     applications.rows.map(serializeApplication),
     bindings.map(serializeBinding),
     { name: identity.name, email: identity.email },
     undefined,
-    Number.parseInt(automaticWeComBots.rows[0]?.count || "0", 10) || 0,
+    automaticWeComBotCount,
     wecomIdentity,
+    availableConnections,
   );
 }
 
@@ -1136,9 +1265,9 @@ export async function listClassifiedConnectorConnections(): Promise<ConnectorCon
     listConnectorConnections(),
     getPool().query<Pick<
       EmployeeConnectorBindingRow,
-      "service" | "connection_name" | "principal_email" | "principal_name"
+      "service" | "connection_name" | "principal_email" | "principal_name" | "display_name"
     >>(`
-      SELECT service, connection_name, principal_email, principal_name
+      SELECT service, connection_name, principal_email, principal_name, display_name
       FROM employee_connector_bindings
       WHERE status <> 'revoked'
     `),
@@ -1172,6 +1301,11 @@ export async function listClassifiedConnectorConnections(): Promise<ConnectorCon
       },
     ]),
   );
+  const personalDisplayNamesByConnectionKey = new Map(
+    bindings.rows.flatMap((binding) => binding.display_name
+      ? [[connectorConnectionKey(binding.service, binding.connection_name), binding.display_name] as const]
+      : []),
+  );
   const sharedAccessByConnectionKey = new Map(
     sharedResources.rows.map((resource) => [
       connectorConnectionKey(resource.service, resource.connection_name),
@@ -1186,13 +1320,21 @@ export async function listClassifiedConnectorConnections(): Promise<ConnectorCon
       },
     ]),
   );
+  const classifiedConnections = classifyConnectorConnections(
+    snapshot.connections,
+    localAccountsByConnectionKey,
+    sharedAccessByConnectionKey,
+  );
   return {
     ...snapshot,
-    connections: classifyConnectorConnections(
-      snapshot.connections,
-      localAccountsByConnectionKey,
-      sharedAccessByConnectionKey,
-    ),
+    connections: classifiedConnections.map((connection) => {
+      const displayName = connection.accessMode === "account_bound"
+        ? personalDisplayNamesByConnectionKey.get(connectorConnectionKey(connection.service, connection.connectionName))
+        : undefined;
+      return displayName
+        ? { ...connection, profile: { ...connection.profile, displayName } }
+        : connection;
+    }),
   };
 }
 
@@ -1203,6 +1345,7 @@ export function buildEmployeeIntegrationsSnapshot(
   updatedAt = new Date().toISOString(),
   automaticWeComBotCount = applications.filter((application) => application.platform === "wecom_bot" && application.active).length,
   wecomIdentity: EmployeeIntegrationsSnapshot["wecomIdentity"] = { linked: false },
+  availableConnections: EmployeeAvailableConnection[] = [],
 ): EmployeeIntegrationsSnapshot {
   const bindingByApplication = new Map(
     bindings.map((binding) => [binding.applicationId, binding]),
@@ -1226,9 +1369,79 @@ export function buildEmployeeIntegrationsSnapshot(
     identity,
     wecomIdentity,
     applications: employeeApplications,
+    availableConnections,
     automaticWeComBotCount,
     updatedAt,
   };
+}
+
+type EmployeeResolvedConnection = {
+  service: string;
+  connectionName: string;
+  displayName: string;
+  accessMode: "account_bound" | "controlled_shared";
+  allowedActionIds?: string[];
+  policyIds?: string[];
+};
+
+export function buildEmployeeAvailableConnections(
+  connections: EmployeeResolvedConnection[],
+  providers: Array<Pick<ConnectorProviderDetail, "service" | "displayName" | "actions">>,
+): EmployeeAvailableConnection[] {
+  const providersByService = new Map(providers.map((provider) => [provider.service, provider]));
+  const merged = new Map<string, {
+    connection: EmployeeResolvedConnection;
+    actionIds: Set<string>;
+    sources: Set<EmployeeAvailableConnection["authorizationSources"][number]>;
+  }>();
+
+  for (const connection of connections) {
+    const key = connectorConnectionKey(connection.service, connection.connectionName);
+    const current = merged.get(key) || {
+      connection,
+      actionIds: new Set<string>(),
+      sources: new Set<EmployeeAvailableConnection["authorizationSources"][number]>(),
+    };
+    for (const actionId of connection.allowedActionIds || []) current.actionIds.add(actionId);
+    if (connection.accessMode === "account_bound") {
+      current.sources.add("personal");
+    } else {
+      const policyIds = connection.policyIds || [];
+      if (policyIds.some((policyId) => policyId.startsWith("wecom-visibility:"))) {
+        current.sources.add("wecom_visibility");
+      }
+      if (!policyIds.length || policyIds.some((policyId) => !policyId.startsWith("wecom-visibility:"))) {
+        current.sources.add("manual");
+      }
+    }
+    merged.set(key, current);
+  }
+
+  return Array.from(merged.values()).map(({ connection, actionIds, sources }) => {
+    const provider = providersByService.get(connection.service);
+    const actionsById = new Map((provider?.actions || []).map((action) => [action.id, action]));
+    return {
+      id: `${connection.service}:${connection.connectionName}`,
+      service: connection.service,
+      serviceDisplayName: provider?.displayName || connection.service,
+      connectionName: connection.connectionName,
+      displayName: connection.displayName || provider?.displayName || connection.connectionName,
+      accessMode: connection.accessMode,
+      authorizationSources: Array.from(sources),
+      actions: Array.from(actionIds).sort().map((actionId) => {
+        const action = actionsById.get(actionId);
+        return {
+          id: actionId,
+          name: action?.name || actionId.split(".").at(-1) || actionId,
+          ...(action?.description ? { description: action.description } : {}),
+        };
+      }),
+    };
+  }).filter((connection) => connection.actions.length > 0).sort((left, right) => (
+    left.displayName.localeCompare(right.displayName, "zh-CN")
+      || left.service.localeCompare(right.service)
+      || left.connectionName.localeCompare(right.connectionName)
+  ));
 }
 
 function platformDefinition(platform: string) {
@@ -1265,6 +1478,7 @@ export async function startEmployeeIntegrationAuthorization(
     )
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
     ON CONFLICT (principal_issuer, principal_subject, service)
+      WHERE application_id IS NOT NULL
     DO UPDATE SET
       application_id = EXCLUDED.application_id,
       principal_email = EXCLUDED.principal_email,
@@ -1326,6 +1540,383 @@ export async function disconnectEmployeeIntegration(identity: ConsoleIdentity, a
     WHERE id = $1
   `, [binding.id]);
   return { disconnected: true };
+}
+
+const WECOM_BOT_AUTHORIZATION_REQUEST_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const CONNECTOR_CONNECTION_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/;
+const WECOM_BOT_VISIBILITY_RETRY_DELAYS_MS = [0, 750, 1_500, 3_000, 5_000] as const;
+const WECOM_BOT_TRANSIENT_VISIBILITY_STATUSES = new Set([403, 409]);
+
+function hashOpaqueValue(value: string) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function weComBotCredentialFingerprint(botId: string) {
+  return hashOpaqueValue(`wecom_bot\0${botId}`);
+}
+
+export async function readWeComBotVisibleUserIdsWithRetry(
+  run: () => Promise<unknown>,
+  retryDelaysMs: readonly number[] = WECOM_BOT_VISIBILITY_RETRY_DELAYS_MS,
+  wait: (delayMs: number) => Promise<void> = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+) {
+  const users = await readWeComBotVisibleUsersWithRetry(run, retryDelaysMs, wait);
+  return new Set(users.map((user) => user.userIdHash));
+}
+
+export async function readWeComBotVisibleUsersWithRetry(
+  run: () => Promise<unknown>,
+  retryDelaysMs: readonly number[] = WECOM_BOT_VISIBILITY_RETRY_DELAYS_MS,
+  wait: (delayMs: number) => Promise<void> = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+) {
+  let lastError: unknown;
+  for (const delayMs of retryDelaysMs) {
+    if (delayMs > 0) await wait(delayMs);
+    try {
+      return parseWeComVisibleUsers(await run());
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof OpenConnectorError) || !WECOM_BOT_TRANSIENT_VISIBILITY_STATUSES.has(error.status)) {
+        throw error;
+      }
+    }
+  }
+  throw lastError;
+}
+
+export function personalWeComBotDisplayName(input: {
+  binderName?: string;
+  connectionName: string;
+}) {
+  const suffix = input.connectionName.slice(-4);
+  const ending = `绑定的企微机器人 · ${suffix}`;
+  const binderName = input.binderName?.trim() || "当前用户";
+  return `${binderName.slice(0, Math.max(1, 120 - ending.length))}${ending}`;
+}
+
+export function parseWeComBotPersonalActionIds(
+  value: unknown,
+  actions: ConnectorProviderDetail["actions"],
+) {
+  const payload = recordValue(value);
+  const toolNames = new Set<string>();
+  for (const categoryValue of Array.isArray(payload?.categories) ? payload.categories : []) {
+    const category = recordValue(categoryValue);
+    for (const toolValue of Array.isArray(category?.tools) ? category.tools : []) {
+      const tool = recordValue(toolValue);
+      if (typeof tool?.name === "string" && tool.name.trim()) toolNames.add(tool.name.trim());
+    }
+  }
+  return actions.flatMap((action) => {
+    if (action.execution?.catalogOnly === true || WECOM_BOT_SYSTEM_ONLY_ACTION_IDS.has(action.id)) return [];
+    const actionName = action.id.split(".").at(-1) || action.name;
+    if (!WECOM_BOT_PERSONAL_READ_ACTION_NAMES.has(actionName)) return [];
+    const toolName = actionName === "download_message_media" ? "get_msg_media" : actionName;
+    return actionName === "list_tools" || toolNames.has(toolName) ? [action.id] : [];
+  }).sort();
+}
+
+export async function startEmployeeWeComBotAuthorization(identity: ConsoleIdentity) {
+  await ensureSchema();
+  if (!await getLinkedWeComIdentityClaims(identity.principalIssuer, identity.principalSubject)) {
+    throw new IntegrationStoreError("请先完成企业微信身份认证", 409);
+  }
+  const session = await createWeComBotQrSession();
+  const request = randomBytes(32).toString("base64url");
+  await getPool().query(`
+    DELETE FROM wecom_bot_authorization_requests
+    WHERE expires_at < NOW() - INTERVAL '1 day'
+  `);
+  await getPool().query(`
+    INSERT INTO wecom_bot_authorization_requests (
+      request_hash, scode, principal_issuer, principal_subject, expires_at
+    ) VALUES ($1, $2, $3, $4, $5)
+  `, [
+    hashOpaqueValue(request),
+    session.scode,
+    identity.principalIssuer,
+    identity.principalSubject,
+    session.expiresAt,
+  ]);
+  return {
+    request,
+    pageUrl: session.pageUrl,
+    expiresAt: session.expiresAt,
+  };
+}
+
+async function connectEmployeeWeComBot(
+  identity: ConsoleIdentity,
+  botId: string,
+  secret: string,
+) {
+  const linkedIdentity = await getLinkedWeComIdentityClaims(identity.principalIssuer, identity.principalSubject);
+  if (!linkedIdentity) throw new IntegrationStoreError("企业微信身份认证已失效", 409);
+  const credentialFingerprint = weComBotCredentialFingerprint(botId);
+  const existingFingerprint = await getPool().query<Pick<
+    EmployeeConnectorBindingRow,
+    "principal_issuer" | "principal_subject" | "connection_name"
+  >>(`
+    SELECT principal_issuer, principal_subject, connection_name
+    FROM employee_connector_bindings
+    WHERE credential_fingerprint = $1 AND status <> 'revoked'
+    LIMIT 1
+  `, [credentialFingerprint]);
+  const existingOwner = existingFingerprint.rows[0];
+  if (existingOwner && (
+    existingOwner.principal_issuer !== identity.principalIssuer
+    || existingOwner.principal_subject !== identity.principalSubject
+  )) {
+    throw new IntegrationStoreError("该企业微信机器人已绑定到其他平台账号", 409);
+  }
+
+  const connectionName = existingOwner?.connection_name
+    || employeeConnectionName(identity, "wecom_bot", credentialFingerprint);
+  const existingBinding = await getPool().query<Pick<
+    EmployeeConnectorBindingRow,
+    "principal_issuer" | "principal_subject"
+  >>(`
+    SELECT principal_issuer, principal_subject
+    FROM employee_connector_bindings
+    WHERE service = 'wecom_bot' AND connection_name = $1
+    LIMIT 1
+  `, [connectionName]);
+  const connectionOwner = existingBinding.rows[0];
+  if (connectionOwner && (
+    connectionOwner.principal_issuer !== identity.principalIssuer
+    || connectionOwner.principal_subject !== identity.principalSubject
+  )) {
+    throw new IntegrationStoreError("机器人连接名称已被其他账号占用", 409);
+  }
+
+  const [provider, connectionSnapshot] = await Promise.all([
+    getConnectorProvider("wecom_bot"),
+    listConnectorConnections(),
+  ]);
+  const connectionPreviouslyExisted = connectionSnapshot.connections.some((connection) => (
+    connection.service === "wecom_bot" && connection.connectionName === connectionName
+  ));
+  const validationConnectionName = `tmp_wecom_${randomBytes(12).toString("hex")}`;
+  let canonicalConnectionSaved = false;
+  try {
+    await bootstrapWeComBotQrCredential(botId, secret);
+    const validationConnection = await saveConnectorConnection("wecom_bot", {
+      connectionName: validationConnectionName,
+      authType: "custom_credential",
+      values: { botId, secret },
+    });
+    if (!validationConnection?.configured) {
+      throw new IntegrationStoreError("企业微信机器人连接校验失败", 502);
+    }
+
+    const visibleUsers = await readWeComBotVisibleUsersWithRetry(
+      () => runConnectorAction("wecom_bot.get_userlist", validationConnectionName),
+    );
+    const bindingUser = visibleUsers.find((user) => user.userIdHash === linkedIdentity.userIdHash);
+    if (!bindingUser) {
+      throw new IntegrationStoreError("新机器人未包含当前已认证企业微信用户，请调整可使用成员后重试", 403);
+    }
+    const toolCatalogs = (await Promise.all(WECOM_BOT_TOOL_CATEGORIES.map(async (category) => {
+      try {
+        return await runConnectorAction("wecom_bot.list_tools", validationConnectionName, { category });
+      } catch {
+        return undefined;
+      }
+    }))).flatMap((catalog) => {
+      const categories = recordValue(catalog)?.categories;
+      return Array.isArray(categories) ? categories : [];
+    });
+    toolCatalogs.push({ category: "contact", tools: [{ name: "get_userlist" }] });
+    const actionIds = parseWeComBotPersonalActionIds({ categories: toolCatalogs }, provider.actions);
+    if (!actionIds.includes("wecom_bot.get_userlist")) {
+      throw new IntegrationStoreError("新机器人没有可验证的通讯录读取权限", 409);
+    }
+    const connection = await saveConnectorConnection("wecom_bot", {
+      connectionName,
+      authType: "custom_credential",
+      values: { botId, secret },
+    });
+    if (!connection?.configured) {
+      throw new IntegrationStoreError("企业微信机器人连接创建失败", 502);
+    }
+    canonicalConnectionSaved = true;
+    const displayName = personalWeComBotDisplayName({
+      binderName: bindingUser.name || identity.name,
+      connectionName,
+    });
+
+    const result = await getPool().query(`
+      INSERT INTO employee_connector_bindings (
+        id, application_id, principal_issuer, principal_subject, principal_email,
+        principal_name, platform, service, connection_name, status, display_name,
+        account_id, action_ids, credential_fingerprint, connected_at
+      ) VALUES (
+        $1, NULL, $2, $3, $4, $5, 'wecom_bot', 'wecom_bot', $6, 'connected',
+        $7, $8, $9::JSONB, $10, NOW()
+      )
+      ON CONFLICT (service, connection_name) DO UPDATE SET
+        principal_email = EXCLUDED.principal_email,
+        principal_name = EXCLUDED.principal_name,
+        status = 'connected',
+        display_name = EXCLUDED.display_name,
+        account_id = EXCLUDED.account_id,
+        action_ids = EXCLUDED.action_ids,
+        credential_fingerprint = EXCLUDED.credential_fingerprint,
+        error_message = NULL,
+        connected_at = COALESCE(employee_connector_bindings.connected_at, NOW()),
+        updated_at = NOW()
+      WHERE employee_connector_bindings.principal_issuer = EXCLUDED.principal_issuer
+        AND employee_connector_bindings.principal_subject = EXCLUDED.principal_subject
+      RETURNING connection_name
+    `, [
+      randomUUID(),
+      identity.principalIssuer,
+      identity.principalSubject,
+      identity.email,
+      identity.name,
+      connectionName,
+      displayName,
+      connection.profile.accountId,
+      JSON.stringify(actionIds),
+      credentialFingerprint,
+    ]);
+    if (!result.rowCount) throw new IntegrationStoreError("企业微信机器人连接归属冲突", 409);
+    return { connectionName };
+  } catch (error) {
+    if (canonicalConnectionSaved && !connectionPreviouslyExisted) {
+      await deleteConnectorConnection("wecom_bot", connectionName).catch(() => undefined);
+    }
+    if ((error as { code?: string })?.code === "23505") {
+      throw new IntegrationStoreError("该企业微信机器人已绑定到其他平台账号", 409);
+    }
+    if (error instanceof OpenConnectorError) {
+      throw new IntegrationStoreError("企业微信机器人连接校验失败", 502);
+    }
+    throw error;
+  } finally {
+    await deleteConnectorConnection("wecom_bot", validationConnectionName).catch(() => undefined);
+  }
+}
+
+export async function pollEmployeeWeComBotAuthorization(identity: ConsoleIdentity, request: string) {
+  await ensureSchema();
+  if (!WECOM_BOT_AUTHORIZATION_REQUEST_PATTERN.test(request)) {
+    throw new IntegrationStoreError("企业微信机器人扫码请求无效", 400);
+  }
+  const requestHash = hashOpaqueValue(request);
+  const result = await getPool().query<WeComBotAuthorizationRequestRow>(`
+    SELECT request_hash, scode, principal_issuer, principal_subject, expires_at,
+           processing_at, completed_at, connection_name
+    FROM wecom_bot_authorization_requests
+    WHERE request_hash = $1 AND principal_issuer = $2 AND principal_subject = $3
+    LIMIT 1
+  `, [requestHash, identity.principalIssuer, identity.principalSubject]);
+  const row = result.rows[0];
+  if (!row) throw new IntegrationStoreError("企业微信机器人扫码请求不存在", 404);
+  if (row.completed_at && row.connection_name) {
+    return { status: "connected" as const, connectionName: row.connection_name };
+  }
+  if (new Date(row.expires_at).getTime() <= Date.now()) {
+    await getPool().query(`
+      UPDATE wecom_bot_authorization_requests
+      SET scode = NULL, processing_at = NULL
+      WHERE request_hash = $1 AND completed_at IS NULL
+    `, [requestHash]);
+    throw new IntegrationStoreError("企业微信机器人二维码已过期，请重新生成", 410);
+  }
+  if (!row.scode) throw new IntegrationStoreError("企业微信机器人扫码请求已失效", 410);
+
+  const polled = await pollWeComBotQrSession(row.scode);
+  if (polled.status === "pending") return { status: "pending" as const };
+  const claim = await getPool().query(`
+    UPDATE wecom_bot_authorization_requests
+    SET processing_at = NOW()
+    WHERE request_hash = $1 AND completed_at IS NULL
+      AND (processing_at IS NULL OR processing_at < NOW() - INTERVAL '45 seconds')
+    RETURNING request_hash
+  `, [requestHash]);
+  if (!claim.rowCount) return { status: "pending" as const };
+
+  try {
+    const connected = await connectEmployeeWeComBot(identity, polled.botId, polled.secret);
+    await getPool().query(`
+      UPDATE wecom_bot_authorization_requests
+      SET completed_at = NOW(), connection_name = $2, processing_at = NULL, scode = NULL
+      WHERE request_hash = $1
+    `, [requestHash, connected.connectionName]);
+    return { status: "connected" as const, connectionName: connected.connectionName };
+  } catch (error) {
+    await getPool().query(`
+      UPDATE wecom_bot_authorization_requests
+      SET processing_at = NULL
+      WHERE request_hash = $1 AND completed_at IS NULL
+    `, [requestHash]).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function disconnectEmployeeWeComBot(identity: ConsoleIdentity, connectionName: string) {
+  await ensureSchema();
+  const safeConnectionName = connectionName.trim();
+  if (!CONNECTOR_CONNECTION_NAME_PATTERN.test(safeConnectionName)) {
+    throw new IntegrationStoreError("企业微信机器人连接名称无效", 400);
+  }
+  const result = await getPool().query<Pick<EmployeeConnectorBindingRow, "id">>(`
+    SELECT id
+    FROM employee_connector_bindings
+    WHERE principal_issuer = $1 AND principal_subject = $2
+      AND platform = 'wecom_bot' AND service = 'wecom_bot'
+      AND application_id IS NULL AND connection_name = $3
+      AND status <> 'revoked'
+    LIMIT 1
+  `, [identity.principalIssuer, identity.principalSubject, safeConnectionName]);
+  const binding = result.rows[0];
+  if (!binding) throw new IntegrationStoreError("个人企业微信机器人连接不存在", 404);
+
+  try {
+    await deleteConnectorConnection("wecom_bot", safeConnectionName);
+  } catch (error) {
+    if (!(error instanceof OpenConnectorError) || error.status !== 404) throw error;
+  }
+  await getPool().query(`
+    UPDATE employee_connector_bindings
+    SET status = 'revoked', error_message = NULL, updated_at = NOW()
+    WHERE id = $1
+      AND principal_issuer = $2 AND principal_subject = $3
+      AND status <> 'revoked'
+  `, [binding.id, identity.principalIssuer, identity.principalSubject]);
+  return { disconnected: true as const };
+}
+
+export async function renameEmployeeWeComBot(
+  identity: ConsoleIdentity,
+  connectionName: string,
+  displayName: string,
+) {
+  await ensureSchema();
+  const safeConnectionName = connectionName.trim();
+  if (!CONNECTOR_CONNECTION_NAME_PATTERN.test(safeConnectionName)) {
+    throw new IntegrationStoreError("企业微信机器人连接名称无效", 400);
+  }
+  const safeDisplayName = typeof displayName === "string" ? displayName.trim() : "";
+  if (!safeDisplayName) throw new IntegrationStoreError("请输入连接名称", 400);
+  if (safeDisplayName.length > 120) throw new IntegrationStoreError("连接名称不能超过 120 个字符", 400);
+
+  const result = await getPool().query(`
+    UPDATE employee_connector_bindings
+    SET display_name = $4, updated_at = NOW()
+    WHERE principal_issuer = $1 AND principal_subject = $2
+      AND platform = 'wecom_bot' AND service = 'wecom_bot'
+      AND application_id IS NULL AND connection_name = $3
+      AND status = 'connected'
+  `, [
+    identity.principalIssuer,
+    identity.principalSubject,
+    safeConnectionName,
+    safeDisplayName,
+  ]);
+  if (!result.rowCount) throw new IntegrationStoreError("个人企业微信机器人连接不存在", 404);
+  return { renamed: true as const, displayName: safeDisplayName };
 }
 
 const WECOM_VISIBILITY_CACHE_TTL_MS = 60_000;
@@ -1876,19 +2467,27 @@ async function getLinkedWeComIdentityClaims(issuer: string, subject: string) {
   } : undefined;
 }
 
-export function parseWeComVisibleUserIdHashes(value: unknown) {
+export function parseWeComVisibleUsers(value: unknown) {
   const payload = recordValue(value);
   if (!payload || payload.errcode !== 0 || !Array.isArray(payload.userlist)) {
     throw new IntegrationStoreError("企微机器人可见范围查询失败", 502);
   }
-  const userIdHashes = new Set<string>();
+  const users: Array<{ userIdHash: string; name?: string }> = [];
   for (const item of payload.userlist) {
     const user = recordValue(item);
     if (typeof user?.userid === "string" && user.userid) {
-      userIdHashes.add(hashWeComUserId(user.userid));
+      const name = typeof user.name === "string" ? user.name.trim() : "";
+      users.push({
+        userIdHash: hashWeComUserId(user.userid),
+        ...(name ? { name } : {}),
+      });
     }
   }
-  return userIdHashes;
+  return users;
+}
+
+export function parseWeComVisibleUserIdHashes(value: unknown) {
+  return new Set(parseWeComVisibleUsers(value).map((user) => user.userIdHash));
 }
 
 async function readWeComVisibleUserIdHashes(connectionName: string) {
@@ -2009,13 +2608,14 @@ export async function resolveEmployeeConnectorBindings(input: {
     SELECT binding.id, binding.application_id, binding.platform, binding.service,
            binding.connection_name, binding.status, binding.display_name,
            binding.account_id, binding.error_message, binding.connected_at,
-           binding.updated_at, application.action_ids
+           binding.updated_at,
+           CASE WHEN binding.application_id IS NULL THEN binding.action_ids ELSE application.action_ids END AS action_ids
     FROM employee_connector_bindings AS binding
-    JOIN integration_applications AS application ON application.id = binding.application_id
+    LEFT JOIN integration_applications AS application ON application.id = binding.application_id
     WHERE binding.principal_issuer = $1 AND binding.principal_subject = $2
       AND binding.status = 'connected'
       AND ($3::TEXT IS NULL OR binding.service = $3)
-    ORDER BY binding.service
+    ORDER BY binding.service, binding.connection_name
   `, [issuer, subject, service || null]);
 
   // Compatibility for rows written before Console and the MCP Broker shared
@@ -2026,17 +2626,18 @@ export async function resolveEmployeeConnectorBindings(input: {
       SELECT binding.id, binding.application_id, binding.platform, binding.service,
              binding.connection_name, binding.status, binding.display_name,
              binding.account_id, binding.error_message, binding.connected_at,
-             binding.updated_at, application.action_ids
+             binding.updated_at,
+             CASE WHEN binding.application_id IS NULL THEN binding.action_ids ELSE application.action_ids END AS action_ids
       FROM employee_connector_bindings AS binding
-      JOIN integration_applications AS application ON application.id = binding.application_id
+      LEFT JOIN integration_applications AS application ON application.id = binding.application_id
       WHERE binding.principal_issuer = $1 AND LOWER(binding.principal_email) = $2
         AND binding.status = 'connected'
         AND ($3::TEXT IS NULL OR binding.service = $3)
-      ORDER BY binding.service
+      ORDER BY binding.service, binding.connection_name
     `, [issuer, email, service || null]);
     const services = new Set<string>();
     for (const row of result.rows) {
-      if (services.has(row.service)) {
+      if (services.has(row.service) && row.platform !== "wecom_bot") {
         throw new IntegrationStoreError("员工账号存在冲突的 Connector 绑定", 409);
       }
       services.add(row.service);
@@ -2097,7 +2698,7 @@ export async function resolveEmployeeConnectorBindings(input: {
     return current ? [{
       service: row.service,
       connectionName: row.connection_name,
-      displayName: current.profile.displayName,
+      displayName: row.display_name || current.profile.displayName,
       public: false,
       accessMode: "account_bound",
       actionRestricted: true,

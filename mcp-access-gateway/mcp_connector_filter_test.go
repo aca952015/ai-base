@@ -33,8 +33,14 @@ type resolverCall struct {
 func TestNormalizedOpenConnectorToolRequiresConnectorNamespace(t *testing.T) {
 	tests := map[string]string{
 		"execute":                                   "execute",
+		"apps":                                      "apps",
+		"open-connector__apps":                      "apps",
+		"mcp-open-connector__list_apps":             "apps",
 		"open-connector__guide":                     "guide",
 		"mcp-open-connector__connections":           "connections",
+		"mcp-open-connector__list_connections":      "connections",
+		"mcp-open-connector__get_action_guide":      "guide",
+		"mcp-open-connector__execute_action":        "execute",
 		"mcp__ai-base__mcp-open-connector__execute": "execute",
 		"ai-base_mcp-open-connector__execute":       "execute",
 		"another-mcp__execute":                      "",
@@ -281,6 +287,85 @@ func TestListConnectionsIsServedLocallyAndFiltered(t *testing.T) {
 	}
 	if connection["id"] != "feishu:employee_feishu" {
 		t.Fatalf("internal binding id must not be exposed: %#v", connection)
+	}
+	if len(resolver.listCalls) != 1 || resolver.listCalls[0].subject != alice.subject {
+		t.Fatalf("resolver did not receive authenticated employee: %#v", resolver.listCalls)
+	}
+}
+
+func TestListAppsUsesAuthenticatedEmployeeConnections(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	alice := identity{issuer: "https://id.example", subject: "employee-alice"}
+	resolver := &fakeConnectorResolver{
+		bindings: []connectorBinding{
+			{
+				Service:        "wecom_bot",
+				ConnectionName: "employee_wecom_1",
+				DisplayName:    "Alice Bot",
+				AccessMode:     "account_bound",
+			},
+			{
+				Service:        "wecom_bot",
+				ConnectionName: "employee_wecom_2",
+				DisplayName:    "Project Bot",
+				AccessMode:     "account_bound",
+			},
+			{
+				Service:        "linux_do",
+				ConnectionName: "default",
+				DisplayName:    "Linux.do",
+				AccessMode:     "no_auth",
+				Public:         true,
+			},
+		},
+	}
+	gateway := newMCPGatewayWithResolver(
+		testConfig(t, upstream.URL+"/mcp"),
+		fakeVerifier{identities: map[string]identity{"alice-token": alice}},
+		resolver,
+	)
+	server := httptest.NewServer(gateway.routes())
+	defer server.Close()
+
+	response := authenticatedMCPRequest(t, server.URL, "alice-token", map[string]any{
+		"jsonrpc": "2.0",
+		"id":      "apps",
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name": "connector__apps",
+			"arguments": map[string]any{
+				"query": "bot",
+			},
+		},
+	})
+	defer response.Body.Close()
+
+	if upstreamCalls.Load() != 0 {
+		t.Fatalf("apps must not use the global upstream catalog, got %d calls", upstreamCalls.Load())
+	}
+	var body struct {
+		Result struct {
+			StructuredContent struct {
+				OK   bool             `json:"ok"`
+				Data []map[string]any `json:"data"`
+			} `json:"structuredContent"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Result.StructuredContent.OK || len(body.Result.StructuredContent.Data) != 1 {
+		t.Fatalf("expected only the employee's authorized bot app: %#v", body)
+	}
+	app := body.Result.StructuredContent.Data[0]
+	if app["service"] != "wecom_bot" || app["connectionCount"] != float64(2) || app["requiresConnectionSelection"] != true {
+		t.Fatalf("unexpected identity-scoped app summary: %#v", app)
 	}
 	if len(resolver.listCalls) != 1 || resolver.listCalls[0].subject != alice.subject {
 		t.Fatalf("resolver did not receive authenticated employee: %#v", resolver.listCalls)

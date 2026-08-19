@@ -1,5 +1,9 @@
+import { ChevronRight, ShieldCheck, UserRound } from "lucide-react";
+import Link from "next/link";
+
 import { ConnectorManager } from "@/components/connector-manager";
 import { PageHeader } from "@/components/page-header";
+import { SectionCard } from "@/components/section-card";
 import { StatusPill } from "@/components/status-pill";
 import type { ConnectorConnectionsSnapshot, ConnectorProvidersPage } from "@/lib/control-plane/connectors";
 import { getComponentData } from "@/lib/server/component-data";
@@ -46,14 +50,31 @@ export default async function ConnectorsPage() {
     <div className="page-stack">
       <PageHeader
         title="连接器配置"
-        description="通过卡片管理外部系统连接；认证方式和配置字段实时读取自 OpenConnector。"
+        description="管理受控共享和全局连接；认证方式和配置字段实时读取自 OpenConnector。"
         actions={<StatusPill status={status} />}
       />
+      <SectionCard title="连接视图" description="员工个人授权形成的连接独立展示，不与管理员维护的系统连接混排。">
+        <div className="settings-subpage-list">
+          <Link className="settings-subpage-row" href="/connectors/user-connections">
+            <span className="settings-subpage-row__icon"><UserRound size={19} /></span>
+            <span className="settings-subpage-row__copy"><strong>用户连接</strong><small>员工个人授权、所属账号与可用 Action</small></span>
+            <span className="settings-subpage-row__status">{connections.connections.filter((connection) => connection.accessMode === "account_bound").length} 个连接</span>
+            <ChevronRight size={18} />
+          </Link>
+          <Link className="settings-subpage-row" href="/connectors/no-auth">
+            <span className="settings-subpage-row__icon is-green"><ShieldCheck size={19} /></span>
+            <span className="settings-subpage-row__copy"><strong>无需认证</strong><small>公共数据源、无需凭据的连接与可用 Action</small></span>
+            <span className="settings-subpage-row__status">{connections.connections.filter((connection) => connection.accessMode === "no_auth").length} 个连接</span>
+            <ChevronRight size={18} />
+          </Link>
+        </div>
+      </SectionCard>
       <ConnectorManager
         initialConnections={connections.connections}
         initialProviders={providers}
         initialConnectionProviders={connectionProviders}
         initialError={initialError}
+        view="managed"
       />
     </div>
   );

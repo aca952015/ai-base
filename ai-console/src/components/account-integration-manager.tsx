@@ -4,19 +4,25 @@ import {
   AlertCircle,
   Bot,
   Building2,
+  ChevronDown,
   CheckCircle2,
   ExternalLink,
   Link2,
   LoaderCircle,
   LockKeyhole,
   MessageSquareShare,
+  Pencil,
+  QrCode,
   ShieldCheck,
   Unlink,
   UserRound,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import type {
+  EmployeeAvailableConnection,
   EmployeeConnectorBinding,
   EmployeeIntegrationApplication,
   EmployeeIntegrationsSnapshot,
@@ -27,6 +33,21 @@ type RequestState = {
   applicationId: string;
   action: "authorizing" | "disconnecting";
 };
+
+type PersonalConnectionRequestState = {
+  connectionName: string;
+  action: "disconnecting" | "renaming";
+};
+
+type PersonalConnectionEditState = {
+  connectionName: string;
+  displayName: string;
+};
+
+type WeComBotAuthorizationState =
+  | { status: "starting" }
+  | { status: "waiting"; request: string; pageUrl: string; expiresAt: string }
+  | { status: "error"; message: string };
 
 const wecomLinkResultMessages: Partial<Record<string, { tone: "success" | "error"; text: string }>> = {
   linked: { tone: "success", text: "企业微信身份已与当前平台账号绑定。" },
@@ -95,18 +116,71 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
   const [snapshot, setSnapshot] = useState<EmployeeIntegrationsSnapshot>();
   const [loading, setLoading] = useState(true);
   const [requestState, setRequestState] = useState<RequestState>();
+  const [personalConnectionRequestState, setPersonalConnectionRequestState] = useState<PersonalConnectionRequestState>();
+  const [personalConnectionEditState, setPersonalConnectionEditState] = useState<PersonalConnectionEditState>();
   const [wecomBusy, setWecomBusy] = useState(false);
+  const [wecomBotAuthorization, setWecomBotAuthorization] = useState<WeComBotAuthorizationState>();
+  const [selectedIntegrationId, setSelectedIntegrationId] = useState<string>();
   const [message, setMessage] = useState<{ tone: "info" | "success" | "error"; text: string } | undefined>(
     () => wecomLinkResultMessage(wecomLinkResult),
   );
   const pollingTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const wecomBotPollingTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const wecomBotAuthorizationGenerationRef = useRef(0);
   const popupRef = useRef<Window | null>(null);
   const mountedRef = useRef(true);
+  const drawerRef = useRef<HTMLElement>(null);
+  const wecomBotDialogRef = useRef<HTMLElement>(null);
+  const selectedApplication = selectedIntegrationId && selectedIntegrationId !== "wecom"
+    ? snapshot?.applications.find((application) => application.id === selectedIntegrationId)
+    : undefined;
+  const selectedConnections = snapshot && selectedIntegrationId
+    ? connectionsForIntegration(snapshot, selectedIntegrationId)
+    : [];
+  const selectedIntegration = selectedIntegrationId === "wecom" && snapshot
+    ? {
+        title: "企业微信身份",
+        platform: "企业微信",
+        status: snapshot.wecomIdentity.linked ? "已绑定" : "未绑定",
+        emptyMessage: snapshot.wecomIdentity.linked
+          ? "当前没有可用连接。"
+          : "从企业微信应用首页完成身份认证后，可见范围内的共享连接会显示在这里。",
+      }
+    : selectedApplication
+      ? {
+          title: selectedApplication.name,
+          platform: selectedApplication.platformDisplayName,
+          status: bindingPresentation(selectedApplication.binding).label,
+          emptyMessage: selectedApplication.binding?.status === "connected"
+            ? "当前个人授权尚未提供可用的 Action。"
+            : "完成该应用的个人账号绑定后，可用连接和权限会显示在这里。",
+        }
+      : undefined;
+  const integrationDrawerOpen = Boolean(selectedIntegration);
+  const wecomBotDialogOpen = Boolean(wecomBotAuthorization);
+  const wecomBotDialogOpenRef = useRef(wecomBotDialogOpen);
 
   const stopPolling = useCallback(() => {
     if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
     pollingTimerRef.current = undefined;
   }, []);
+
+  const stopWeComBotPolling = useCallback(() => {
+    if (wecomBotPollingTimerRef.current) clearTimeout(wecomBotPollingTimerRef.current);
+    wecomBotPollingTimerRef.current = undefined;
+  }, []);
+
+  const closeWeComBotAuthorization = useCallback(() => {
+    wecomBotAuthorizationGenerationRef.current += 1;
+    stopWeComBotPolling();
+    setWecomBotAuthorization(undefined);
+  }, [stopWeComBotPolling]);
+
+  const closeIntegrationDetails = useCallback(() => {
+    closeWeComBotAuthorization();
+    setPersonalConnectionEditState(undefined);
+    setSelectedIntegrationId(undefined);
+  }, [closeWeComBotAuthorization]);
 
   const reload = useCallback(async () => {
     const next = await fetchJson<EmployeeIntegrationsSnapshot>("/api/account/integrations");
@@ -131,8 +205,9 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
     return () => {
       mountedRef.current = false;
       stopPolling();
+      stopWeComBotPolling();
     };
-  }, [reload, stopPolling]);
+  }, [reload, stopPolling, stopWeComBotPolling]);
 
   useEffect(() => {
     if (!wecomLinkResult) return;
@@ -141,6 +216,87 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
     const suffix = query.toString();
     window.history.replaceState(null, "", `${window.location.pathname}${suffix ? `?${suffix}` : ""}`);
   }, [wecomLinkResult]);
+
+  useEffect(() => {
+    wecomBotDialogOpenRef.current = wecomBotDialogOpen;
+  }, [wecomBotDialogOpen]);
+
+  useEffect(() => {
+    if (!integrationDrawerOpen) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const frame = requestAnimationFrame(() => {
+      drawerRef.current?.querySelector<HTMLElement>("[data-drawer-autofocus]")?.focus();
+    });
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (wecomBotDialogOpenRef.current) return;
+      if (event.key === "Escape") {
+        closeIntegrationDetails();
+        return;
+      }
+      if (event.key !== "Tab" || !drawerRef.current) return;
+      const focusable = Array.from(drawerRef.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href]",
+      ));
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [closeIntegrationDetails, integrationDrawerOpen, selectedIntegrationId]);
+
+  useEffect(() => {
+    if (!wecomBotDialogOpen) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    const frame = requestAnimationFrame(() => {
+      wecomBotDialogRef.current?.querySelector<HTMLElement>("[data-modal-autofocus]")?.focus();
+    });
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeWeComBotAuthorization();
+        return;
+      }
+      if (event.key !== "Tab" || !wecomBotDialogRef.current) return;
+      const focusable = Array.from(wecomBotDialogRef.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe, [href]",
+      ));
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [closeWeComBotAuthorization, wecomBotDialogOpen]);
 
   async function disconnectWeComIdentity() {
     if (!window.confirm("确认解绑当前平台账号与企业微信身份？解绑后，企微共享机器人将不再出现在该账号的 MCP 清单中。")) return;
@@ -157,6 +313,64 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
       });
     } finally {
       setWecomBusy(false);
+    }
+  }
+
+  const pollWeComBotAuthorization = useCallback((request: string, generation: number) => {
+    stopWeComBotPolling();
+    const poll = async () => {
+      try {
+        const result = await fetchJson<{ status: "pending" | "connected"; connectionName?: string }>(
+          `/api/account/wecom-bots/authorize?request=${encodeURIComponent(request)}`,
+        );
+        if (!mountedRef.current || wecomBotAuthorizationGenerationRef.current !== generation) return;
+        if (result.status === "connected") {
+          closeWeComBotAuthorization();
+          setMessage({ tone: "success", text: "企业微信机器人已创建并绑定为个人连接。" });
+          try {
+            await reload();
+          } catch (error) {
+            if (mountedRef.current) {
+              setMessage({
+                tone: "error",
+                text: error instanceof Error ? `机器人已创建，但连接列表刷新失败：${error.message}` : "机器人已创建，但连接列表刷新失败。",
+              });
+            }
+          }
+          return;
+        }
+        if (mountedRef.current && wecomBotAuthorizationGenerationRef.current === generation) {
+          wecomBotPollingTimerRef.current = setTimeout(poll, 3_000);
+        }
+      } catch (error) {
+        stopWeComBotPolling();
+        if (!mountedRef.current || wecomBotAuthorizationGenerationRef.current !== generation) return;
+        const text = error instanceof Error ? error.message : "企业微信机器人扫码绑定失败";
+        setWecomBotAuthorization({ status: "error", message: text });
+      }
+    };
+    wecomBotPollingTimerRef.current = setTimeout(poll, 1_000);
+  }, [closeWeComBotAuthorization, reload, stopWeComBotPolling]);
+
+  async function startWeComBotAuthorization() {
+    if (!snapshot?.wecomIdentity.linked || wecomBotAuthorization?.status === "starting") return;
+    stopWeComBotPolling();
+    const generation = wecomBotAuthorizationGenerationRef.current + 1;
+    wecomBotAuthorizationGenerationRef.current = generation;
+    setWecomBotAuthorization({ status: "starting" });
+    setMessage(undefined);
+    try {
+      const session = await fetchJson<{ request: string; pageUrl: string; expiresAt: string }>(
+        "/api/account/wecom-bots/authorize",
+        { method: "POST" },
+      );
+      if (!mountedRef.current || wecomBotAuthorizationGenerationRef.current !== generation) return;
+      setWecomBotAuthorization({ status: "waiting", ...session });
+      pollWeComBotAuthorization(session.request, generation);
+    } catch (error) {
+      if (!mountedRef.current || wecomBotAuthorizationGenerationRef.current !== generation) return;
+      const text = error instanceof Error ? error.message : "企业微信机器人二维码生成失败";
+      setWecomBotAuthorization({ status: "error", message: text });
     }
   }
 
@@ -308,6 +522,63 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
     }
   }
 
+  async function disconnectPersonalWeComBot(connection: EmployeeAvailableConnection) {
+    if (!isDisconnectablePersonalWeComBot(connection)) return;
+    if (!window.confirm(`确认解绑个人机器人“${connection.displayName}”？解绑后，该机器人连接和凭据将从 AI Base 中移除。`)) return;
+    setPersonalConnectionRequestState({ connectionName: connection.connectionName, action: "disconnecting" });
+    setMessage({ tone: "info", text: `正在解绑${connection.displayName}…` });
+    try {
+      await fetchJson<unknown>(
+        `/api/account/wecom-bots/${encodeURIComponent(connection.connectionName)}`,
+        { method: "DELETE" },
+      );
+      await reload();
+      setPersonalConnectionEditState(undefined);
+      setMessage({ tone: "success", text: `${connection.displayName}已解绑。` });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : `${connection.displayName}解绑失败`,
+      });
+    } finally {
+      setPersonalConnectionRequestState(undefined);
+    }
+  }
+
+  async function renamePersonalWeComBot(connection: EmployeeAvailableConnection) {
+    if (!isDisconnectablePersonalWeComBot(connection)) return;
+    const displayName = personalConnectionEditState?.displayName.trim() || "";
+    if (!displayName) {
+      setMessage({ tone: "error", text: "请输入连接名称。" });
+      return;
+    }
+    if (displayName === connection.displayName) {
+      setPersonalConnectionEditState(undefined);
+      return;
+    }
+    setPersonalConnectionRequestState({ connectionName: connection.connectionName, action: "renaming" });
+    try {
+      await fetchJson<{ renamed: true; displayName: string }>(
+        `/api/account/wecom-bots/${encodeURIComponent(connection.connectionName)}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ displayName }),
+        },
+      );
+      await reload();
+      setPersonalConnectionEditState(undefined);
+      setMessage({ tone: "success", text: `连接名称已更新为“${displayName}”。` });
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text: error instanceof Error ? error.message : "企业微信机器人连接重命名失败",
+      });
+    } finally {
+      setPersonalConnectionRequestState(undefined);
+    }
+  }
+
   if (loading) {
     return (
       <div className="account-integration-loading" aria-live="polite">
@@ -339,8 +610,11 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
       <div className="account-integration-grid">
         <WeComIdentityCard
           linked={Boolean(snapshot?.wecomIdentity.linked)}
-          automaticBotCount={snapshot?.automaticWeComBotCount || 0}
+          availableConnectionCount={(snapshot?.availableConnections || []).filter((connection) => (
+            connection.service === "wecom_bot"
+          )).length}
           busy={wecomBusy}
+          onOpen={() => setSelectedIntegrationId("wecom")}
           onDisconnect={disconnectWeComIdentity}
         />
         {(snapshot?.applications || []).map((application) => (
@@ -348,6 +622,7 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
             application={application}
             busy={requestState?.applicationId === application.id}
             action={requestState?.applicationId === application.id ? requestState.action : undefined}
+            onOpen={() => setSelectedIntegrationId(application.id)}
             onAuthorize={() => authorize(application)}
             onDisconnect={() => disconnect(application)}
             key={application.id}
@@ -355,23 +630,336 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
         ))}
       </div>
 
+      {selectedIntegration ? createPortal(
+        <div className="gateway-channel-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeIntegrationDetails(); }}>
+          <aside
+            className="gateway-channel-drawer account-connection-drawer"
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-hidden={wecomBotDialogOpen || undefined}
+            inert={wecomBotDialogOpen || undefined}
+            aria-labelledby="account-connection-details-title"
+          >
+            <div className="gateway-channel-editor__header">
+              <div>
+                <span className="card-kicker">集成权限</span>
+                <h3 id="account-connection-details-title">{selectedIntegration.title}</h3>
+                <p>{selectedIntegrationId === "wecom" && snapshot?.wecomIdentity.linked
+                  ? "查看当前身份可用的连接和 Actions。"
+                  : "只读展示此集成向当前身份提供的连接和 Actions。"}</p>
+              </div>
+              <button type="button" data-drawer-autofocus onClick={closeIntegrationDetails} aria-label="关闭集成权限"><X size={17} /></button>
+            </div>
+
+            <div className="gateway-channel-drawer__body resource-detail-body">
+              <section className="resource-detail-section">
+                <div className="resource-detail-section__header">
+                  <strong>集成信息</strong>
+                  <span className={`gateway-channel-state${selectedIntegration.status === "已绑定" ? " is-enabled" : ""}`}>{selectedIntegration.status}</span>
+                </div>
+                <dl className="resource-detail-grid">
+                  <div><dt>平台</dt><dd>{selectedIntegration.platform}</dd></div>
+                  <div><dt>可用连接</dt><dd>{selectedConnections.length} 个</dd></div>
+                </dl>
+              </section>
+
+              {selectedConnections.length ? selectedConnections.map((connection, index) => {
+                const presentation = connectionDetailPresentation(
+                  connection,
+                  index,
+                  selectedConnections.length,
+                  selectedIntegrationId,
+                );
+                const multipleWeComBots = selectedIntegrationId === "wecom" && selectedConnections.length > 1;
+                const ConnectionIcon = selectedIntegrationId === "wecom"
+                  ? Bot
+                  : selectedApplication
+                    ? platformIcons[selectedApplication.platform] || Link2
+                    : Link2;
+                return (
+                  <section
+                    className={`resource-detail-section account-connection-detail${multipleWeComBots ? " is-multiple" : ""}`}
+                    aria-label={`${presentation.eyebrow} ${presentation.title}，连接名称 ${connection.connectionName}`}
+                    key={connection.id}
+                  >
+                    <div className="resource-detail-section__header account-connection-detail__header">
+                      <div className="account-connection-detail__identity">
+                        <span><ConnectionIcon size={17} /></span>
+                        <div>
+                          <small>{presentation.eyebrow}</small>
+                          <strong>{presentation.title}</strong>
+                        </div>
+                      </div>
+                      <div className="account-connection-detail__controls">
+                        <span className={`gateway-channel-state${connection.accessMode === "account_bound" ? " is-enabled" : " is-managed"}`}>
+                          {connectionAccessLabel(connection)}
+                        </span>
+                        {isDisconnectablePersonalWeComBot(connection) ? (
+                          <>
+                            <button
+                              className="button button--secondary account-connection-detail__rename"
+                              type="button"
+                              onClick={() => setPersonalConnectionEditState({
+                                connectionName: connection.connectionName,
+                                displayName: connection.displayName,
+                              })}
+                              disabled={personalConnectionRequestState?.connectionName === connection.connectionName}
+                            >
+                              <Pencil size={14} />
+                              改名
+                            </button>
+                            <button
+                              className="button button--secondary account-connection-detail__disconnect"
+                              type="button"
+                              onClick={() => disconnectPersonalWeComBot(connection)}
+                              disabled={personalConnectionRequestState?.connectionName === connection.connectionName}
+                            >
+                              {personalConnectionRequestState?.connectionName === connection.connectionName
+                                && personalConnectionRequestState.action === "disconnecting"
+                                ? <LoaderCircle className="is-spinning" size={14} />
+                                : <Unlink size={14} />}
+                              {personalConnectionRequestState?.connectionName === connection.connectionName
+                                && personalConnectionRequestState.action === "disconnecting" ? "解绑中" : "解绑"}
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                    {personalConnectionEditState?.connectionName === connection.connectionName ? (
+                      <form
+                        className="account-connection-rename"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void renamePersonalWeComBot(connection);
+                        }}
+                      >
+                        <label htmlFor={`connection-display-name-${connection.id}`}>显示名称</label>
+                        <div>
+                          <input
+                            id={`connection-display-name-${connection.id}`}
+                            autoFocus
+                            maxLength={120}
+                            required
+                            value={personalConnectionEditState.displayName}
+                            onChange={(event) => setPersonalConnectionEditState({
+                              connectionName: connection.connectionName,
+                              displayName: event.target.value,
+                            })}
+                          />
+                          <button
+                            className="button button--primary"
+                            type="submit"
+                            disabled={personalConnectionRequestState?.connectionName === connection.connectionName}
+                          >
+                            {personalConnectionRequestState?.connectionName === connection.connectionName
+                              && personalConnectionRequestState.action === "renaming"
+                              ? <LoaderCircle className="is-spinning" size={14} />
+                              : null}
+                            {personalConnectionRequestState?.connectionName === connection.connectionName
+                              && personalConnectionRequestState.action === "renaming" ? "保存中" : "保存"}
+                          </button>
+                          <button
+                            className="button button--secondary"
+                            type="button"
+                            onClick={() => setPersonalConnectionEditState(undefined)}
+                            disabled={personalConnectionRequestState?.connectionName === connection.connectionName}
+                          >
+                            取消
+                          </button>
+                        </div>
+                      </form>
+                    ) : null}
+                    <dl className="resource-detail-grid">
+                      <div><dt>连接名称</dt><dd className="is-mono">{connection.connectionName}</dd></div>
+                      <div><dt>可用权限</dt><dd>{connection.actions.length} 个 Action</dd></div>
+                    </dl>
+                    <AccountConnectionActionList
+                      connection={connection}
+                      collapsible={selectedIntegrationId === "wecom"}
+                    />
+                  </section>
+                );
+              }) : (
+                <div className="gateway-mcp-tools-state account-integration-empty">
+                  <Link2 size={20} />
+                  <strong>当前集成没有可用连接</strong>
+                  <p>{selectedIntegration.emptyMessage}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="gateway-channel-editor__footer account-connection-drawer__footer">
+              {selectedIntegrationId === "wecom" && snapshot?.wecomIdentity.linked ? (
+                <button className="button button--secondary" type="button" onClick={startWeComBotAuthorization}>
+                  <QrCode size={15} />
+                  创建机器人
+                </button>
+              ) : null}
+              <button className="button button--secondary account-connection-drawer__close" type="button" onClick={closeIntegrationDetails}>关闭</button>
+            </div>
+          </aside>
+        </div>,
+        document.body,
+      ) : null}
+
+      {selectedIntegrationId === "wecom" && wecomBotAuthorization ? createPortal(
+        <div
+          className="account-wecom-qr-modal-backdrop"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) closeWeComBotAuthorization(); }}
+        >
+          <section
+            className="account-wecom-qr-modal"
+            ref={wecomBotDialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="account-wecom-qr-modal-title"
+          >
+            <div className="account-wecom-qr-modal__header">
+              <div>
+                <span className="card-kicker">企业微信</span>
+                <h3 id="account-wecom-qr-modal-title">创建个人机器人</h3>
+                <p>使用企业微信扫码完成创建。</p>
+              </div>
+              <button type="button" data-modal-autofocus onClick={closeWeComBotAuthorization} aria-label="关闭创建机器人弹窗">
+                <X size={17} />
+              </button>
+            </div>
+
+            <div className="account-wecom-qr-modal__body">
+              {wecomBotAuthorization.status === "starting" ? (
+                <div className="account-wecom-qr-modal__state" role="status">
+                  <LoaderCircle className="is-spinning" size={22} />
+                  <strong>正在生成二维码</strong>
+                </div>
+              ) : wecomBotAuthorization.status === "waiting" ? (
+                <div className="wecom-bot-authorization__qr">
+                  <iframe
+                    src={wecomBotAuthorization.pageUrl}
+                    title="企业微信创建机器人二维码"
+                    referrerPolicy="no-referrer"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                  />
+                  <div>
+                    <span><LoaderCircle className="is-spinning" size={15} />等待扫码确认</span>
+                    <small>有效期至 {formatConnectedAt(wecomBotAuthorization.expiresAt)}</small>
+                    <a href={wecomBotAuthorization.pageUrl} target="_blank" rel="noreferrer">
+                      在新窗口打开 <ExternalLink size={13} />
+                    </a>
+                  </div>
+                </div>
+              ) : (
+                <div className="wecom-bot-authorization__error" role="alert">
+                  <AlertCircle size={17} />
+                  <span>{wecomBotAuthorization.message}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="account-wecom-qr-modal__footer">
+              {wecomBotAuthorization.status === "error" ? (
+                <button className="button button--primary" type="button" onClick={startWeComBotAuthorization}>
+                  <QrCode size={15} />
+                  重新生成
+                </button>
+              ) : null}
+              <button className="button button--secondary" type="button" onClick={closeWeComBotAuthorization}>取消</button>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
     </>
   );
 }
 
+export function connectionAccessLabel(connection: EmployeeAvailableConnection) {
+  if (connection.accessMode === "account_bound") return "个人授权";
+  return connection.authorizationSources.includes("wecom_visibility") ? "企微可见范围" : "企业共享授权";
+}
+
+export function isDisconnectablePersonalWeComBot(connection: EmployeeAvailableConnection) {
+  return connection.service === "wecom_bot"
+    && connection.accessMode === "account_bound"
+    && connection.authorizationSources.includes("personal");
+}
+
+export function connectionDetailPresentation(
+  connection: EmployeeAvailableConnection,
+  index: number,
+  total: number,
+  integrationId?: string,
+) {
+  const multipleWeComBots = integrationId === "wecom" && connection.service === "wecom_bot" && total > 1;
+  return {
+    eyebrow: multipleWeComBots
+      ? `企业微信机器人 ${index + 1}/${total}`
+      : connection.serviceDisplayName,
+    title: connection.displayName,
+  };
+}
+
+export function AccountConnectionActionList({
+  connection,
+  collapsible,
+}: {
+  connection: EmployeeAvailableConnection;
+  collapsible: boolean;
+}) {
+  const actionList = (
+    <div className="gateway-mcp-tool-list account-connection-action-list">
+      {connection.actions.map((action, actionIndex) => (
+        <article key={action.id}>
+          <span>{String(actionIndex + 1).padStart(2, "0")}</span>
+          <div>
+            <strong>{action.name}</strong>
+            <code>{action.id}</code>
+            <p>{action.description || "此 Action 暂无补充说明。"}</p>
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+
+  if (!collapsible) return actionList;
+  return (
+    <details className="account-connection-actions">
+      <summary>
+        <span>Action 授权</span>
+        <span>{connection.actions.length} 个 <ChevronDown size={15} /></span>
+      </summary>
+      {actionList}
+    </details>
+  );
+}
+
+export function connectionsForIntegration(snapshot: EmployeeIntegrationsSnapshot, integrationId: string) {
+  if (integrationId === "wecom") {
+    return snapshot.availableConnections.filter((connection) => connection.service === "wecom_bot");
+  }
+  const binding = snapshot.applications.find((application) => application.id === integrationId)?.binding;
+  if (!binding || binding.status !== "connected") return [];
+  return snapshot.availableConnections.filter((connection) => (
+    connection.service === binding.service && connection.connectionName === binding.connectionName
+  ));
+}
+
 export function WeComIdentityCard({
   linked,
-  automaticBotCount,
+  availableConnectionCount,
   busy,
+  onOpen,
   onDisconnect,
 }: {
   linked: boolean;
-  automaticBotCount: number;
+  availableConnectionCount: number;
   busy: boolean;
+  onOpen: () => void;
   onDisconnect: () => void;
 }) {
   return (
     <article className={`account-integration-card${linked ? " is-connected" : ""}`} aria-label="企业微信身份">
+      <button className="account-integration-card__open" type="button" onClick={onOpen} aria-label="查看企业微信身份的可用权限" />
       <header className="account-integration-card__header">
         <span className="account-integration-card__icon integration-icon--wecom"><Building2 size={20} /></span>
         <div>
@@ -389,7 +977,7 @@ export function WeComIdentityCard({
           {linked ? (
             <>
               <strong>企业身份已关联</strong>
-              <small>{automaticBotCount > 0 ? `${automaticBotCount} 个企业共享机器人按可见范围提供` : "当前没有可用的企业共享机器人"}</small>
+              <small>{availableConnectionCount > 0 ? `${availableConnectionCount} 个可用机器人连接` : "当前没有可用的机器人连接"}</small>
             </>
           ) : (
             <>
@@ -424,12 +1012,14 @@ function AccountIntegrationCard({
   application,
   busy,
   action,
+  onOpen,
   onAuthorize,
   onDisconnect,
 }: {
   application: EmployeeIntegrationApplication;
   busy: boolean;
   action?: RequestState["action"];
+  onOpen: () => void;
   onAuthorize: () => void;
   onDisconnect: () => void;
 }) {
@@ -446,6 +1036,7 @@ function AccountIntegrationCard({
 
   return (
     <article className={`account-integration-card${connected ? " is-connected" : ""}`}>
+      <button className="account-integration-card__open" type="button" onClick={onOpen} aria-label={`查看${application.name}的可用权限`} />
       <header className="account-integration-card__header">
         <span className={`account-integration-card__icon integration-icon--${application.platform}`}><Icon size={20} /></span>
         <div>

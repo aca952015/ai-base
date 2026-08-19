@@ -12,6 +12,7 @@ import (
 const maxMCPRequestBody = 2 << 20
 
 var protectedOpenConnectorTools = map[string]struct{}{
+	"apps":        {},
 	"execute":     {},
 	"guide":       {},
 	"connections": {},
@@ -74,7 +75,7 @@ func (g *mcpGateway) filterSingleConnectorCall(
 		return mcpRequestFilterResult{body: original}
 	}
 
-	if tool == "connections" {
+	if tool == "apps" || tool == "connections" {
 		bindings, err := g.resolver.list(ctx, caller)
 		if err != nil {
 			toolErr := resolverToolError(err)
@@ -82,6 +83,13 @@ func (g *mcpGateway) filterSingleConnectorCall(
 			return mcpRequestFilterResult{
 				handled:       true,
 				localResponse: connectorToolErrorResponse(request["id"], toolErr),
+			}
+		}
+		if tool == "apps" {
+			query, _ := arguments["query"].(string)
+			return mcpRequestFilterResult{
+				handled:       true,
+				localResponse: connectorAppsResponse(request["id"], bindings, query),
 			}
 		}
 		if service, _ := arguments["service"].(string); strings.TrimSpace(service) != "" {
@@ -189,6 +197,64 @@ func (g *mcpGateway) filterSingleConnectorCall(
 	return mcpRequestFilterResult{body: updated}
 }
 
+func connectorAppsResponse(id any, bindings []connectorBinding, query string) map[string]any {
+	type appSummary struct {
+		service         string
+		connectionCount int
+		displayNames    []string
+		accessModes     []string
+	}
+
+	normalizedQuery := strings.ToLower(strings.TrimSpace(query))
+	appsByService := make(map[string]*appSummary)
+	services := make([]string, 0)
+	for _, binding := range bindings {
+		searchable := strings.ToLower(strings.Join([]string{
+			binding.Service,
+			binding.DisplayName,
+			binding.AuthType,
+			binding.AccessMode,
+		}, " "))
+		if normalizedQuery != "" && !strings.Contains(searchable, normalizedQuery) {
+			continue
+		}
+		app := appsByService[binding.Service]
+		if app == nil {
+			app = &appSummary{service: binding.Service}
+			appsByService[binding.Service] = app
+			services = append(services, binding.Service)
+		}
+		app.connectionCount++
+		if binding.DisplayName != "" && !containsString(app.displayNames, binding.DisplayName) {
+			app.displayNames = append(app.displayNames, binding.DisplayName)
+		}
+		if binding.AccessMode != "" && !containsString(app.accessModes, binding.AccessMode) {
+			app.accessModes = append(app.accessModes, binding.AccessMode)
+		}
+	}
+
+	apps := make([]map[string]any, 0, len(services))
+	for _, service := range services {
+		app := appsByService[service]
+		entry := map[string]any{
+			"service":                     app.service,
+			"connectionCount":             app.connectionCount,
+			"requiresConnectionSelection": app.connectionCount > 1,
+		}
+		if len(app.displayNames) > 0 {
+			entry["connectionDisplayNames"] = app.displayNames
+		}
+		if len(app.accessModes) > 0 {
+			entry["accessModes"] = app.accessModes
+		}
+		apps = append(apps, entry)
+	}
+	return connectorToolResponse(id, map[string]any{
+		"ok":   true,
+		"data": apps,
+	}, false)
+}
+
 func recordProtectedBatchDecisions(ctx context.Context, batch []any, caller identity) {
 	for _, item := range batch {
 		request, ok := item.(map[string]any)
@@ -265,6 +331,7 @@ func normalizedOpenConnectorTool(name string) string {
 	if prefix != "open-connector" && !strings.HasSuffix(prefix, "mcp-open-connector") {
 		return ""
 	}
+	tool = publicConnectorToolName(tool)
 	if _, ok := protectedOpenConnectorTools[tool]; ok {
 		return tool
 	}

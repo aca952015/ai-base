@@ -24,6 +24,8 @@ import { createPortal } from "react-dom";
 import {
   connectorActionIsAuthorized,
   connectorAuthLabels,
+  connectorConnectionMatchesView,
+  nextConnectorActionSelection,
   type ConnectorAccessMode,
   type ConnectorAuthDefinition,
   type ConnectorAuthType,
@@ -35,6 +37,7 @@ import {
   type ConnectorProviderDetail,
   type ConnectorProviderSummary,
   type ConnectorProvidersPage,
+  type ConnectorManagerView,
 } from "@/lib/control-plane/connectors";
 import type {
   SharedConnectorAccessSnapshot,
@@ -241,11 +244,13 @@ export function ConnectorManager({
   initialProviders,
   initialConnectionProviders,
   initialError,
+  view = "all",
 }: {
   initialConnections: ConnectorConnection[];
   initialProviders: ConnectorProvidersPage;
   initialConnectionProviders: ConnectorProviderSummary[];
   initialError?: string;
+  view?: ConnectorManagerView;
 }) {
   const [connections, setConnections] = useState(initialConnections);
   const [providerPage, setProviderPage] = useState(initialProviders);
@@ -272,21 +277,25 @@ export function ConnectorManager({
     () => new Map(knownProviders.map((provider) => [provider.service, provider])),
     [knownProviders],
   );
+  const visibleConnections = useMemo(
+    () => connections.filter((connection) => connectorConnectionMatchesView(connection, view)),
+    [connections, view],
+  );
   const accountBoundConnections = useMemo(
-    () => connections.filter((connection) => connection.accessMode === "account_bound"),
-    [connections],
+    () => visibleConnections.filter((connection) => connection.accessMode === "account_bound"),
+    [visibleConnections],
   );
   const noAuthConnections = useMemo(
-    () => connections.filter((connection) => connection.accessMode === "no_auth"),
-    [connections],
+    () => visibleConnections.filter((connection) => connection.accessMode === "no_auth"),
+    [visibleConnections],
   );
   const globalConnections = useMemo(
-    () => connections.filter((connection) => connection.accessMode === "global"),
-    [connections],
+    () => visibleConnections.filter((connection) => connection.accessMode === "global"),
+    [visibleConnections],
   );
   const controlledSharedConnections = useMemo(
-    () => connections.filter((connection) => connection.accessMode === "controlled_shared"),
-    [connections],
+    () => visibleConnections.filter((connection) => connection.accessMode === "controlled_shared"),
+    [visibleConnections],
   );
   const detailActions = details?.provider?.actions ?? [];
   const authorizedDetailActions = details
@@ -787,6 +796,17 @@ export function ConnectorManager({
     patchEditor({ sharedActionIds: Array.from(selected) });
   }
 
+  function toggleAllEditorSharedActions() {
+    if (!editor?.provider) return;
+    patchEditor({
+      sharedActionIds: nextConnectorActionSelection(
+        editor.provider.actions.map((action) => action.id),
+        editor.hardDeniedActionIds,
+        editor.sharedActionIds,
+      ),
+    });
+  }
+
   async function saveSharedAccess() {
     if (!accessEditor?.provider) return;
     const weComVisibility = accessEditor.connection.service === "wecom_bot";
@@ -869,14 +889,26 @@ export function ConnectorManager({
   const selectedFields = connectionFields(selectedAuth);
   const oauthFields = selectedAuth?.type === "oauth2" ? selectedAuth.clientConfigFields : [];
   const sharedAccessActions = accessEditor?.provider?.actions || [];
+  const editorSelectableActionIds = editor?.provider?.actions
+    .map((action) => action.id)
+    .filter((actionId) => !editor.hardDeniedActionIds.includes(actionId)) || [];
+  const editorAllActionsSelected = editorSelectableActionIds.length > 0
+    && editorSelectableActionIds.every((actionId) => editor?.sharedActionIds.includes(actionId));
+  const showManagedConnections = view === "all" || view === "managed";
+  const showUserConnections = view === "all" || view === "user-connections";
+  const showNoAuthConnections = view === "all" || view === "no-auth";
 
   return (
     <>
-      <nav className="connector-access-filter" aria-label="连接器使用范围筛选">
-        {([
+      {view === "all" || view === "managed" ? <nav className="connector-access-filter" aria-label="连接器使用范围筛选">
+        {(view === "managed" ? [
+          ["all", "全部", visibleConnections.length],
+          ["controlled_shared", "受控共享", controlledSharedConnections.length],
+          ["global", "全局使用", globalConnections.length],
+        ] as const : [
           ["all", "全部", connections.length],
           ["no_auth", "无需认证", noAuthConnections.length],
-          ["account_bound", "用户绑定", accountBoundConnections.length],
+          ["account_bound", "用户连接", accountBoundConnections.length],
           ["controlled_shared", "受控共享", controlledSharedConnections.length],
           ["global", "全局使用", globalConnections.length],
         ] as const).map(([value, label, count]) => (
@@ -890,11 +922,11 @@ export function ConnectorManager({
             {label}<span>({count})</span>
           </button>
         ))}
-      </nav>
+      </nav> : null}
 
       {message ? <p className={`gateway-channel-message${state === "error" ? " is-error" : ""}`} aria-live="polite">{state === "saved" ? <CheckCircle2 size={15} /> : null}{message}</p> : null}
 
-      {accessFilter === "all" || accessFilter === "no_auth" ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-no-auth-title">
+      {showNoAuthConnections && (view === "no-auth" || accessFilter === "all" || accessFilter === "no_auth") ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-no-auth-title">
         <header className="portal-group__header">
           <div>
             <h2 id="connector-no-auth-title">无需认证</h2>
@@ -925,11 +957,11 @@ export function ConnectorManager({
         </div>
       </section> : null}
 
-      {accessFilter === "all" || accessFilter === "account_bound" ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-account-bound-title">
+      {showUserConnections && (view === "user-connections" || accessFilter === "all" || accessFilter === "account_bound") ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-account-bound-title">
         <header className="portal-group__header">
           <div>
-            <h2 id="connector-account-bound-title">用户绑定</h2>
-            <p>由员工完成个人账号授权，仅对绑定身份开放。</p>
+            <h2 id="connector-account-bound-title">用户连接</h2>
+            <p>由员工完成个人账号授权，仅对对应的平台身份开放。</p>
           </div>
           <span className="gateway-channel-state is-managed">{accountBoundConnections.length} 个 Connector</span>
         </header>
@@ -949,14 +981,14 @@ export function ConnectorManager({
           {accountBoundConnections.length === 0 ? (
             <div className="connector-empty-group">
               <UserRound size={20} />
-              <strong>暂无用户绑定的 Connector</strong>
-              <span>员工完成账号绑定后会自动显示在这里。</span>
+              <strong>暂无用户连接</strong>
+              <span>员工完成个人账号授权后会自动显示在这里。</span>
             </div>
           ) : null}
         </div>
       </section> : null}
 
-      {accessFilter === "all" || accessFilter === "controlled_shared" ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-controlled-shared-title">
+      {showManagedConnections && (accessFilter === "all" || accessFilter === "controlled_shared") ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-controlled-shared-title">
         <header className="portal-group__header">
           <div>
             <h2 id="connector-controlled-shared-title">受控共享</h2>
@@ -987,7 +1019,7 @@ export function ConnectorManager({
         </div>
       </section> : null}
 
-      {accessFilter === "all" || accessFilter === "global" ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-global-title">
+      {showManagedConnections && (accessFilter === "all" || accessFilter === "global") ? <section className="portal-group gateway-resource-section" aria-labelledby="connector-global-title">
         <header className="portal-group__header">
           <div>
             <h2 id="connector-global-title">全局使用</h2>
@@ -1225,7 +1257,20 @@ export function ConnectorManager({
 
                   {editor.provider.service === "wecom_bot" ? (
                     <section className="resource-detail-section">
-                      <div className="resource-detail-section__header"><strong>企业共享策略</strong><span>{editor.sharedActionIds.length} 个 Action</span></div>
+                      <div className="resource-detail-section__header">
+                        <strong>企业共享策略</strong>
+                        <div className="connector-action-selection-summary">
+                          <span>{editor.sharedActionIds.length}/{editorSelectableActionIds.length} 已选择</span>
+                          <button
+                            className="button button--secondary"
+                            type="button"
+                            onClick={toggleAllEditorSharedActions}
+                            disabled={state === "saving" || editorSelectableActionIds.length === 0}
+                          >
+                            {editorAllActionsSelected ? "取消全选" : "全选 Action"}
+                          </button>
+                        </div>
+                      </div>
                       <div className="connector-auth-note"><ShieldCheck size={16} /><div><strong>按企微身份自动筛选</strong><p>机器人作为企业共享连接维护，不创建员工绑定。MCP 仅向通过企微认证且位于机器人 get_userlist 可见范围内的员工展示此连接。</p></div></div>
                       <div className="connector-shared-action-list">
                         {editor.provider.actions.map((action) => {

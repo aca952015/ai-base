@@ -1,7 +1,7 @@
 # AI Base 基础架构
 
 - Status: Active
-- Last refreshed: 2026-08-18
+- Last refreshed: 2026-08-19
 - Scope: 项目结构、运行组件、入口路由、信任边界、数据所有权和变更落点
 
 本文档是 AI Base 结构与架构的统一事实源。运行命令、环境变量和操作流程见 [`README.md`](./README.md)，Console 体验见 [`DESIGN.md`](./DESIGN.md)，可观测字段见 [`docs/observability-schema.md`](./docs/observability-schema.md)。`.omx/plans` 仅表示提案。
@@ -104,7 +104,7 @@ Prometheus、OTLP、PostgreSQL 及各服务原生管理端口只在 Compose 网�
 - 每次请求验证 Access Token 的 issuer、audience、有效期和 scope；Refresh Token 仅以哈希持久化并支持撤销和滑动续期。
 - 外部 MCP Session 由 Gateway 签名并绑定 `issuer + subject + client_id`，不能跨员工复用；内部 Envoy Session 不直接暴露。
 - Envoy 内部工具名保持 `mcp-open-connector__*` 和 `mcp-rag__*`。Gateway 仅在 `tools/list`/`tools/call` 边界映射为 `connector__*` 和 `kb__*`，不改写参数、结果、其他上游或 Envoy 配置。
-- Gateway 对 Connector 元工具重新解析员工连接和 Action，覆盖客户端连接名；无授权、歧义或解析服务失败时拒绝。
+- Gateway 的 `connector__apps` 与 `connector__connections` 均从当前 `issuer + subject` 实时生成，只展示该员工的个人、受控共享和免认证连接；Action 查询必须先以这里返回的 service 限定范围。执行时再次解析员工连接并覆盖客户端连接名；无授权、歧义或解析服务失败时拒绝。
 - 员工 Access Token、Cookie 和浏览器身份头在进入 Envoy 前移除；公网 TraceContext 被清除后建立新的平台 Trace。
 
 ### Connector 与共享连接
@@ -114,6 +114,8 @@ Prometheus、OTLP、PostgreSQL 及各服务原生管理端口只在 Compose 网�
 - `no_auth`、`account_bound`、`controlled_shared` 和 `global` 分别处理。需要凭据的 Provider 不得使用共享 `default`。
 - `controlled_shared` 必须同时通过员工/群组、连接、Action 和资源约束；动态入口 `wecom_bot.call_tool` 固定拒绝。
 - 企微机器人通过可信 CorpID/UserID 摘要和 `get_userlist` 校验可见性；查询失败、身份域不匹配或缓存过期时不可见。只有管理员显式加入白名单的静态 Action 才可调用。
+- 已完成企微身份绑定的员工也可在账号页发起官方机器人扫码：Console 创建五分钟会话并轮询企业微信结果，取得 Bot ID/Secret 后先以二维码来源完成企业微信 `get_cli_config` 鉴权引导，再仅在服务端写入 Open Connector；随后以有限重试的 `get_userlist` 等待权限传播，按已认证 UserID 精确定位当前成员并确认其位于机器人可使用成员中。个人连接默认显示为“绑定成员姓名绑定的企微机器人 · 连接短标识”，员工可修改显示名；稳定 `connection_name` 和凭据不随改名变化。员工也可逐连接解绑；服务端必须校验当前稳定主体是该个人连接所有者。PostgreSQL 只保存员工主体、具名连接、显示名、Bot ID 指纹和服务端发现出的只读 Action 白名单，扫码完成或过期即清除临时会话码。
+- 管理员维护的企微机器人仍是 `controlled_shared`，员工扫码创建的机器人是 `account_bound`，两者不互相降级。同一员工可拥有多个个人机器人；调用未指定连接且存在多个候选时，Gateway 返回 `connector_selection_required`，指定连接后仍逐 Action 校验。
 - 管理 UI 经 Pomerium 后由内部代理注入 Admin Token；Runtime/Admin Token 不进入 Prompt、Trace 或浏览器响应。
 
 ### 企业微信身份绑定与自动恢复
@@ -144,7 +146,7 @@ Prometheus、OTLP、PostgreSQL 及各服务原生管理端口只在 Compose 网�
 | 已绑定企微 Console 会话 | AI Console + PostgreSQL 身份映射 | 12 小时签名 Cookie；每次请求重查绑定；只适用于 Console 域名 |
 | MCP Token/Session | MCP Access Gateway | Refresh Token 只存哈希；外部 Session 绑定员工和客户端 |
 | 模型 Provider Key | AI Console 服务端配置 | 以文件进入 Envoy 生成流程，不写入路由 YAML 或浏览器响应 |
-| SaaS 凭据和个人 OAuth Token | Open Connector | 使用其静态加密键保存 |
+| SaaS 凭据、个人 OAuth Token 和企微个人机器人凭据 | Open Connector | 使用其静态加密键保存；企微 Bot Secret 不写入 Console 数据库或浏览器响应 |
 | 员工连接和共享授权 | AI Console + PostgreSQL | Gateway 每次调用重新解析，异常关闭失败 |
 | 企业微信认证 Secret | AI Console + PostgreSQL | 单例配置，AES-256-GCM 加密；Relay 仅短期使用 |
 | 企业微信员工映射 | AI Console + PostgreSQL | 只保存派生 Subject 和 CorpID/UserID 哈希 |
