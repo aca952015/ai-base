@@ -167,7 +167,15 @@ export type EmployeeAvailableConnection = {
   displayName: string;
   accessMode: "account_bound" | "controlled_shared";
   authorizationSources: Array<"personal" | "manual" | "wecom_visibility">;
+  wecomOrganizationIds?: string[];
   actions: EmployeeAvailableConnectionAction[];
+};
+
+export type EmployeeWeComOrganization = {
+  id: string;
+  organizationName: string;
+  active: boolean;
+  configured: boolean;
 };
 
 export type EmployeeIntegrationsSnapshot = {
@@ -184,6 +192,7 @@ export type EmployeeIntegrationsSnapshot = {
       linkedAt: string;
     }>;
   };
+  wecomOrganizations: EmployeeWeComOrganization[];
   applications: EmployeeIntegrationApplication[];
   availableConnections: EmployeeAvailableConnection[];
   automaticWeComBotCount: number;

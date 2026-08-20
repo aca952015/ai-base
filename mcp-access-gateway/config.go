@@ -13,6 +13,7 @@ type config struct {
 	upstreamURL               *url.URL
 	connectorResolverURL      *url.URL
 	connectorResolverToken    string
+	customMCPServersPath      string
 	resourceURL               string
 	metadataURL               string
 	issuer                    string
@@ -136,6 +137,7 @@ func loadConfig() (config, error) {
 		upstreamURL:               upstream,
 		connectorResolverURL:      connectorResolver,
 		connectorResolverToken:    connectorResolverToken,
+		customMCPServersPath:      strings.TrimSpace(envOrDefault("MCP_CUSTOM_SERVERS_PATH", "/control/llm-gateway-mcp-servers.json")),
 		resourceURL:               resourceURL,
 		metadataURL:               metadata.String(),
 		issuer:                    issuer,

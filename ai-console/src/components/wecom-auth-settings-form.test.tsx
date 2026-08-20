@@ -10,14 +10,12 @@ describe("WeCom authentication organization management", () => {
       initialSnapshot: {
         organizations: [{
           id: "organization-id",
-          organizationName: "蓝卓总部",
+          organizationName: "示例组织",
           corpId: "ww1234567890",
-          relayCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom",
+          relayCallbackUrl: "https://tn1.cofly-ai.cn/callbacks/wecom",
           active: true,
           configured: true,
-          secretConfigured: true,
-          effectiveCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom",
-          applicationHomepageUrl: "https://ai-console.example/auth/wework?organization=organization-id",
+          applicationHomepageUrl: "https://tn1.cofly-ai.cn/launch/wecom",
           updatedAt: "2026-08-19T00:00:00.000Z",
         }],
         configuredCount: 1,
@@ -27,8 +25,9 @@ describe("WeCom authentication organization management", () => {
 
     expect(html).toContain("integration-application-grid");
     expect(html).toContain("wecom-organization-card");
-    expect(html).toContain("蓝卓总部");
+    expect(html).toContain("示例组织");
     expect(html).toContain("增加认证组织");
+    expect(html).not.toContain("organization=organization-id");
     expect(html).not.toContain("settings-subpage-list");
     expect(html).not.toContain('role="dialog"');
   });

@@ -18,7 +18,7 @@ const MAX_NOTES_LENGTH = 2_000;
 export const DEFAULT_WECOM_AUTHENTICATION_RUNTIME_SETTINGS: LegacyWeComAuthenticationRuntimeSettings = {
   publicBaseUrl: "http://127.0.0.1:8080/wecom-oidc",
   callbackMode: "direct",
-  emailDomain: "bluetron.cn",
+  emailDomain: "example.com",
 };
 
 type JsonObject = Record<string, unknown>;

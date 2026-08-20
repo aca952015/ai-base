@@ -3,9 +3,9 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-08-19
+- Last refreshed: 2026-08-20
 - Primary product surfaces: AI 基础设施总览、组件门户、Agent 管理、账号绑定、配置指南、模型配置、MCP配置、集成管理、连接器配置、能力管理、数据与知识、评测、可观测、认证管理、系统设置及组件二级设置
-- Evidence reviewed: `/Users/aca/dev/ai-fde/.omx/plans/sme-agent-infrastructure-v0.1.md`、`.omx/plans/model-mcp-observability-expansion.md`、`docs/observability-schema.md`、`ai-console/src/app/(console)`、`ai-console/src/components`、`ai-console/src/lib/server/observability.ts`、`vendor/open-connector/src/providers/wecom_bot`、Envoy AI Gateway 1.0 standalone 配置契约、用户确认的 Next.js 技术栈与工具链边界
+- Evidence reviewed: `/Users/aca/dev/ai-fde/.omx/plans/sme-agent-infrastructure-v0.1.md`、`.omx/plans/model-mcp-observability-expansion.md`、`ARCHITECTURE.md`、`docs/observability-schema.md`、`ai-console/src/app/(console)`、`ai-console/src/app/auth/wework/route.ts`、`ai-console/src/components`、`ai-console/src/lib/server/wecom-relay.ts`、`ai-console/src/lib/server/observability.ts`、`../ai-auth-relay/internal/relay/handler.go`、`vendor/open-connector/src/providers/wecom_bot`、Envoy AI Gateway 1.0 standalone 配置契约、用户确认的 Next.js 技术栈与工具链边界
 
 ## Brand
 
@@ -28,7 +28,7 @@
 ## Information architecture
 
 - Primary navigation: “工作台”组包含总览、组件门户、Agent、能力、数据、评测、可观测、认证；与其同级的“设置”组包含模型配置、MCP配置、集成管理、连接器配置、账号绑定、配置指南和系统设置；普通员工仅显示账号绑定与配置指南
-- Core routes/screens: `/`、`/components`、`/agents`、`/account`、`/client-setup`、`/capabilities`、`/data`、`/evaluations`、`/observability`、`/authentication`、`/model-channels`、`/mcp`、`/integrations`、`/integrations/wecom-authentication`、`/integrations/feishu`、`/integrations/dingtalk`、`/connectors`、`/connectors/user-connections`、`/connectors/no-auth`、`/settings`、`/settings/lightrag`；`/auth/wework` 与 `/auth/wework/complete` 是不进入导航的企微身份绑定事务入口
+- Core routes/screens: `/`、`/components`、`/agents`、`/account`、`/client-setup`、`/capabilities`、`/data`、`/evaluations`、`/observability`、`/authentication`、`/model-channels`、`/mcp`、`/integrations`、`/integrations/wecom-authentication`、`/integrations/feishu`、`/integrations/dingtalk`、`/connectors`、`/connectors/user-connections`、`/connectors/no-auth`、`/settings`、`/settings/lightrag`；`/auth/wework/launch/<ticket>` 是不进入导航的企微身份结果事务入口
 - Content hierarchy: 待处理事项 > 常用组件入口 > 核心运行指标 > Agent 运行矩阵 > 依赖与服务状态 > 近期变化 > 快捷操作
 
 ## Design principles
@@ -38,6 +38,7 @@
 - Principle 3: 状态可解释。“未配置”“离线”“异常”“健康”分别表达，不能都显示为红色。
 - Principle 4: Portal 负责导航与治理，专业组件负责深度操作。所有外部工作台以明确的新窗口动作打开，内部管理语义留在 ai-console。
 - Principle 5: 数据诚实。组件未配置、未产生结果或能力尚未落地时显示真实空状态，不使用演示通过率、成本、切片或告警填补界面；配置页仅在数据能辅助决策时使用顶部摘要，若内容只是重复表单当前值则省略，避免重复展示同一数据和低决策价值说明。
+- Principle 6: 公网中继先完成企业微信 OAuth 和身份交换，再把一次性结果票据追加到环境变量固定配置的本机 Console `/auth/wework/launch/<ticket>` 路径；Console GET 路由按 Relay 固定回调地址解析组织并通过服务端一次性消费身份结果。Relay 不探测、不回连本机网络，也不接受浏览器选择本地目标；浏览器不执行过渡页、脚本清理或表单 POST，未配置时基础入口使用 `https://ai-console.localhost.pomerium.io:8443/auth/wework`。
 - Tradeoffs: 首版用紧凑表格和清晰分区承载高信息密度；减少复杂实时图表和动画；不以 iframe 嵌入完整专业工作台，企业微信官方的单用途扫码页可在受限 sandbox 中展示并同时提供新窗口入口。
 
 ## Visual language
@@ -52,9 +53,10 @@
 ## Components
 
 - Existing components to reuse: AppShell、PageHeader、SectionCard、StatusPill、ServiceTable、Button 和全局语义 token
-- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager、IntegrationManager、ConnectorManager、AccountIntegrationManager、McpClientSetupGuide、LightRagSettingsForm、WeComAuthSettingsForm、ObservabilitySummary、ObservabilityCallsTable、TraceDetail；账号绑定页保留当前平台身份条，企微身份卡片显示已绑定组织数与可用连接数，右侧抽屉逐组织列出身份并提供独立解绑，同时汇总当前员工可见的企微共享/个人连接及服务端解析后的 Actions；个人企微机器人允许修改显示名，其他连接明细保持只读；点击飞书等应用卡片时只展示该应用个人绑定所对应的连接和 Actions；没有关联连接时抽屉展示真实空状态，公开连接不进入这些身份授权详情，不展示 CorpID、UserID、OIDC Subject、内部策略 ID 或其他低决策价值摘要；连接器配置首页只管理受控共享和全局连接，并用与 LightRAG 设置一致的目录行分别进入 `/connectors/user-connections` 与 `/connectors/no-auth`；用户连接二级页只读展示员工个人授权建立的命名连接及其 Actions，无需认证二级页只读展示 OpenConnector 提供的公共连接及其 Actions，两类连接均不在管理员连接列表中混排；ComponentPortal 的资源卡片是全局唯一卡片视觉基准，分组容器、摘要/指标、资源列表、可操作设置和抽屉内工具卡片统一复用其石墨渐变卡面、细冷灰边框、14px 圆角、轻微内高光与克制阴影 token，仅按信息密度调整尺寸和内边距；模型、MCP、集成和连接器管理区沿用组件门户的“分组标题 + 直接卡片网格”结构，不再用 SectionCard 包裹整个资源列表；可观测页按模型/MCP 分区展示固定指标与最多 50 条安全诊断样本，15m/1h/24h/7d 只影响规范摘要，Trace 搜索最多 24 小时并明确截断；Trace 详情只展示白名单时间线，完整 waterfall 通过受 Pomerium 管理员保护的 HTTPS Jaeger 新窗口打开；模型错误率或 TTFT 未被 probe 证明时显示“不可用”，不以估算值或 Trace 数补齐；其余资源与管理交互继续遵守现有组件和抽屉约定
+- New/changed components: ComponentPortal、PortalSummary、PortalCard、GatewayChannelManager、GatewayMcpManager、IntegrationManager、ConnectorManager、AccountIntegrationManager、McpClientSetupGuide、LightRagSettingsForm、WeComAuthSettingsForm、ObservabilitySummary、ObservabilityCallsTable、TraceDetail；账号绑定页保留当前平台身份条，并为系统集成中的每个企微认证组织显示一张独立绑定卡片，分别呈现已绑定、未绑定、停用或配置不可用状态；点击卡片后的右侧抽屉只操作该组织的身份关系，解绑不影响其他组织，同时展示当前员工在该组织下可见的企微共享连接、账号级个人连接及服务端解析后的 Actions；个人企微机器人允许修改显示名，其他连接明细保持只读；点击飞书等应用卡片时只展示该应用个人绑定所对应的连接和 Actions；没有关联连接时抽屉展示真实空状态，公开连接不进入这些身份授权详情，不展示 CorpID、UserID、OIDC Subject、内部策略 ID 或其他低决策价值摘要；连接器配置首页只管理受控共享和全局连接，并用与 LightRAG 设置一致的目录行分别进入 `/connectors/user-connections` 与 `/connectors/no-auth`；用户连接二级页只读展示员工个人授权建立的命名连接及其 Actions，无需认证二级页只读展示 OpenConnector 提供的公共连接及其 Actions，两类连接均不在管理员连接列表中混排；ComponentPortal 的资源卡片是全局唯一卡片视觉基准，分组容器、摘要/指标、资源列表、可操作设置和抽屉内工具卡片统一复用其石墨渐变卡面、细冷灰边框、14px 圆角、轻微内高光与克制阴影 token，仅按信息密度调整尺寸和内边距；模型、MCP、集成和连接器管理区沿用组件门户的“分组标题 + 直接卡片网格”结构，不再用 SectionCard 包裹整个资源列表；可观测页按模型/MCP 分区展示固定指标与最多 50 条安全诊断样本，15m/1h/24h/7d 只影响规范摘要，Trace 搜索最多 24 小时并明确截断；Trace 详情只展示白名单时间线，完整 waterfall 通过受 Pomerium 管理员保护的 HTTPS Jaeger 新窗口打开；模型错误率或 TTFT 未被 probe 证明时显示“不可用”，不以估算值或 Trace 数补齐；其余资源与管理交互继续遵守现有组件和抽屉约定
 - Account integration detail grouping: 企业微信身份对应多个 Bot 时，每个 Bot 使用独立权限卡片，并同时显示“企业微信机器人 1/N”、管理员配置的 Bot 名称和唯一连接名称；Action 只在所属 Bot 卡片中展示，不跨 Bot 混排，并在每张 Bot 卡片内默认收起，用户点击“Action 授权”后展开。
 - WeCom personal bot scan: 仅已完成企微身份认证的账号在企微权限抽屉底部左侧显示“创建机器人”；点击后使用独立弹窗展示五分钟有效的企业微信官方二维码，并提供等待、过期、失败重试和新窗口打开状态。扫码结果由服务端直接写入 Open Connector，浏览器不接收 Bot ID/Secret；只有机器人可使用成员包含当前企微身份且通讯录读取校验成功时才显示成功。个人机器人只自动授予服务端实际发现的只读 Action，写入、删除和动态 `call_tool` 不自动开放。
+- WeCom Relay handoff: 企业微信应用首页可填写对应 Relay Origin，根路径无参数跳转到规范 `/launch/wecom`；也可直接填写该规范路径。Relay 完成 OAuth 和 `getuserinfo` 后用 303 导航到固定本机 `/auth/wework/launch/<ticket>`，加密结果票据只短暂放在 HTTPS path 中；Console GET 路由处理完成后立即 303 到账号页、首次绑定页或状态页，不渲染中间页面。响应禁用缓存与 Referer，部署入口不得记录完整票据路径；全程不展示组织、票据、凭据或内部路由细节。
 - Integration directory: `/integrations` 只显示企业微信、飞书、钉钉三条带真实状态的目录入口；飞书与钉钉分别在 `/integrations/feishu`、`/integrations/dingtalk` 复用平台过滤后的 `IntegrationManager`，保存或重新加载后不得串入另一个平台的应用卡片。
 - AppShell sidebar behavior: 参考 Codex App 使用固定品牌区、独立滚动导航区和固定账号区；导航区使用低对比度细滚动条并与主内容滚动完全分离；固定账号区以“账号名 + 管理员/员工 Badge / 邮箱”两行呈现，账号菜单从底部向上展开为紧凑操作列表，账户信息、安全和费用在能力落地前以“即将开放”占位，设置遵守管理员权限，退出登录保持可用
 - Variants and states: default/hover/focus/disabled；healthy/degraded/offline/unconfigured/running
@@ -81,12 +83,12 @@
 - Error: 展示原因、影响和恢复动作，不只显示错误码
 - Success: 使用页面内 `aria-live` 消息确认保存、连通性测试、OAuth 授权和网关重载状态，并在页面中反映最新配置；新增或编辑模型渠道、MCP 服务时由抽屉保存动作直接写入并应用 Envoy AI，成功前保持为抽屉内草稿，不进入卡片列表或摘要统计；卡片上的启停直接应用，删除经确认后直接应用，不设置页面级二次保存按钮；Open Connector 连接在上游成功前保持为抽屉内草稿；模型同步从当前渠道配置读取可用模型并只回填抽屉草稿，不自动保存或发布
 - LightRAG apply: 保存前验证所选模型仍由启用渠道发布，并使用最小 Embedding 请求确认向量能力与维度；配置更新后等待 LightRAG 重新健康再显示成功，失败时回滚旧配置并保留表单内容
-- WeCom auth apply: 集成管理使用卡片网格展示认证组织，点击组织卡片或新增卡片后在标准右侧抽屉中维护组织名称、CorpID、可选的新 App Secret、固定 `/callbacks/wecom` 公网中继地址和启用状态；每个已保存组织在抽屉中展示可复制的独立企业微信应用首页。编辑时不回显 Secret，留空保留已加密值；仍有关联身份、登录事务或共享 Bot 的组织只能停用，不能删除。
-- WeCom identity link: 每个企业微信工作台应用首页携带服务端生成的组织 ID，公网中继完成一次性企微身份证明后，Console 只用事务所绑定组织验证 CorpID。已有具体绑定时直接进入对应平台用户，不显示“恢复身份”等过程性成功提示；未绑定时才进入 Pomerium/Dex 完成首次关联。同一平台账号可在多个组织各绑定一个身份，企微抽屉逐组织解绑；触发自动登录的绑定被解绑后对应会话立即失效，其他组织绑定不受影响。普通平台登录未收到 Relay 验证的企微身份时，账号页不提供主动绑定入口。取消、请求过期、身份冲突、企业不匹配和系统失败使用独立状态页；全程不展示授权 ID、加密结果、nonce、CorpID 或明文 UserID。
+- WeCom auth apply: 集成管理使用卡片网格展示认证组织，点击组织卡片或新增卡片后在标准右侧抽屉中维护组织名称、CorpID、唯一的固定 HTTPS `/callbacks/wecom` 公网中继地址和启用状态；App Secret 只由对应 Relay 的部署环境托管，Console 表单不接收也不显示 Secret 状态。每个已保存组织在抽屉中展示可复制的 Relay 固定 `/launch/wecom` 企业微信应用首页，并明确说明该入口不含内部组织 ID。Console 只声明“应配置的应用首页”，不能把本地保存误写成企业微信后台已经生效；实际生效仍以企业微信应用首页是否指向该 Relay 入口为准。仍有关联身份、登录事务或共享 Bot 的组织只能停用，不能删除。
+- WeCom identity link: 企业微信工作台应用首页不携带组织 ID；公网 Relay 先完成企业微信 OAuth 与身份交换，将身份结果保存在内存，再用短期 AEAD 结果票据声明自身固定回调地址和一次性结果 ID。票据只放入部署时固定的本机 Console `/auth/wework/launch/<ticket>` path，不使用查询参数或 Referer；Console 在 GET 路由中按回调地址唯一映射组织，并通过服务端请求同一 Relay 一次性消费结果。已有具体绑定时直接进入对应平台用户，不显示过程性成功提示；未绑定时才进入 Pomerium/Dex 完成首次关联。同一平台账号可在多个组织各绑定一个身份，账号绑定页按系统企微认证组织逐项展示绑定关系，每张组织卡片及其抽屉只解绑对应身份；触发自动登录的绑定被解绑后对应会话立即失效，其他组织绑定不受影响。普通平台登录未收到 Relay 验证的企微身份时，账号页不提供主动绑定入口。取消、请求过期、身份冲突、企业不匹配和系统失败使用独立状态页；全程不展示内部组织 ID、结果 ID、加密结果、nonce、CorpID 或明文 UserID。
 - WeCom bot Action policy: 连接器策略抽屉要求管理员选择 Bot 所属企微认证组织，并允许显式勾选只读 `wecom_bot.get_userlist`；可见性只使用同组织身份匹配，不跨组织复用 UserID 摘要。新增或编辑机器人连接时提供“全选/取消全选”，但只包含未被系统禁止的 Action；`call_tool` 与旧 Webhook 发送入口继续固定禁止。
 - WeCom personal bot states: 扫码弹窗独立管理焦点和 Escape，关闭弹窗或企微抽屉都会停止轮询并丢弃浏览器侧请求；二维码过期或扫码校验失败后保留明确原因和重新生成入口。成功后自动关闭弹窗并刷新原抽屉；服务端按已认证 UserID 取得当前成员姓名，默认显示为“姓名绑定的企微机器人 · 连接短标识”，不把可见成员误称为机器人所有者。个人连接卡片提供“改名”和“解绑”，改名只更新显示名，稳定连接标识与凭据保持不变；共享机器人不显示这些操作。
 - Disabled: 解释为什么不可操作；系统托管的 Open Connector 与企业知识库 RAG MCP 不提供启停、编辑和删除控件，仅保留连接测试和工具查看
-- Offline/slow network, if applicable: 健康检查超时后保留最后成功时间并标记“状态未知”
+- Offline/slow network, if applicable: 健康检查超时后保留最后成功时间并标记“状态未知”；结果票据或服务端消费失败时进入明确状态页并要求从企业微信工作台重新打开应用，本机 Console 不可达时不回退到公网共享 Console，也不允许浏览器提交替代目标。
 - Observability degradation: Metrics 或 Trace 单侧不可用时保留另一侧结果并使用 `aria-live` 说明影响；无诊断样本区分尚未产生、导出失败与筛选无结果；100% sampling 不写成零丢失承诺
 
 ## Content voice
@@ -101,7 +103,7 @@
 - Design-token constraints: token 集中在 `globals.css`；卡片必须使用 `--card-*` 语义 token，不在页面组件中复制阴影、边框或圆角值；不引入 Tailwind 或重量级 UI 套件
 - Performance constraints: 首屏不加载大型图表库；默认 Server Component，仅交互区域使用 Client Component
 - Compatibility constraints: Node.js 22；现代 Chrome、Edge、Firefox、Safari；Envoy AI Gateway 模型与 MCP 配置使用 v1beta1 原生资源并通过只读共享卷注入
-- Test/screenshot expectations: ESLint、TypeScript、Vitest、Next production build；桌面浏览器为主验证；`/observability` 与 `/observability/traces/[traceId]` 需覆盖管理员权限、loading/empty/error/offline、截断、安全字段白名单、HTTPS Jaeger 深链、键盘和 360/768/1280px；`/model-channels`、`/mcp`、`/integrations`、`/integrations/wecom-authentication`、`/integrations/feishu`、`/integrations/dingtalk`、`/connectors`、`/connectors/user-connections` 与 `/connectors/no-auth` 继续覆盖卡片布局、二级入口、视图隔离、平台隔离、表单草稿、密钥不回显、动态字段、OAuth 授权和保存后生效；`/account` 与 `/auth/wework` 还需覆盖已绑定自动恢复、未绑定强制 Pomerium、精确 audience、中继不可用、票据/会话/二维码过期、扫码成功与失败、Bot 凭据不回显、事务重放、解绑撤权、身份冲突、企业不匹配、取消、不展示明文 UserID，以及企微/个人应用卡片与连接的精确归属、Action 取交集、抽屉空状态和焦点管理
+- Test/screenshot expectations: ESLint、TypeScript、Vitest、Next production build；桌面浏览器为主验证；`/observability` 与 `/observability/traces/[traceId]` 需覆盖管理员权限、loading/empty/error/offline、截断、安全字段白名单、HTTPS Jaeger 深链、键盘和 360/768/1280px；`/model-channels`、`/mcp`、`/integrations`、`/integrations/wecom-authentication`、`/integrations/feishu`、`/integrations/dingtalk`、`/connectors`、`/connectors/user-connections` 与 `/connectors/no-auth` 继续覆盖卡片布局、二级入口、视图隔离、平台隔离、表单草稿、密钥不回显、动态字段、OAuth 授权和保存后生效；`/account`、`/auth/wework/launch/<ticket>`、`/auth/wework/link` 与状态页还需覆盖已绑定自动恢复、未绑定强制 Pomerium、精确 audience、中继不可用、票据/会话/二维码过期、扫码成功与失败、Bot 凭据不回显、事务重放、解绑撤权、身份冲突、企业不匹配、取消、不展示明文 UserID，以及企微/个人应用卡片与连接的精确归属、Action 取交集、抽屉空状态和焦点管理
 
 ## Open questions
 

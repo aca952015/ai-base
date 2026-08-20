@@ -12,7 +12,7 @@ services:
       AI_CONSOLE_DATA_DIR: /data
       DATABASE_URL: postgresql://ai_base:${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}@postgres:5432/ai_base
       AI_CONSOLE_SECRET_ENCRYPTION_KEY: ${AI_CONSOLE_SECRET_ENCRYPTION_KEY:-local-ai-console-secret-encryption-key-change-me}
-      AI_CONSOLE_ADMIN_EMAILS: ${AI_CONSOLE_ADMIN_EMAILS:-admin@bluetron.cn}
+      AI_CONSOLE_ADMIN_EMAILS: ${AI_CONSOLE_ADMIN_EMAILS:-admin@example.com}
       AI_CONSOLE_DEV_IDENTITY_ENABLED: ${AI_CONSOLE_DEV_IDENTITY_ENABLED:-false}
       AI_CONSOLE_PUBLIC_URL: ${AI_CONSOLE_PUBLIC_URL:-https://ai-console.localhost.pomerium.io:8443}
       WECOM_RELAY_SHARED_KEY: ${WECOM_RELAY_SHARED_KEY:-bG9jYWwtYWktYmFzZS13ZWNvbS1yZWxheS1rZXktdjE}
@@ -29,6 +29,7 @@ services:
       OPEN_CONNECTOR_RUNTIME_TOKEN: ${OOMOL_CONNECT_RUNTIME_TOKEN:-local-runtime-token-change-me}
       OPEN_CONNECTOR_ADMIN_TOKEN: ${OOMOL_CONNECT_ADMIN_TOKEN:-local-admin-token-change-me}
       MCP_CONNECTOR_BINDING_RESOLVER_TOKEN: ${MCP_CONNECTOR_BINDING_RESOLVER_TOKEN:-local-connector-binding-resolver-token-change-me}
+      MCP_CUSTOM_SERVERS_PATH: /control/llm-gateway-mcp-servers.json
       MCP_OIDC_ISSUER: ${MCP_OIDC_ISSUER:-http://127.0.0.1:8080/oauth}
       MCP_LOGIN_OIDC_ISSUER: ${MCP_LOGIN_OIDC_ISSUER:-http://dex.localtest.me:5556/dex}
       LIGHTRAG_URL: http://global-gateway:8080/rag
@@ -197,6 +198,8 @@ services:
     depends_on:
       egress-dns:
         condition: service_healthy
+      mcp-backend-adapter:
+        condition: service_healthy
     networks:
       - default
       - egress-dns
@@ -206,6 +209,34 @@ services:
       timeout: 5s
       retries: 10
       start_period: 30s
+
+  mcp-backend-adapter:
+    build:
+      context: ./mcp-backend-adapter
+    restart: unless-stopped
+    dns:
+      - 172.30.54.53
+    expose:
+      - "8090"
+    environment:
+      MCP_BACKEND_ADAPTER_LISTEN_ADDRESS: ":8090"
+      MCP_BACKEND_ADAPTER_SERVERS_PATH: /control/llm-gateway-mcp-servers.json
+      MCP_BACKEND_ADAPTER_SECRETS_PATH: /control/llm-gateway-mcp-secrets
+      MCP_BACKEND_ADAPTER_SIGNING_KEY: ${MCP_SESSION_SIGNING_KEY:-local-mcp-session-signing-key-change-me}
+    volumes:
+      - console-data:/control:ro
+    depends_on:
+      egress-dns:
+        condition: service_healthy
+    networks:
+      - default
+      - egress-dns
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--output-document", "/dev/null", "http://127.0.0.1:8090/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   mcp-access-gateway:
     build:
@@ -239,6 +270,7 @@ services:
       OBSERVABILITY_IDENTITY_HMAC_KEY_VERSION: ${OBSERVABILITY_IDENTITY_HMAC_KEY_VERSION:-local-v1}
     volumes:
       - mcp-auth-data:/data
+      - console-data:/control:ro
     depends_on:
       llm-gateway:
         condition: service_healthy
@@ -264,6 +296,8 @@ services:
     volumes:
       - ./deploy/global-gateway/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./deploy/global-gateway/wecom-verification:/srv/wecom-verification:ro
+      - caddy-config:/config
+      - caddy-data:/data
     depends_on:
       llm-gateway:
         condition: service_healthy
@@ -289,7 +323,7 @@ services:
       - --listen=0.0.0.0
       - --port=53
       - --upstream=https://1.1.1.1/dns-query
-      - --upstream=[/${AI_BASE_INTERNAL_DNS_ZONE:-bluetron.cn}/]127.0.0.11:53
+      - --upstream=[/${AI_BASE_INTERNAL_DNS_ZONE:-internal.test}/]127.0.0.11:53
       - --fallback=https://1.0.0.1/dns-query
       - --cache
       - --cache-size=4194304
@@ -567,7 +601,7 @@ services:
       DATABROKER_STORAGE_TYPE: postgres
       DATABROKER_STORAGE_CONNECTION_STRING: postgresql://ai_base:${AI_BASE_POSTGRES_PASSWORD:-ai-base-local-only}@postgres:5432/ai_base_pomerium?sslmode=disable
     volumes:
-      - ./deploy/pomerium/config.example.yaml:/pomerium/config.yaml:ro
+      - ${POMERIUM_CONFIG_FILE:-./deploy/pomerium/config.example.yaml}:/pomerium/config.yaml:ro
       - ./deploy/pomerium/dev-signing-key.pem:/run/secrets/pomerium-signing-key.pem:ro
     depends_on:
       pomerium-database-init:
@@ -580,6 +614,8 @@ services:
         condition: service_healthy
 
 volumes:
+  caddy-config:
+  caddy-data:
   console-data:
   mcp-auth-data:
   open-connector-data:

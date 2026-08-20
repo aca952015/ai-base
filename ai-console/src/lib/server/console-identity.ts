@@ -148,7 +148,7 @@ export function brokerSubject(loginIssuer: string, upstreamSubject: string) {
 
 function configuredAdminEmails() {
   return new Set(
-    (process.env.AI_CONSOLE_ADMIN_EMAILS || "admin@bluetron.cn")
+    (process.env.AI_CONSOLE_ADMIN_EMAILS || "admin@example.com")
       .split(",")
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
@@ -177,7 +177,7 @@ export function consoleIdentityFromHeaders(input: Headers): ConsoleIdentity {
   const preferredUsername = stringClaim(claims.preferred_username);
 
   if ((!email || !upstreamSubject) && process.env.AI_CONSOLE_DEV_IDENTITY_ENABLED === "true") {
-    const developmentEmail = process.env.AI_CONSOLE_DEV_EMAIL?.trim().toLowerCase() || "admin@bluetron.cn";
+    const developmentEmail = process.env.AI_CONSOLE_DEV_EMAIL?.trim().toLowerCase() || "admin@example.com";
     const developmentSubject = process.env.AI_CONSOLE_DEV_SUBJECT?.trim() || "local-development-admin";
     const loginIssuer = (process.env.MCP_LOGIN_OIDC_ISSUER || "http://dex.localtest.me:5556/dex").replace(/\/$/, "");
     return {

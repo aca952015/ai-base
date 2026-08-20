@@ -197,7 +197,7 @@ export function GatewayMcpManager({
       id: `mcp-${crypto.randomUUID()}`,
       name: "新 MCP 服务",
       namespace: `server-${suffix}`,
-      url: "https://example.com/mcp",
+      url: "",
       enabled: true,
       managed: false,
       authHeader: "Authorization",
@@ -550,7 +550,7 @@ export function GatewayMcpManager({
                   <div className="gateway-channel-fields">
                     <label className="field-label"><span>服务名称</span><input value={editingServer.name} onChange={(event) => updateServer(editingServer.id, { name: event.target.value })} /></label>
                     <label className="field-label"><span>工具命名空间</span><input className="mono-input" value={editingServer.namespace} onChange={(event) => updateServer(editingServer.id, { namespace: event.target.value.toLowerCase() })} /></label>
-                    <label className="field-label gateway-channel-field--wide"><span>上游 MCP URL</span><input className="mono-input" type="url" value={editingServer.url} onChange={(event) => updateServer(editingServer.id, { url: event.target.value })} /></label>
+                    <label className="field-label gateway-channel-field--wide"><span>上游 MCP URL</span><input className="mono-input" type="url" placeholder="https://mcp.example.com 或完整路径" value={editingServer.url} onChange={(event) => updateServer(editingServer.id, { url: event.target.value })} /></label>
                     <label className="field-label"><span>密钥请求头</span><input className="mono-input" value={editingServer.authHeader} onChange={(event) => updateServer(editingServer.id, { authHeader: event.target.value })} /></label>
                     <label className="field-label"><span>API Key（可选）</span><input type="password" autoComplete="new-password" placeholder={editingServer.keyConfigured && !editingServer.removeApiKey ? "已配置；留空保持不变" : "公开服务可留空"} value={editingServer.apiKey} onChange={(event) => updateServer(editingServer.id, { apiKey: event.target.value, removeApiKey: false })} /></label>
                     <label className="field-label gateway-channel-field--wide"><span>允许工具（每行一个，留空表示全部）</span><textarea rows={5} placeholder={"search\nget_document"} value={editingServer.toolIncludesText} onChange={(event) => updateServer(editingServer.id, { toolIncludesText: event.target.value })} /></label>

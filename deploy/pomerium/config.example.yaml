@@ -14,7 +14,7 @@ routes:
       - allow:
           and:
             - domain:
-                is: bluetron.cn
+                is: example.com
 
   - from: https://open-connector.localhost.pomerium.io:8443
     to: http://open-connector-admin-proxy:3000
@@ -23,7 +23,7 @@ routes:
       - allow:
           and:
             - domain:
-                is: bluetron.cn
+                is: example.com
 
   - from: https://jaeger.localhost.pomerium.io:8443
     to: http://jaeger:16686
@@ -32,6 +32,6 @@ routes:
       - allow:
           and:
             - domain:
-                is: bluetron.cn
+                is: example.com
             - email:
-                is: admin@bluetron.cn
+                is: admin@example.com

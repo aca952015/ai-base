@@ -132,7 +132,8 @@ func assertExternalToolNames(t *testing.T, body string) {
 	for _, expected := range []string{
 		"kb__answer",
 		"connector__execute",
-		"mcp-custom__read",
+		"custom__tools",
+		"custom__execute",
 		`"title":"Execute"`,
 		`"description":"Run one authorized Action with JSON input. Call guide first if the input shape is unclear."`,
 	} {
@@ -140,7 +141,7 @@ func assertExternalToolNames(t *testing.T, body string) {
 			t.Fatalf("missing tool name %q: %s", expected, body)
 		}
 	}
-	for _, internal := range []string{"mcp-rag__answer", "mcp-open-connector__execute_action"} {
+	for _, internal := range []string{"mcp-rag__answer", "mcp-open-connector__execute_action", "mcp-custom__read"} {
 		if strings.Contains(body, internal) {
 			t.Fatalf("internal tool name %q leaked: %s", internal, body)
 		}

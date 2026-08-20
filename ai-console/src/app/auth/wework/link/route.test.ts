@@ -45,6 +45,7 @@ describe("first WeCom identity link", () => {
   });
 
   it("binds the verified relay identity to the Pomerium platform identity", async () => {
+    const linkId = "22222222-2222-4222-8222-222222222222";
     const identity = {
       principalIssuer: "https://ai.example.com/oauth",
       principalSubject: "usr_employee",
@@ -52,7 +53,7 @@ describe("first WeCom identity link", () => {
       name: "张三",
     };
     mocks.getIdentity.mockResolvedValue(identity);
-    mocks.completeLink.mockResolvedValue({ linked: true });
+    mocks.completeLink.mockResolvedValue({ linked: true, linkId });
     mocks.issueSession.mockReturnValue("signed-console-session");
     const requestToken = "r".repeat(43);
     const request = new NextRequest(
@@ -64,6 +65,7 @@ describe("first WeCom identity link", () => {
     const response = await GET(request);
 
     expect(mocks.completeLink).toHaveBeenCalledWith(requestToken, "browser-nonce", identity);
+    expect(mocks.issueSession).toHaveBeenCalledWith(identity, linkId);
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(
       "https://ai-console.example.com/account?wecom_link=linked",

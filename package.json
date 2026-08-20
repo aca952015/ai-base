@@ -6,13 +6,14 @@
     "ai-console"
   ],
   "scripts": {
+    "check:branding": "node scripts/check-neutral-branding.mjs",
     "dev": "npm run dev --workspace ai-console",
     "build": "npm run build --workspace ai-console",
     "start": "npm run start --workspace ai-console",
     "lint": "npm run lint --workspace ai-console",
     "typecheck": "npm run typecheck --workspace ai-console",
     "test": "npm run test --workspace ai-console",
-    "check": "npm run lint && npm run typecheck && npm run test && npm run build"
+    "check": "npm run check:branding && npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "engines": {
     "node": ">=22"

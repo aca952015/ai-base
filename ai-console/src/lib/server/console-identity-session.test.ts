@@ -42,7 +42,7 @@ function sessionHeaders() {
     principalSubject: "usr_employee",
     email: "employee@example.com",
     name: "旧名称",
-  });
+  }, "11111111-1111-4111-8111-111111111111");
   return new Headers({ cookie: `${WECOM_CONSOLE_SESSION_COOKIE}=${token}` });
 }
 
@@ -66,7 +66,7 @@ describe("Console identity from a linked WeCom session", () => {
     expect(mocks.getLinkedIdentity).toHaveBeenCalledWith(
       "https://ai.example.com/oauth",
       "usr_employee",
-      undefined,
+      "11111111-1111-4111-8111-111111111111",
     );
   });
 

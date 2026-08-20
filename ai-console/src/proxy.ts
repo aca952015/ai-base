@@ -25,7 +25,7 @@ function assertionEmail(request: NextRequest) {
 }
 
 function isAdmin(email: string) {
-  return (process.env.AI_CONSOLE_ADMIN_EMAILS || "admin@bluetron.cn")
+  return (process.env.AI_CONSOLE_ADMIN_EMAILS || "admin@example.com")
     .split(",")
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean)
@@ -44,8 +44,7 @@ export function proxy(request: NextRequest) {
   }
 
   if (
-    pathname === "/auth/wework"
-    || pathname === "/auth/wework/complete"
+    pathname.startsWith("/auth/wework/launch/")
     || pathname === "/auth/wework/status"
   ) {
     return NextResponse.next();

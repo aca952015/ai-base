@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 export const dynamic = "force-dynamic";
 
 const messages: Record<string, { title: string; detail: string }> = {
@@ -28,11 +26,10 @@ const messages: Record<string, { title: string; detail: string }> = {
 export default async function WeComAuthStatusPage({
   searchParams,
 }: {
-  searchParams: Promise<{ result?: string | string[]; organization?: string | string[] }>;
+  searchParams: Promise<{ result?: string | string[] }>;
 }) {
   const query = await searchParams;
   const result = typeof query.result === "string" ? query.result : "failed";
-  const organizationId = typeof query.organization === "string" ? query.organization : "";
   const message = messages[result] || messages.failed;
   return (
     <main className="auth-status-page">
@@ -40,14 +37,7 @@ export default async function WeComAuthStatusPage({
         <span className="auth-status-card__eyebrow">AI Base · 企业微信</span>
         <h1>{message.title}</h1>
         <p>{message.detail}</p>
-        {organizationId ? (
-          <Link
-            className="button button--primary"
-            href={`/auth/wework?organization=${encodeURIComponent(organizationId)}`}
-          >
-            重新认证
-          </Link>
-        ) : null}
+        <p>请返回企业微信工作台后重新打开 AI Base 应用。</p>
       </section>
     </main>
   );

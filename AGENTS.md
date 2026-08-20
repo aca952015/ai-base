@@ -39,9 +39,21 @@
 ```bash
 npm run check
 docker compose config --quiet
+(cd mcp-backend-adapter && go test ./...)
 (cd mcp-access-gateway && go test ./...)
 (cd ../ai-auth-relay && go test ./...)
 (cd rag-mcp && python3 -m unittest test_server.py)
 ```
+
+凡代码改动会进入 Docker 镜像，完成标准必须包含重建并部署受影响服务；只通过源码测试或 `docker compose config` 不代表运行环境已更新。单服务代码改动默认执行：
+
+```bash
+docker compose build <service>
+docker compose up -d --no-deps <service>
+docker compose ps <service>
+docker compose logs --tail=100 <service>
+```
+
+部署后必须确认容器使用新镜像、服务达到 healthy/ready，并对受影响的 API 或页面执行 smoke test。涉及 Compose 拓扑、依赖服务、共享基础镜像、migration 或环境变量时，按实际影响范围重建和部署相关服务，不使用 `--no-deps` 掩盖必要的依赖更新；执行前核对影响范围，执行后检查所有被重建服务的健康状态和数据迁移结果。环境不允许部署时，将其明确记录为验证缺口，不得宣称变更已在运行环境生效。
 
 UI 改动还需对受影响路由执行桌面浏览器 smoke test。环境不满足时记录实际版本和替代证据，不得把未运行写成通过。禁止未经用户明确要求执行 `docker compose down -v`。

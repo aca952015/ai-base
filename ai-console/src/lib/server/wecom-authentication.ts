@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import type { QueryResultRow } from "pg";
 
@@ -8,39 +8,37 @@ import type {
   WeComAuthenticationSnapshot,
 } from "../control-plane/types";
 import {
-  decryptIntegrationSecret,
-  encryptIntegrationSecret,
   ensureSchema,
   getPool,
   IntegrationStoreError,
   resetWeComVisibilityCache,
 } from "./integrations";
-import { wecomIdentityStartUrl } from "./wecom-identity-link-routing";
+import { wecomRelayApplicationHomepageUrl } from "./wecom-identity-link-routing";
 
 const ORGANIZATION_NAME_MAX_LENGTH = 120;
 const CORP_ID_MAX_LENGTH = 255;
-const APP_SECRET_MAX_LENGTH = 4_096;
 const MAX_URL_LENGTH = 2_048;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// PostgreSQL's UUID type accepts canonical UUID text without enforcing RFC
+// version or variant bits. The migrated default organization intentionally uses
+// a stable reserved UUID, so request validation must follow the same contract.
+const UUID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 type JsonObject = Record<string, unknown>;
+
+function duplicateOrganizationMessage(error: object) {
+  return "constraint" in error
+    && error.constraint === "wecom_authentication_organizations_relay_callback_url_idx"
+    ? "该公网认证中继已映射到其他组织"
+    : "该 CorpID 已存在";
+}
 
 type WeComAuthenticationRow = QueryResultRow & {
   id: string;
   organization_name: string;
   corp_id: string;
-  app_secret_ciphertext: string | null;
   relay_callback_url: string | null;
   active: boolean;
   updated_at: Date | string;
-};
-
-export type WeComRelayCredential = {
-  organizationId: string;
-  organizationName: string;
-  corpId: string;
-  appSecret: string;
-  relayCallbackUrl: string;
 };
 
 export type WeComAuthenticationValidationResult =
@@ -59,7 +57,7 @@ function normalizeRelayCallbackUrl(value: unknown, errors: string[]) {
   try {
     const parsed = new URL(value);
     if (
-      !["http:", "https:"].includes(parsed.protocol)
+      parsed.protocol !== "https:"
       || parsed.username
       || parsed.password
       || parsed.search
@@ -70,7 +68,7 @@ function normalizeRelayCallbackUrl(value: unknown, errors: string[]) {
     }
     return parsed.toString();
   } catch {
-    errors.push("公网认证中继回调地址必须是以 /callbacks/wecom 结尾的绝对 HTTP(S) 地址，且不能包含账号、查询参数或片段");
+    errors.push("公网认证中继回调地址必须是以 /callbacks/wecom 结尾的绝对 HTTPS 地址，且不能包含账号、查询参数或片段");
     return undefined;
   }
 }
@@ -79,7 +77,7 @@ export function validateWeComAuthenticationSettings(
   input: unknown,
 ): WeComAuthenticationValidationResult {
   if (!isObject(input)) return { ok: false, errors: ["request body must be a JSON object"] };
-  const allowed = new Set(["id", "organizationName", "corpId", "appSecret", "relayCallbackUrl", "active"]);
+  const allowed = new Set(["id", "organizationName", "corpId", "relayCallbackUrl", "active"]);
   const errors = Object.keys(input)
     .filter((key) => !allowed.has(key))
     .map((key) => `unsupported field: ${key}`);
@@ -93,12 +91,6 @@ export function validateWeComAuthenticationSettings(
   const corpId = typeof input.corpId === "string" ? input.corpId.trim() : "";
   if (!corpId) errors.push("企业 ID（CorpID）不能为空");
   else if (corpId.length > CORP_ID_MAX_LENGTH) errors.push(`企业 ID（CorpID）长度不能超过 ${CORP_ID_MAX_LENGTH} 个字符`);
-  let appSecret: string | undefined;
-  if (input.appSecret !== undefined && input.appSecret !== "") {
-    if (typeof input.appSecret !== "string" || !input.appSecret.trim()) errors.push("App Secret 不能为空");
-    else if (input.appSecret.length > APP_SECRET_MAX_LENGTH) errors.push(`App Secret 长度不能超过 ${APP_SECRET_MAX_LENGTH} 个字符`);
-    else appSecret = input.appSecret;
-  }
   const relayCallbackUrl = normalizeRelayCallbackUrl(input.relayCallbackUrl, errors);
   const active = input.active === undefined ? true : input.active;
   if (typeof active !== "boolean") errors.push("启用状态格式无效");
@@ -111,30 +103,24 @@ export function validateWeComAuthenticationSettings(
       ...(id ? { id } : {}),
       organizationName,
       corpId,
-      ...(appSecret ? { appSecret } : {}),
       relayCallbackUrl,
       active,
     },
   };
 }
 
-export function resolveWeComCallbackUrl(settings: Pick<WeComAuthenticationSettings, "relayCallbackUrl">) {
-  return settings.relayCallbackUrl;
-}
-
 function serializeOrganization(row: WeComAuthenticationRow): WeComAuthenticationOrganizationSnapshot {
   const relayCallbackUrl = row.relay_callback_url || "";
-  const secretConfigured = Boolean(row.app_secret_ciphertext);
   return {
     id: row.id,
     organizationName: row.organization_name,
     corpId: row.corp_id,
     relayCallbackUrl,
     active: row.active,
-    configured: Boolean(row.active && row.corp_id && secretConfigured && relayCallbackUrl),
-    secretConfigured,
-    effectiveCallbackUrl: relayCallbackUrl,
-    applicationHomepageUrl: wecomIdentityStartUrl(row.id).toString(),
+    configured: Boolean(row.active && row.corp_id && relayCallbackUrl),
+    applicationHomepageUrl: relayCallbackUrl
+      ? wecomRelayApplicationHomepageUrl(relayCallbackUrl).toString()
+      : "",
     updatedAt: new Date(row.updated_at).toISOString(),
   };
 }
@@ -153,8 +139,7 @@ function serializeSnapshot(rows: WeComAuthenticationRow[]): WeComAuthenticationS
 async function readRows() {
   await ensureSchema();
   return (await getPool().query<WeComAuthenticationRow>(`
-    SELECT id, organization_name, corp_id, app_secret_ciphertext,
-           relay_callback_url, active, updated_at
+    SELECT id, organization_name, corp_id, relay_callback_url, active, updated_at
     FROM wecom_authentication_organizations
     ORDER BY organization_name, created_at, id
   `)).rows;
@@ -164,8 +149,7 @@ async function readRow(id: string) {
   if (!UUID_PATTERN.test(id)) throw new IntegrationStoreError("企业微信组织 ID 无效", 400);
   await ensureSchema();
   const row = (await getPool().query<WeComAuthenticationRow>(`
-    SELECT id, organization_name, corp_id, app_secret_ciphertext,
-           relay_callback_url, active, updated_at
+    SELECT id, organization_name, corp_id, relay_callback_url, active, updated_at
     FROM wecom_authentication_organizations
     WHERE id = $1
   `, [id])).rows[0];
@@ -178,24 +162,22 @@ export async function getWeComAuthenticationConfiguration() {
 }
 
 export async function createWeComAuthenticationConfiguration(settings: WeComAuthenticationSettings) {
-  if (!settings.appSecret) throw new IntegrationStoreError("新增企业微信认证组织时必须填写 App Secret", 400);
   await ensureSchema();
   try {
     const row = (await getPool().query<WeComAuthenticationRow>(`
       INSERT INTO wecom_authentication_organizations (
-        id, organization_name, corp_id, app_secret_ciphertext, relay_callback_url, active
-      ) VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, organization_name, corp_id, app_secret_ciphertext,
-                relay_callback_url, active, updated_at
+        id, organization_name, corp_id, relay_callback_url, active
+      ) VALUES ($1, $2, $3, $4, $5)
+      RETURNING id, organization_name, corp_id, relay_callback_url, active, updated_at
     `, [
       randomUUID(), settings.organizationName, settings.corpId,
-      encryptIntegrationSecret(settings.appSecret), settings.relayCallbackUrl, settings.active,
+      settings.relayCallbackUrl, settings.active,
     ])).rows[0];
     resetWeComVisibilityCache();
     return serializeOrganization(row);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "23505") {
-      throw new IntegrationStoreError("该 CorpID 已存在", 409);
+      throw new IntegrationStoreError(duplicateOrganizationMessage(error), 409);
     }
     throw error;
   }
@@ -203,29 +185,23 @@ export async function createWeComAuthenticationConfiguration(settings: WeComAuth
 
 export async function updateWeComAuthenticationConfiguration(settings: WeComAuthenticationSettings) {
   if (!settings.id) throw new IntegrationStoreError("企业微信组织 ID 不能为空", 400);
-  const current = await readRow(settings.id);
-  if (!settings.appSecret && !current.app_secret_ciphertext) {
-    throw new IntegrationStoreError("首次保存企业微信认证配置时必须填写 App Secret", 400);
-  }
-  const replacementSecret = settings.appSecret ? encryptIntegrationSecret(settings.appSecret) : null;
+  await readRow(settings.id);
   try {
     const row = (await getPool().query<WeComAuthenticationRow>(`
       UPDATE wecom_authentication_organizations
       SET organization_name = $2, corp_id = $3,
-          app_secret_ciphertext = COALESCE($4, app_secret_ciphertext),
-          relay_callback_url = $5, active = $6, updated_at = NOW()
+          relay_callback_url = $4, active = $5, updated_at = NOW()
       WHERE id = $1
-      RETURNING id, organization_name, corp_id, app_secret_ciphertext,
-                relay_callback_url, active, updated_at
+      RETURNING id, organization_name, corp_id, relay_callback_url, active, updated_at
     `, [
       settings.id, settings.organizationName, settings.corpId,
-      replacementSecret, settings.relayCallbackUrl, settings.active,
+      settings.relayCallbackUrl, settings.active,
     ])).rows[0];
     resetWeComVisibilityCache();
     return serializeOrganization(row);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "23505") {
-      throw new IntegrationStoreError("该 CorpID 已存在", 409);
+      throw new IntegrationStoreError(duplicateOrganizationMessage(error), 409);
     }
     throw error;
   }
@@ -265,46 +241,17 @@ export async function deleteWeComAuthenticationConfiguration(id: string) {
   }
 }
 
-function credentialFromRow(row: WeComAuthenticationRow): WeComRelayCredential {
-  if (!row.active || !row.corp_id || !row.app_secret_ciphertext || !row.relay_callback_url) {
-    throw new IntegrationStoreError("企业微信中继认证尚未完成配置或已停用", 404);
-  }
-  return {
-    organizationId: row.id,
-    organizationName: row.organization_name,
-    corpId: row.corp_id,
-    appSecret: decryptIntegrationSecret(row.app_secret_ciphertext),
-    relayCallbackUrl: row.relay_callback_url,
-  };
-}
-
-export async function getWeComRelayCredential(organizationId?: string): Promise<WeComRelayCredential> {
-  if (organizationId) return credentialFromRow(await readRow(organizationId));
-  const candidates = (await readRows()).filter((row) => (
-    row.active && row.corp_id && row.app_secret_ciphertext && row.relay_callback_url
-  ));
-  if (candidates.length === 1) return credentialFromRow(candidates[0]);
-  if (!candidates.length) throw new IntegrationStoreError("企业微信中继认证尚未完成配置", 404);
-  throw new IntegrationStoreError("存在多个企业微信组织，请从对应组织的应用首页进入", 400);
-}
-
-export async function getWeComRelayCredentialForLoginRequest(requestToken: string) {
-  if (!/^[A-Za-z0-9_-]{43}$/.test(requestToken)) {
-    throw new IntegrationStoreError("企微自动登录请求无效", 400, "invalid_wecom_link_request");
-  }
+export async function getWeComOrganizationIdForRelay(relayCallbackUrl: string): Promise<string> {
   await ensureSchema();
-  const requestHash = createHash("sha256").update(requestToken, "utf8").digest("hex");
-  const row = (await getPool().query<WeComAuthenticationRow>(`
-    SELECT organization.id, organization.organization_name, organization.corp_id,
-           organization.app_secret_ciphertext, organization.relay_callback_url,
-           organization.active, organization.updated_at
-    FROM wecom_identity_login_requests AS login_request
-    JOIN wecom_authentication_organizations AS organization
-      ON organization.id = login_request.organization_id
-    WHERE login_request.request_hash = $1
-      AND login_request.consumed_at IS NULL
-      AND login_request.expires_at > NOW()
-  `, [requestHash])).rows[0];
-  if (!row) throw new IntegrationStoreError("企微自动登录请求已失效", 410, "expired_wecom_link_request");
-  return credentialFromRow(row);
+  const candidates = (await getPool().query<WeComAuthenticationRow>(`
+    SELECT id, organization_name, corp_id, relay_callback_url, active, updated_at
+    FROM wecom_authentication_organizations
+    WHERE relay_callback_url = $1
+      AND active
+      AND corp_id <> ''
+  `, [relayCallbackUrl])).rows;
+  if (candidates.length !== 1) {
+    throw new IntegrationStoreError("企业微信中继未映射到唯一的认证组织", 404);
+  }
+  return candidates[0].id;
 }

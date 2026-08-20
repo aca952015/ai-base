@@ -11,9 +11,10 @@ const SESSION_VERSION = "v1";
 const SESSION_ISSUER = "ai-base-wecom-link";
 const SESSION_MAX_LENGTH = 4_096;
 const SESSION_CLOCK_SKEW_SECONDS = 30;
+const LINK_ID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 export type WeComConsoleSessionClaims = {
-  linkId?: string;
+  linkId: string;
   principalIssuer: string;
   principalSubject: string;
   email: string;
@@ -29,7 +30,7 @@ type SessionPayload = {
   principal_subject: string;
   email: string;
   name: string;
-  wecom_link_id?: string;
+  wecom_link_id: string;
   iat: number;
   exp: number;
 };
@@ -82,7 +83,8 @@ function parsePayload(value: unknown): SessionPayload {
     || !requiredString(record.principal_subject, 1_024)
     || !requiredString(record.email, 320)
     || !requiredString(record.name, 512)
-    || (record.wecom_link_id !== undefined && !requiredString(record.wecom_link_id, 64))
+    || typeof record.wecom_link_id !== "string"
+    || !LINK_ID_PATTERN.test(record.wecom_link_id)
     || !Number.isInteger(record.iat)
     || !Number.isInteger(record.exp)
   ) {
@@ -93,13 +95,9 @@ function parsePayload(value: unknown): SessionPayload {
 
 export function issueWeComConsoleSession(
   identity: Pick<WeComConsoleSessionClaims, "principalIssuer" | "principalSubject" | "email" | "name">,
-  linkIdOrNow?: string | number,
-  explicitNow?: number,
+  linkId: string,
+  now = Math.floor(Date.now() / 1_000),
 ) {
-  const linkId = typeof linkIdOrNow === "string" ? linkIdOrNow : undefined;
-  const now = typeof linkIdOrNow === "number"
-    ? linkIdOrNow
-    : explicitNow ?? Math.floor(Date.now() / 1_000);
   const payload: SessionPayload = {
     v: 1,
     iss: SESSION_ISSUER,
@@ -107,7 +105,7 @@ export function issueWeComConsoleSession(
     principal_subject: identity.principalSubject.trim(),
     email: identity.email.trim().toLowerCase(),
     name: identity.name.trim(),
-    ...(linkId ? { wecom_link_id: linkId.trim() } : {}),
+    wecom_link_id: linkId.trim(),
     iat: now,
     exp: now + WECOM_CONSOLE_SESSION_LIFETIME_SECONDS,
   };
@@ -153,7 +151,7 @@ export function verifyWeComConsoleSession(
     throw new WeComConsoleSessionError("企业微信自动登录会话已过期");
   }
   return {
-    ...(payload.wecom_link_id ? { linkId: payload.wecom_link_id } : {}),
+    linkId: payload.wecom_link_id,
     principalIssuer: payload.principal_issuer,
     principalSubject: payload.principal_subject,
     email: payload.email,

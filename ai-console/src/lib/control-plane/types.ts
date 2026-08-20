@@ -65,7 +65,6 @@ export type WeComAuthenticationSettings = {
   id?: string;
   organizationName: string;
   corpId: string;
-  appSecret?: string;
   relayCallbackUrl: string;
   active: boolean;
 };
@@ -77,8 +76,6 @@ export type WeComAuthenticationOrganizationSnapshot = {
   relayCallbackUrl: string;
   active: boolean;
   configured: boolean;
-  secretConfigured: boolean;
-  effectiveCallbackUrl: string;
   applicationHomepageUrl: string;
   updatedAt: string;
 };

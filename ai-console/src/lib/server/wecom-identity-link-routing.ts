@@ -21,14 +21,9 @@ export function aiConsoleAudience() {
   return new URL(configuredConsoleOrigin()).hostname;
 }
 
-export function wecomIdentityLinkCompletionUrl() {
-  return new URL("/auth/wework/complete", configuredConsoleOrigin());
-}
-
-export function wecomIdentityStartUrl(organizationId: string) {
-  const url = new URL("/auth/wework", configuredConsoleOrigin());
-  url.searchParams.set("organization", organizationId);
-  return url;
+export function wecomRelayApplicationHomepageUrl(relayCallbackUrl: string) {
+  const callback = new URL(relayCallbackUrl);
+  return new URL("/launch/wecom", callback.origin);
 }
 
 export function wecomIdentityLinkResultUrl(result: string) {
@@ -43,10 +38,9 @@ export function wecomIdentityLinkLoginUrl(requestToken: string) {
   return url;
 }
 
-export function wecomIdentityStatusUrl(result: string, organizationId?: string) {
+export function wecomIdentityStatusUrl(result: string) {
   const url = new URL("/auth/wework/status", configuredConsoleOrigin());
   url.searchParams.set("result", result);
-  if (organizationId) url.searchParams.set("organization", organizationId);
   return url;
 }
 

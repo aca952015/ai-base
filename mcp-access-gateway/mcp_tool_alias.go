@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -14,6 +15,7 @@ import (
 const maxMCPToolListResponseBody = 2 << 20
 
 type externalToolListAliasContextKey struct{}
+type customMCPMetadataContextKey struct{}
 
 type connectorToolAlias struct {
 	upstream    string
@@ -157,8 +159,12 @@ func rewriteExternalToolAliasResponse(response *http.Response) error {
 	}
 
 	contentType := strings.ToLower(response.Header.Get("Content-Type"))
+	metadata, _ := response.Request.Context().Value(customMCPMetadataContextKey{}).(map[string]customMCPMetadata)
+	rewriter := func(body []byte) ([]byte, bool) {
+		return rewriteExternalToolAliasResponseJSONWithMetadata(body, metadata)
+	}
 	if strings.Contains(contentType, "text/event-stream") {
-		response.Body = newToolAliasSSEBody(response.Body)
+		response.Body = newMCPJSONRewriteSSEBody(response.Body, rewriter)
 		response.ContentLength = -1
 		response.Header.Del("Content-Length")
 		return nil
@@ -172,7 +178,7 @@ func rewriteExternalToolAliasResponse(response *http.Response) error {
 		return fmt.Errorf("MCP tools/list response exceeds %d bytes", maxMCPToolListResponseBody)
 	}
 	_ = response.Body.Close()
-	if rewritten, changed := rewriteExternalToolAliasResponseJSON(body); changed {
+	if rewritten, changed := rewriter(body); changed {
 		body = rewritten
 	}
 	response.Body = io.NopCloser(bytes.NewReader(body))
@@ -183,13 +189,20 @@ func rewriteExternalToolAliasResponse(response *http.Response) error {
 }
 
 func rewriteExternalToolAliasResponseJSON(body []byte) ([]byte, bool) {
+	return rewriteExternalToolAliasResponseJSONWithMetadata(body, nil)
+}
+
+func rewriteExternalToolAliasResponseJSONWithMetadata(
+	body []byte,
+	metadata map[string]customMCPMetadata,
+) ([]byte, bool) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	var payload any
 	if err := decoder.Decode(&payload); err != nil {
 		return body, false
 	}
-	if !rewriteToolListPayload(payload) {
+	if !rewriteToolListPayload(payload, metadata) {
 		return body, false
 	}
 	rewritten, err := json.Marshal(payload)
@@ -199,12 +212,12 @@ func rewriteExternalToolAliasResponseJSON(body []byte) ([]byte, bool) {
 	return rewritten, true
 }
 
-func rewriteToolListPayload(payload any) bool {
+func rewriteToolListPayload(payload any, metadata map[string]customMCPMetadata) bool {
 	switch typed := payload.(type) {
 	case []any:
 		changed := false
 		for _, item := range typed {
-			changed = rewriteToolListPayload(item) || changed
+			changed = rewriteToolListPayload(item, metadata) || changed
 		}
 		return changed
 	case map[string]any:
@@ -217,13 +230,28 @@ func rewriteToolListPayload(payload any) bool {
 			return false
 		}
 		changed := false
+		publicTools := make([]any, 0, len(tools))
+		customNamespaces := make([]string, 0)
+		seenCustomNamespaces := map[string]struct{}{}
+		customTools := make(map[string][]map[string]any)
 		for _, item := range tools {
 			tool, ok := item.(map[string]any)
 			if !ok {
+				publicTools = append(publicTools, item)
 				continue
 			}
 			name, ok := tool["name"].(string)
 			if !ok {
+				publicTools = append(publicTools, item)
+				continue
+			}
+			if namespace, _, custom := parseInternalCustomMCPToolName(name); custom {
+				if _, seen := seenCustomNamespaces[namespace]; !seen {
+					seenCustomNamespaces[namespace] = struct{}{}
+					customNamespaces = append(customNamespaces, namespace)
+				}
+				customTools[namespace] = append(customTools[namespace], tool)
+				changed = true
 				continue
 			}
 			rewritten := internalToExternalToolName(name)
@@ -239,6 +267,31 @@ func rewriteToolListPayload(payload any) bool {
 					changed = true
 				}
 			}
+			publicTools = append(publicTools, item)
+		}
+		configuredOnlyNamespaces := make([]string, 0)
+		for namespace := range metadata {
+			if !validCustomMCPNamespace(namespace) {
+				continue
+			}
+			if _, seen := seenCustomNamespaces[namespace]; seen {
+				continue
+			}
+			configuredOnlyNamespaces = append(configuredOnlyNamespaces, namespace)
+		}
+		sort.Strings(configuredOnlyNamespaces)
+		if len(configuredOnlyNamespaces) > 0 {
+			customNamespaces = append(customNamespaces, configuredOnlyNamespaces...)
+			changed = true
+		}
+		for _, namespace := range customNamespaces {
+			publicTools = append(
+				publicTools,
+				customMCPProxyToolDefinitions(namespace, metadata[namespace], customTools[namespace])...,
+			)
+		}
+		if len(customNamespaces) > 0 {
+			result["tools"] = publicTools
 		}
 		return changed
 	default:
@@ -249,19 +302,27 @@ func rewriteToolListPayload(payload any) bool {
 type toolAliasSSEBody struct {
 	body        io.ReadCloser
 	reader      *bufio.Reader
+	rewriter    func([]byte) ([]byte, bool)
 	pending     []byte
 	terminalErr error
 }
 
 func newToolAliasSSEBody(body io.ReadCloser) *toolAliasSSEBody {
-	return &toolAliasSSEBody{body: body, reader: bufio.NewReader(body)}
+	return newMCPJSONRewriteSSEBody(body, rewriteExternalToolAliasResponseJSON)
+}
+
+func newMCPJSONRewriteSSEBody(
+	body io.ReadCloser,
+	rewriter func([]byte) ([]byte, bool),
+) *toolAliasSSEBody {
+	return &toolAliasSSEBody{body: body, reader: bufio.NewReader(body), rewriter: rewriter}
 }
 
 func (b *toolAliasSSEBody) Read(target []byte) (int, error) {
 	for len(b.pending) == 0 && b.terminalErr == nil {
 		line, err := b.reader.ReadBytes('\n')
 		if len(line) > 0 {
-			b.pending = rewriteToolAliasSSELine(line)
+			b.pending = rewriteMCPJSONSSELine(line, b.rewriter)
 		}
 		if err != nil {
 			b.terminalErr = err
@@ -279,14 +340,17 @@ func (b *toolAliasSSEBody) Close() error {
 	return b.body.Close()
 }
 
-func rewriteToolAliasSSELine(line []byte) []byte {
+func rewriteMCPJSONSSELine(
+	line []byte,
+	rewriter func([]byte) ([]byte, bool),
+) []byte {
 	content := bytes.TrimRight(line, "\r\n")
 	lineEnding := line[len(content):]
 	if !bytes.HasPrefix(content, []byte("data:")) {
 		return line
 	}
 	payload := bytes.TrimSpace(bytes.TrimPrefix(content, []byte("data:")))
-	rewritten, changed := rewriteExternalToolAliasResponseJSON(payload)
+	rewritten, changed := rewriter(payload)
 	if !changed {
 		return line
 	}

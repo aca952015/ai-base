@@ -1,3 +1,4 @@
+import { createHash, createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -21,6 +22,7 @@ afterEach(() => {
 });
 
 describe("WeCom Console session", () => {
+  const linkId = "11111111-1111-4111-8111-111111111111";
   const identity = {
     principalIssuer: "https://ai.example.com/oauth",
     principalSubject: "usr_employee",
@@ -28,12 +30,32 @@ describe("WeCom Console session", () => {
     name: "张三",
   };
 
+  function legacyToken(now: number) {
+    const payload = Buffer.from(JSON.stringify({
+      v: 1,
+      iss: "ai-base-wecom-link",
+      principal_issuer: identity.principalIssuer,
+      principal_subject: identity.principalSubject,
+      email: identity.email.toLowerCase(),
+      name: identity.name,
+      iat: now,
+      exp: now + WECOM_CONSOLE_SESSION_LIFETIME_SECONDS,
+    }), "utf8").toString("base64url");
+    const key = createHash("sha256")
+      .update("ai-base-wecom-console-session\0", "utf8")
+      .update(process.env.AI_CONSOLE_SECRET_ENCRYPTION_KEY!, "utf8")
+      .digest();
+    const signature = createHmac("sha256", key).update(`v1.${payload}`, "utf8").digest("base64url");
+    return `v1.${payload}.${signature}`;
+  }
+
   it("issues a fixed-lifetime signed session without exposing a reusable credential", () => {
     const now = 1_800_000_000;
-    const token = issueWeComConsoleSession(identity, now);
+    const token = issueWeComConsoleSession(identity, linkId, now);
 
     expect(verifyWeComConsoleSession(token, now + 60)).toEqual({
       ...identity,
+      linkId,
       email: "employee@example.com",
       issuedAt: now,
       expiresAt: now + WECOM_CONSOLE_SESSION_LIFETIME_SECONDS,
@@ -43,14 +65,18 @@ describe("WeCom Console session", () => {
 
   it("can bind the session to the concrete organization identity link", () => {
     const now = 1_800_000_000;
-    const linkId = "11111111-1111-4111-8111-111111111111";
     const token = issueWeComConsoleSession(identity, linkId, now);
     expect(verifyWeComConsoleSession(token, now + 60)).toMatchObject({ linkId });
   });
 
+  it("rejects a valid legacy session that is not bound to a concrete identity link", () => {
+    const now = 1_800_000_000;
+    expect(() => verifyWeComConsoleSession(legacyToken(now), now)).toThrow("无效");
+  });
+
   it("rejects tampering, expiry and tokens signed by a rotated key", () => {
     const now = 1_800_000_000;
-    const token = issueWeComConsoleSession(identity, now);
+    const token = issueWeComConsoleSession(identity, linkId, now);
     const parts = token.split(".");
     parts[1] = `${parts[1][0] === "A" ? "B" : "A"}${parts[1].slice(1)}`;
     expect(() => verifyWeComConsoleSession(parts.join("."), now)).toThrow("无效");

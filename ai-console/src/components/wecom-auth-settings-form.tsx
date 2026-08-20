@@ -4,8 +4,6 @@ import {
   Check,
   CheckCircle2,
   Copy,
-  KeyRound,
-  LockKeyhole,
   Plus,
   RefreshCw,
   Save,
@@ -27,8 +25,7 @@ type SaveState = "idle" | "saving" | "saved" | "deleting" | "error";
 const emptySettings: WeComAuthenticationSettings = {
   organizationName: "",
   corpId: "",
-  appSecret: "",
-  relayCallbackUrl: "http://tn1.cofly-ai.cn/callbacks/wecom",
+  relayCallbackUrl: "https://tn1.cofly-ai.cn/callbacks/wecom",
   active: true,
 };
 
@@ -37,7 +34,6 @@ function settingsFromSnapshot(snapshot: WeComAuthenticationOrganizationSnapshot)
     id: snapshot.id,
     organizationName: snapshot.organizationName,
     corpId: snapshot.corpId,
-    appSecret: "",
     relayCallbackUrl: snapshot.relayCallbackUrl,
     active: snapshot.active,
   };
@@ -48,7 +44,11 @@ function formatSavedAt(value?: string) {
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp)
     ? "未知"
-    : new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(timestamp);
+    : new Intl.DateTimeFormat("zh-CN", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "Asia/Shanghai",
+    }).format(timestamp);
 }
 
 export function WeComAuthSettingsForm({
@@ -113,7 +113,7 @@ export function WeComAuthSettingsForm({
       const response = await fetch("/api/integrations/wecom-authentication", {
         method: settings.id ? "PUT" : "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...settings, appSecret: settings.appSecret || undefined }),
+        body: JSON.stringify(settings),
       });
       const payload = await response.json() as WeComAuthenticationOrganizationSnapshot & {
         error?: string;
@@ -204,13 +204,10 @@ export function WeComAuthSettingsForm({
               <p className="integration-application-note">
                 {organization.configured
                   ? "企业微信系统认证已配置"
-                  : organization.active ? "完成 App Secret 配置后可用" : "该认证组织当前停用"}
+                  : organization.active ? "完成 CorpID 与 HTTPS 中继映射后可用" : "该认证组织当前停用"}
               </p>
               <div className="integration-application-status">
-                <span>
-                  {organization.secretConfigured ? <LockKeyhole size={13} /> : <KeyRound size={13} />}
-                  {organization.secretConfigured ? "密钥已保存" : "密钥未配置"}
-                </span>
+                <span>中继凭据由部署环境托管</span>
                 <span>更新于 {formatSavedAt(organization.updatedAt)}</span>
               </div>
             </article>
@@ -218,7 +215,7 @@ export function WeComAuthSettingsForm({
           <button className="gateway-channel-add-card integration-add-card" type="button" onClick={() => openOrganization()}>
             <span><Plus size={19} /></span>
             <strong>增加认证组织</strong>
-            <small>填写组织凭据和认证入口</small>
+            <small>配置组织映射和认证入口</small>
           </button>
         </div>
       </section>
@@ -229,7 +226,7 @@ export function WeComAuthSettingsForm({
             <div className="gateway-channel-editor__header">
               <div>
                 <h3 id="wecom-auth-editor-title">{settings.id ? "编辑认证组织" : "增加认证组织"}</h3>
-                <p>维护组织凭据和企业微信应用认证入口。</p>
+                <p>维护组织映射和企业微信应用认证入口。</p>
               </div>
               <button type="button" data-drawer-autofocus onClick={closeEditor} disabled={state === "saving" || state === "deleting"} aria-label="关闭认证组织配置"><X size={17} /></button>
             </div>
@@ -242,28 +239,23 @@ export function WeComAuthSettingsForm({
               <section className="resource-detail-section integration-credential-form">
                 <div className="resource-detail-section__header">
                   <strong>组织配置</strong>
-                  <span className={`secret-state${currentSnapshot?.secretConfigured ? " is-ready" : " is-warning"}`}>
-                    {currentSnapshot?.secretConfigured ? <ShieldCheck size={14} /> : <KeyRound size={14} />}
-                    {currentSnapshot?.secretConfigured ? "密钥已保存" : "密钥未配置"}
+                  <span className="secret-state is-ready">
+                    <ShieldCheck size={14} />中继凭据由环境托管
                   </span>
                 </div>
                 <div className="gateway-channel-fields connector-fields integration-form-fields">
                   <label className="field-label gateway-channel-field--wide">
                     <span>组织名称</span>
-                    <input required value={settings.organizationName} placeholder="例如：蓝卓总部" onChange={(event) => update({ organizationName: event.target.value })} />
+                    <input required value={settings.organizationName} placeholder="例如：示例组织" onChange={(event) => update({ organizationName: event.target.value })} />
                   </label>
                   <label className="field-label gateway-channel-field--wide">
                     <span>企业 ID（CorpID）</span>
                     <input required value={settings.corpId} placeholder="wwxxxxxxxxxxxxxxxx" onChange={(event) => update({ corpId: event.target.value })} autoComplete="off" />
                   </label>
                   <label className="field-label gateway-channel-field--wide">
-                    <span>App Secret</span>
-                    <input type="password" required={!currentSnapshot?.secretConfigured} value={settings.appSecret ?? ""} placeholder={currentSnapshot?.secretConfigured ? "留空表示保留当前 Secret" : "填写 App Secret"} onChange={(event) => update({ appSecret: event.target.value })} autoComplete="new-password" />
-                    <small>密钥只在服务端加密保存，不回显。</small>
-                  </label>
-                  <label className="field-label gateway-channel-field--wide">
                     <span>公网认证中继回调地址</span>
                     <input type="url" required value={settings.relayCallbackUrl} onChange={(event) => update({ relayCallbackUrl: event.target.value })} />
+                    <small>必须使用 HTTPS。CorpID 与 App Secret 由该中继的部署环境配置并负责身份交换。</small>
                   </label>
                   <label className="field-label field-label--toggle gateway-channel-field--wide">
                     <span>启用认证</span>
@@ -276,7 +268,7 @@ export function WeComAuthSettingsForm({
                         <input readOnly value={currentSnapshot.applicationHomepageUrl} aria-label="企业微信应用首页" />
                         <button type="button" onClick={() => void navigator.clipboard.writeText(currentSnapshot.applicationHomepageUrl)}><Copy size={15} />复制</button>
                       </div>
-                      <small>复制到该组织企业微信应用的应用首页。</small>
+                      <small>复制到该组织企业微信应用的应用首页；这是中继固定入口，不包含内部组织 ID。</small>
                     </div>
                   ) : null}
                 </div>

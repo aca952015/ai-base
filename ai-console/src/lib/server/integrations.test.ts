@@ -169,7 +169,7 @@ describe("enterprise integration store", () => {
     const snapshot = buildEmployeeIntegrationsSnapshot(
       applications,
       [binding],
-      { name: "employee01", email: "employee01@bluetron.cn" },
+      { name: "employee01", email: "employee01@example.com" },
       "2026-07-23T05:00:00.000Z",
     );
 
@@ -191,8 +191,9 @@ describe("enterprise integration store", () => {
     expect(snapshot.applications[0].binding).toEqual(binding);
     expect(snapshot.applications[1].binding).toBeUndefined();
     expect(snapshot.applications[1].active).toBe(false);
-    expect(snapshot.identity.email).toBe("employee01@bluetron.cn");
+    expect(snapshot.identity.email).toBe("employee01@example.com");
     expect(snapshot.wecomIdentity).toEqual({ linked: false, identities: [] });
+    expect(snapshot.wecomOrganizations).toEqual([]);
     expect(snapshot.availableConnections).toEqual([]);
     expect(snapshot.automaticWeComBotCount).toBe(1);
   });
@@ -221,6 +222,7 @@ describe("enterprise integration store", () => {
         accessMode: "controlled_shared",
         allowedActionIds: ["wecom_bot.get_calendar"],
         policyIds: ["wecom-visibility:resource-id"],
+        wecomOrganizationId: "22222222-2222-4222-8222-222222222222",
       },
       {
         service: "wecom_bot",
@@ -265,6 +267,7 @@ describe("enterprise integration store", () => {
     expect(connections.find((connection) => connection.service === "wecom_bot")).toMatchObject({
       accessMode: "controlled_shared",
       authorizationSources: ["manual", "wecom_visibility"],
+      wecomOrganizationIds: ["22222222-2222-4222-8222-222222222222"],
       actions: [
         { id: "wecom_bot.get_calendar", name: "get_calendar" },
         { id: "wecom_bot.get_userlist", name: "get_userlist", description: "查询可见通讯录" },

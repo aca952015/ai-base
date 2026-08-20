@@ -2,12 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   aiConsoleAudience,
-  wecomIdentityLinkCompletionUrl,
   wecomIdentityLinkCookieOptions,
   wecomIdentityLinkLoginUrl,
   wecomIdentityLinkResultUrl,
   wecomIdentityStatusUrl,
-  wecomIdentityStartUrl,
+  wecomRelayApplicationHomepageUrl,
 } from "./wecom-identity-link-routing";
 
 const originalConsoleUrl = process.env.AI_CONSOLE_PUBLIC_URL;
@@ -18,19 +17,15 @@ afterEach(() => {
 });
 
 describe("WeCom identity link routing", () => {
-  it("separates the public relay completion from the authenticated first-link handoff", () => {
-    const organizationId = "11111111-1111-4111-8111-111111111111";
-    expect(wecomIdentityLinkCompletionUrl().toString()).toBe(
-      "https://ai-console.localhost.pomerium.io:8443/auth/wework/complete",
-    );
-    expect(wecomIdentityStartUrl(organizationId).toString()).toBe(
-      `https://ai-console.localhost.pomerium.io:8443/auth/wework?organization=${organizationId}`,
+  it("separates the public relay launch from the authenticated first-link handoff", () => {
+    expect(wecomRelayApplicationHomepageUrl("https://tn1.cofly-ai.cn/callbacks/wecom").toString()).toBe(
+      "https://tn1.cofly-ai.cn/launch/wecom",
     );
     expect(wecomIdentityLinkLoginUrl("opaque-request").toString()).toBe(
       "https://ai-console.localhost.pomerium.io:8443/auth/wework/link?request=opaque-request",
     );
-    expect(wecomIdentityStatusUrl("denied", organizationId).toString()).toBe(
-      `https://ai-console.localhost.pomerium.io:8443/auth/wework/status?result=denied&organization=${organizationId}`,
+    expect(wecomIdentityStatusUrl("denied").toString()).toBe(
+      "https://ai-console.localhost.pomerium.io:8443/auth/wework/status?result=denied",
     );
     expect(wecomIdentityLinkResultUrl("linked").toString()).toBe(
       "https://ai-console.localhost.pomerium.io:8443/account?wecom_link=linked",
@@ -50,8 +45,8 @@ describe("WeCom identity link routing", () => {
 
   it("rejects non-HTTPS or path-bearing Console origins", () => {
     process.env.AI_CONSOLE_PUBLIC_URL = "http://console.example.com";
-    expect(() => wecomIdentityLinkCompletionUrl()).toThrow("HTTPS");
+    expect(() => aiConsoleAudience()).toThrow("HTTPS");
     process.env.AI_CONSOLE_PUBLIC_URL = "https://console.example.com/base";
-    expect(() => wecomIdentityLinkCompletionUrl()).toThrow("Origin");
+    expect(() => aiConsoleAudience()).toThrow("Origin");
   });
 });

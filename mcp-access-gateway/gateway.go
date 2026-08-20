@@ -189,6 +189,23 @@ func (g *mcpGateway) proxyMCP(w http.ResponseWriter, r *http.Request) {
 		body, aliasesToolList := rewriteExternalToolAliasRequest(body)
 		if aliasesToolList {
 			ctx = context.WithValue(ctx, externalToolListAliasContextKey{}, true)
+			ctx = context.WithValue(
+				ctx,
+				customMCPMetadataContextKey{},
+				loadCustomMCPMetadata(g.cfg.customMCPServersPath),
+			)
+		}
+		custom := filterCustomMCPRequest(body)
+		if custom.handled {
+			tracker.finishNotifications()
+			tracker.observe(custom.localResponse)
+			tracker.finishUnmatched("unobserved")
+			writeJSON(w, http.StatusOK, custom.localResponse)
+			return
+		}
+		body = custom.body
+		if custom.listOptions != nil {
+			ctx = context.WithValue(ctx, customMCPListContextKey{}, *custom.listOptions)
 		}
 		r = r.WithContext(ctx)
 		filtered := g.filterConnectorRequest(ctx, body, caller)
@@ -239,11 +256,19 @@ func (g *mcpGateway) newReverseProxy(upstream *url.URL) *httputil.ReverseProxy {
 			if aliases, _ := request.In.Context().Value(externalToolListAliasContextKey{}).(bool); aliases {
 				request.Out.Header.Set("Accept-Encoding", "identity")
 			}
+			if _, customList := request.In.Context().Value(customMCPListContextKey{}).(customMCPListOptions); customList {
+				request.Out.Header.Set("Accept-Encoding", "identity")
+			}
 			request.SetXForwarded()
 		},
 		ModifyResponse: func(response *http.Response) error {
 			tracker, _ := response.Request.Context().Value(messageTrackerContextKey{}).(*mcpMessageTracker)
 			tracker.responseStatus(response.StatusCode)
+			if options, ok := response.Request.Context().Value(customMCPListContextKey{}).(customMCPListOptions); ok {
+				if err := rewriteCustomMCPListResponse(response, options); err != nil {
+					return err
+				}
+			}
 			if err := rewriteExternalToolAliasResponse(response); err != nil {
 				return err
 			}

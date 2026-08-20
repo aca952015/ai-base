@@ -78,7 +78,7 @@ const payload = encode({
   exp: now + 300,
   nbf: now - 10,
   sub: "observability-integration-admin",
-  email: "admin@bluetron.cn",
+  email: "admin@example.com",
   name: "Observability Integration",
 });
 const signingInput = `${header}.${payload}`;

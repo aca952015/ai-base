@@ -26,6 +26,7 @@ import type {
   EmployeeConnectorBinding,
   EmployeeIntegrationApplication,
   EmployeeIntegrationsSnapshot,
+  EmployeeWeComOrganization,
   EnterpriseIntegrationPlatform,
 } from "@/lib/control-plane/integrations";
 
@@ -112,6 +113,36 @@ function formatConnectedAt(value?: string | null) {
   }).format(date);
 }
 
+const wecomIntegrationPrefix = "wecom:";
+
+export function wecomOrganizationIntegrationId(organizationId: string) {
+  return `${wecomIntegrationPrefix}${organizationId}`;
+}
+
+function wecomOrganizationForIntegration(
+  snapshot: EmployeeIntegrationsSnapshot,
+  integrationId: string,
+) {
+  if (!integrationId.startsWith(wecomIntegrationPrefix)) return undefined;
+  const organizationId = integrationId.slice(wecomIntegrationPrefix.length);
+  return snapshot.wecomOrganizations.find((organization) => organization.id === organizationId);
+}
+
+export function wecomOrganizationBindingPresentation(
+  organization: Pick<EmployeeWeComOrganization, "active" | "configured">,
+  linked: boolean,
+) {
+  if (!organization.active) {
+    return { label: "已停用", className: "is-error", Icon: AlertCircle };
+  }
+  if (!organization.configured) {
+    return { label: "不可用", className: "is-error", Icon: AlertCircle };
+  }
+  return linked
+    ? { label: "已绑定", className: "is-connected", Icon: CheckCircle2 }
+    : { label: "未绑定", className: "is-idle", Icon: Link2 };
+}
+
 export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult?: string }) {
   const [snapshot, setSnapshot] = useState<EmployeeIntegrationsSnapshot>();
   const [loading, setLoading] = useState(true);
@@ -131,20 +162,31 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
   const mountedRef = useRef(true);
   const drawerRef = useRef<HTMLElement>(null);
   const wecomBotDialogRef = useRef<HTMLElement>(null);
-  const selectedApplication = selectedIntegrationId && selectedIntegrationId !== "wecom"
+  const selectedWeComOrganization = snapshot && selectedIntegrationId
+    ? wecomOrganizationForIntegration(snapshot, selectedIntegrationId)
+    : undefined;
+  const selectedWeComIdentity = selectedWeComOrganization
+    ? snapshot?.wecomIdentity.identities.find((identity) => (
+        identity.organizationId === selectedWeComOrganization.id
+      ))
+    : undefined;
+  const selectedApplication = selectedIntegrationId && !selectedWeComOrganization
     ? snapshot?.applications.find((application) => application.id === selectedIntegrationId)
     : undefined;
   const selectedConnections = snapshot && selectedIntegrationId
     ? connectionsForIntegration(snapshot, selectedIntegrationId)
     : [];
-  const selectedIntegration = selectedIntegrationId === "wecom" && snapshot
+  const selectedIntegration = selectedWeComOrganization
     ? {
-        title: "企业微信身份",
+        title: selectedWeComOrganization.organizationName,
         platform: "企业微信",
-        status: snapshot.wecomIdentity.linked ? "已绑定" : "未绑定",
-        emptyMessage: snapshot.wecomIdentity.linked
-          ? "当前没有可用连接。"
-          : "从企业微信应用首页完成身份认证后，可见范围内的共享连接会显示在这里。",
+        status: wecomOrganizationBindingPresentation(
+          selectedWeComOrganization,
+          Boolean(selectedWeComIdentity),
+        ).label,
+        emptyMessage: selectedWeComIdentity
+          ? "当前组织身份没有可用连接。"
+          : `从“${selectedWeComOrganization.organizationName}”的企业微信应用首页完成身份认证后，可见范围内的共享连接会显示在这里。`,
       }
     : selectedApplication
       ? {
@@ -353,7 +395,12 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
   }, [closeWeComBotAuthorization, reload, stopWeComBotPolling]);
 
   async function startWeComBotAuthorization() {
-    if (!snapshot?.wecomIdentity.linked || wecomBotAuthorization?.status === "starting") return;
+    if (
+      !selectedWeComOrganization?.active
+      || !selectedWeComOrganization.configured
+      || !selectedWeComIdentity
+      || wecomBotAuthorization?.status === "starting"
+    ) return;
     stopWeComBotPolling();
     const generation = wecomBotAuthorizationGenerationRef.current + 1;
     wecomBotAuthorizationGenerationRef.current = generation;
@@ -608,14 +655,23 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
       </section>
 
       <div className="account-integration-grid">
-        <WeComIdentityCard
-          linked={Boolean(snapshot?.wecomIdentity.linked)}
-          identityCount={snapshot?.wecomIdentity.identities.length || 0}
-          availableConnectionCount={(snapshot?.availableConnections || []).filter((connection) => (
-            connection.service === "wecom_bot"
-          )).length}
-          onOpen={() => setSelectedIntegrationId("wecom")}
-        />
+        {snapshot?.wecomOrganizations.length ? snapshot.wecomOrganizations.map((organization) => {
+          const identityLink = snapshot.wecomIdentity.identities.find((identity) => (
+            identity.organizationId === organization.id
+          ));
+          const integrationId = wecomOrganizationIntegrationId(organization.id);
+          return (
+            <WeComIdentityCard
+              organization={organization}
+              identityLink={identityLink}
+              availableConnectionCount={connectionsForIntegration(snapshot, integrationId).length}
+              onOpen={() => setSelectedIntegrationId(integrationId)}
+              key={organization.id}
+            />
+          );
+        }) : (
+          <WeComIdentityCard availableConnectionCount={0} />
+        )}
         {(snapshot?.applications || []).map((application) => (
           <AccountIntegrationCard
             application={application}
@@ -644,8 +700,8 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
               <div>
                 <span className="card-kicker">集成权限</span>
                 <h3 id="account-connection-details-title">{selectedIntegration.title}</h3>
-                <p>{selectedIntegrationId === "wecom" && snapshot?.wecomIdentity.linked
-                  ? "查看当前身份可用的连接和 Actions。"
+                <p>{selectedWeComOrganization && selectedWeComIdentity
+                  ? "查看当前组织绑定关系及该身份可用的连接和 Actions。"
                   : "只读展示此集成向当前身份提供的连接和 Actions。"}</p>
               </div>
               <button type="button" data-drawer-autofocus onClick={closeIntegrationDetails} aria-label="关闭集成权限"><X size={17} /></button>
@@ -663,19 +719,28 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
                 </dl>
               </section>
 
-              {selectedIntegrationId === "wecom" && snapshot?.wecomIdentity.identities.length ? (
+              {selectedWeComOrganization ? (
                 <section className="resource-detail-section">
-                  <div className="resource-detail-section__header"><strong>已绑定身份</strong><span>{snapshot.wecomIdentity.identities.length} 个组织</span></div>
+                  <div className="resource-detail-section__header"><strong>账号绑定</strong><span>当前组织</span></div>
                   <div className="account-wecom-identity-list">
-                    {snapshot.wecomIdentity.identities.map((identityLink) => (
-                      <div className="account-wecom-identity-row" key={identityLink.id}>
-                        <span className="account-integration-card__icon integration-icon--wecom"><Building2 size={17} /></span>
-                        <div><strong>{identityLink.organizationName}</strong><small>绑定于 {formatConnectedAt(identityLink.linkedAt)}</small></div>
-                        <button className="button button--secondary" type="button" disabled={wecomBusy} onClick={() => void disconnectWeComIdentity(identityLink.id, identityLink.organizationName)}>
+                    <div className="account-wecom-identity-row">
+                      <span className="account-integration-card__icon integration-icon--wecom"><Building2 size={17} /></span>
+                      <div>
+                        <strong>{selectedWeComOrganization.organizationName}</strong>
+                        <small>{selectedWeComIdentity
+                          ? `绑定于 ${formatConnectedAt(selectedWeComIdentity.linkedAt)}`
+                          : selectedWeComOrganization.active && selectedWeComOrganization.configured
+                            ? "尚未绑定当前平台账号"
+                            : selectedWeComOrganization.active
+                              ? "认证配置尚不可用"
+                              : "组织已停用"}</small>
+                      </div>
+                      {selectedWeComIdentity ? (
+                        <button className="button button--secondary" type="button" disabled={wecomBusy} onClick={() => void disconnectWeComIdentity(selectedWeComIdentity.id, selectedWeComOrganization.organizationName)}>
                           {wecomBusy ? <LoaderCircle className="is-spinning" size={14} /> : <Unlink size={14} />}解绑
                         </button>
-                      </div>
-                    ))}
+                      ) : null}
+                    </div>
                   </div>
                 </section>
               ) : null}
@@ -687,8 +752,8 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
                   selectedConnections.length,
                   selectedIntegrationId,
                 );
-                const multipleWeComBots = selectedIntegrationId === "wecom" && selectedConnections.length > 1;
-                const ConnectionIcon = selectedIntegrationId === "wecom"
+                const multipleWeComBots = Boolean(selectedWeComOrganization) && selectedConnections.length > 1;
+                const ConnectionIcon = selectedWeComOrganization
                   ? Bot
                   : selectedApplication
                     ? platformIcons[selectedApplication.platform] || Link2
@@ -792,7 +857,7 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
                     </dl>
                     <AccountConnectionActionList
                       connection={connection}
-                      collapsible={selectedIntegrationId === "wecom"}
+                      collapsible={Boolean(selectedWeComOrganization)}
                     />
                   </section>
                 );
@@ -806,7 +871,7 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
             </div>
 
             <div className="gateway-channel-editor__footer account-connection-drawer__footer">
-              {selectedIntegrationId === "wecom" && snapshot?.wecomIdentity.linked ? (
+              {selectedWeComOrganization?.active && selectedWeComOrganization.configured && selectedWeComIdentity ? (
                 <button className="button button--secondary" type="button" onClick={startWeComBotAuthorization}>
                   <QrCode size={15} />
                   创建机器人
@@ -819,7 +884,7 @@ export function AccountIntegrationManager({ wecomLinkResult }: { wecomLinkResult
         document.body,
       ) : null}
 
-      {selectedIntegrationId === "wecom" && wecomBotAuthorization ? createPortal(
+      {selectedWeComOrganization && wecomBotAuthorization ? createPortal(
         <div
           className="account-wecom-qr-modal-backdrop"
           onMouseDown={(event) => { if (event.target === event.currentTarget) closeWeComBotAuthorization(); }}
@@ -906,7 +971,9 @@ export function connectionDetailPresentation(
   total: number,
   integrationId?: string,
 ) {
-  const multipleWeComBots = integrationId === "wecom" && connection.service === "wecom_bot" && total > 1;
+  const multipleWeComBots = integrationId?.startsWith(wecomIntegrationPrefix)
+    && connection.service === "wecom_bot"
+    && total > 1;
   return {
     eyebrow: multipleWeComBots
       ? `企业微信机器人 ${index + 1}/${total}`
@@ -950,8 +1017,19 @@ export function AccountConnectionActionList({
 }
 
 export function connectionsForIntegration(snapshot: EmployeeIntegrationsSnapshot, integrationId: string) {
-  if (integrationId === "wecom") {
-    return snapshot.availableConnections.filter((connection) => connection.service === "wecom_bot");
+  const wecomOrganization = wecomOrganizationForIntegration(snapshot, integrationId);
+  if (wecomOrganization) {
+    const linked = snapshot.wecomIdentity.identities.some((identity) => (
+      identity.organizationId === wecomOrganization.id
+    ));
+    if (!linked) return [];
+    return snapshot.availableConnections.filter((connection) => (
+      connection.service === "wecom_bot"
+      && (
+        !connection.wecomOrganizationIds?.length
+        || connection.wecomOrganizationIds.includes(wecomOrganization.id)
+      )
+    ));
   }
   const binding = snapshot.applications.find((application) => application.id === integrationId)?.binding;
   if (!binding || binding.status !== "connected") return [];
@@ -961,52 +1039,70 @@ export function connectionsForIntegration(snapshot: EmployeeIntegrationsSnapshot
 }
 
 export function WeComIdentityCard({
-  linked,
-  identityCount,
+  organization,
+  identityLink,
   availableConnectionCount,
   onOpen,
 }: {
-  linked: boolean;
-  identityCount: number;
+  organization?: EmployeeWeComOrganization;
+  identityLink?: EmployeeIntegrationsSnapshot["wecomIdentity"]["identities"][number];
   availableConnectionCount: number;
-  onOpen: () => void;
+  onOpen?: () => void;
 }) {
+  const linked = Boolean(identityLink);
+  const binding = organization
+    ? wecomOrganizationBindingPresentation(organization, linked)
+    : { label: "未配置", className: "is-idle", Icon: Link2 };
+  const StatusIcon = binding.Icon;
+  const usable = Boolean(organization?.active && organization.configured);
+  const organizationName = organization?.organizationName || "企业微信身份";
   return (
-    <article className={`account-integration-card${linked ? " is-connected" : ""}`} aria-label="企业微信身份">
-      <button className="account-integration-card__open" type="button" onClick={onOpen} aria-label="查看企业微信身份的可用权限" />
+    <article className={`account-integration-card${linked && usable ? " is-connected" : ""}`} aria-label={`${organizationName}企业微信身份`}>
+      {onOpen ? <button className="account-integration-card__open" type="button" onClick={onOpen} aria-label={`查看${organizationName}的账号绑定与可用权限`} /> : null}
       <header className="account-integration-card__header">
         <span className="account-integration-card__icon integration-icon--wecom"><Building2 size={20} /></span>
         <div>
-          <h2>企业微信身份</h2>
+          <h2>{organizationName}</h2>
           <p>企业微信</p>
         </div>
-        <span className={`account-binding-state ${linked ? "is-connected" : "is-idle"}`}>
-          {linked ? <CheckCircle2 size={14} /> : <Link2 size={14} />}
-          {linked ? "已绑定" : "未绑定"}
+        <span className={`account-binding-state ${binding.className}`}>
+          <StatusIcon size={14} />
+          {binding.label}
         </span>
       </header>
 
       <footer className="account-integration-card__footer">
         <div>
-          {linked ? (
+          {!organization ? (
+            <>
+              <strong>管理员尚未配置企微认证组织</strong>
+              <small>配置完成后会按组织显示账号绑定关系</small>
+            </>
+          ) : linked ? (
             <>
               <strong>企业身份已关联</strong>
-              <small>{identityCount} 个组织身份 · {availableConnectionCount > 0 ? `${availableConnectionCount} 个可用机器人连接` : "暂无可用机器人连接"}</small>
+              <small>{usable
+                ? `${formatConnectedAt(identityLink?.linkedAt)} · ${availableConnectionCount > 0 ? `${availableConnectionCount} 个可用机器人连接` : "暂无可用机器人连接"}`
+                : organization.active ? "认证配置尚不可用" : "组织已停用"}</small>
             </>
+          ) : !organization.active ? (
+            <><strong>管理员已停用此组织</strong><small>已有其他组织绑定不受影响</small></>
+          ) : !organization.configured ? (
+            <><strong>认证配置尚不可用</strong><small>请联系管理员完成组织配置</small></>
           ) : (
             <>
-              <strong>尚未获得企业微信身份</strong>
-              <small>请从企业微信应用首页进入后完成身份认证</small>
+              <strong>尚未绑定此组织身份</strong>
+              <small>请从“{organizationName}”企业微信应用首页进入后认证</small>
             </>
           )}
         </div>
 
-        {!linked ? (
+        {organization && usable && !linked ? (
           <button
             className="button button--secondary"
             type="button"
             disabled
-            aria-label="请从企业微信应用首页进入后绑定身份"
+            aria-label={`请从${organizationName}企业微信应用首页进入后绑定身份`}
           >
             <Bot size={15} />
             绑定身份

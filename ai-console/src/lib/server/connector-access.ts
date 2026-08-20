@@ -150,11 +150,10 @@ export async function getSharedConnectorAccess(): Promise<SharedConnectorAccessS
     id: string;
     organization_name: string;
     corp_id: string;
-    app_secret_ciphertext: string | null;
     relay_callback_url: string | null;
     active: boolean;
   }>(`
-    SELECT id, organization_name, corp_id, app_secret_ciphertext, relay_callback_url, active
+    SELECT id, organization_name, corp_id, relay_callback_url, active
     FROM wecom_authentication_organizations
     ORDER BY organization_name, id
   `);
@@ -165,7 +164,7 @@ export async function getSharedConnectorAccess(): Promise<SharedConnectorAccessS
       name: organization.organization_name,
       configured: Boolean(
         organization.active && organization.corp_id
-        && organization.app_secret_ciphertext && organization.relay_callback_url
+        && organization.relay_callback_url
       ),
     })),
     hardDeniedActionIds: [...hardDeniedConnectorActionIds],
@@ -333,7 +332,7 @@ export async function saveSharedConnectorResource(
     const organization = await getPool().query(`
       SELECT 1 FROM wecom_authentication_organizations
       WHERE id = $1 AND active AND corp_id <> ''
-        AND app_secret_ciphertext IS NOT NULL AND relay_callback_url IS NOT NULL
+        AND relay_callback_url IS NOT NULL
     `, [wecomOrganizationId]);
     if (!organization.rowCount) throw new IntegrationStoreError("企业微信认证组织不存在、未完成配置或已停用", 409);
   }

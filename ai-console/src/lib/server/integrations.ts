@@ -194,6 +194,13 @@ type WeComIdentityLinkRow = QueryResultRow & {
   updated_at: Date | string;
 };
 
+type EmployeeWeComOrganizationRow = QueryResultRow & {
+  id: string;
+  organization_name: string;
+  active: boolean;
+  configured: boolean;
+};
+
 type WeComIdentityLoginRequestRow = QueryResultRow & {
   request_hash: string;
   browser_nonce_hash: string;
@@ -215,18 +222,6 @@ export type WeComLinkedPlatformIdentity = {
   principalSubject: string;
   email: string;
   name: string;
-};
-
-type WeComIdentityLinkRequestRow = QueryResultRow & {
-  request_hash: string;
-  browser_nonce_hash: string;
-  principal_issuer: string;
-  principal_subject: string;
-  principal_email: string;
-  principal_name: string;
-  created_at: Date | string;
-  expires_at: Date | string;
-  consumed_at: Date | string | null;
 };
 
 declare global {
@@ -329,7 +324,6 @@ export async function ensureSchema() {
       CREATE TABLE IF NOT EXISTS wecom_authentication_configuration (
         singleton_key TEXT PRIMARY KEY DEFAULT 'default' CHECK (singleton_key = 'default'),
         corp_id TEXT NOT NULL DEFAULT '',
-        app_secret_ciphertext TEXT,
         public_base_url TEXT NOT NULL,
         callback_mode TEXT NOT NULL CHECK (callback_mode IN ('direct', 'relay')),
         relay_callback_url TEXT,
@@ -353,19 +347,6 @@ export async function ensureSchema() {
         UNIQUE (wecom_issuer, wecom_subject),
         UNIQUE (wecom_corp_id_hash, wecom_user_id_hash)
       );
-      CREATE TABLE IF NOT EXISTS wecom_identity_link_requests (
-        request_hash CHAR(64) PRIMARY KEY CHECK (request_hash ~ '^[a-f0-9]{64}$'),
-        browser_nonce_hash CHAR(64) NOT NULL CHECK (browser_nonce_hash ~ '^[a-f0-9]{64}$'),
-        principal_issuer TEXT NOT NULL,
-        principal_subject TEXT NOT NULL,
-        principal_email TEXT NOT NULL,
-        principal_name TEXT NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        expires_at TIMESTAMPTZ NOT NULL,
-        consumed_at TIMESTAMPTZ
-      );
-      CREATE INDEX IF NOT EXISTS wecom_identity_link_requests_principal_idx
-        ON wecom_identity_link_requests(principal_issuer, principal_subject, expires_at);
       CREATE TABLE IF NOT EXISTS wecom_identity_login_requests (
         request_hash CHAR(64) PRIMARY KEY CHECK (request_hash ~ '^[a-f0-9]{64}$'),
         browser_nonce_hash CHAR(64) NOT NULL CHECK (browser_nonce_hash ~ '^[a-f0-9]{64}$'),
@@ -538,14 +519,14 @@ async function migrateLegacyWeComAuthenticationConfiguration() {
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext('ai_base_wecom_authentication_configuration'))");
-    const current = await client.query<{ corp_id: string; app_secret_ciphertext: string | null }>(`
-      SELECT corp_id, app_secret_ciphertext
+    const current = await client.query<{ corp_id: string }>(`
+      SELECT corp_id
       FROM wecom_authentication_configuration
       WHERE singleton_key = 'default'
       FOR UPDATE
     `);
-    const legacy = await client.query<Pick<IntegrationApplicationRow, "app_id" | "app_secret_ciphertext">>(`
-      SELECT app_id, app_secret_ciphertext
+    const legacy = await client.query<Pick<IntegrationApplicationRow, "app_id">>(`
+      SELECT app_id
       FROM integration_applications
       WHERE platform = 'wecom'
       ORDER BY active DESC, updated_at DESC, created_at DESC, id
@@ -555,27 +536,22 @@ async function migrateLegacyWeComAuthenticationConfiguration() {
     if (!current.rows[0]) {
       await client.query(`
         INSERT INTO wecom_authentication_configuration (
-          singleton_key, corp_id, app_secret_ciphertext, public_base_url,
+          singleton_key, corp_id, public_base_url,
           callback_mode, relay_callback_url, email_domain
-        ) VALUES ('default', $1, $2, $3, $4, $5, $6)
+        ) VALUES ('default', $1, $2, $3, $4, $5)
       `, [
         legacyApplication?.app_id || "",
-        legacyApplication?.app_secret_ciphertext || null,
         runtime.publicBaseUrl,
         runtime.callbackMode,
         runtime.callbackMode === "relay" ? runtime.relayCallbackUrl || null : null,
         runtime.emailDomain,
       ]);
-    } else if (
-      legacyApplication
-      && !current.rows[0].corp_id
-      && !current.rows[0].app_secret_ciphertext
-    ) {
+    } else if (legacyApplication && !current.rows[0].corp_id) {
       await client.query(`
         UPDATE wecom_authentication_configuration
-        SET corp_id = $1, app_secret_ciphertext = $2, updated_at = NOW()
+        SET corp_id = $1, updated_at = NOW()
         WHERE singleton_key = 'default'
-      `, [legacyApplication.app_id, legacyApplication.app_secret_ciphertext]);
+      `, [legacyApplication.app_id]);
     }
     await client.query(`
       DELETE FROM employee_connector_bindings
@@ -600,7 +576,6 @@ async function migrateWeComMultiOrganizationSchema() {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       organization_name TEXT NOT NULL,
       corp_id TEXT NOT NULL UNIQUE,
-      app_secret_ciphertext TEXT,
       relay_callback_url TEXT,
       active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -610,12 +585,11 @@ async function migrateWeComMultiOrganizationSchema() {
     ALTER TABLE wecom_authentication_configuration
       ADD COLUMN IF NOT EXISTS organizations_migrated_at TIMESTAMPTZ;
     INSERT INTO wecom_authentication_organizations (
-      id, organization_name, corp_id, app_secret_ciphertext,
-      relay_callback_url, active, created_at, updated_at
+      id, organization_name, corp_id, relay_callback_url, active, created_at, updated_at
     )
     SELECT
       '00000000-0000-0000-0000-000000000001'::UUID,
-      '默认组织', corp_id, app_secret_ciphertext, relay_callback_url,
+      '默认组织', corp_id, relay_callback_url,
       TRUE, created_at, updated_at
     FROM wecom_authentication_configuration
     WHERE singleton_key = 'default'
@@ -623,14 +597,22 @@ async function migrateWeComMultiOrganizationSchema() {
       AND BTRIM(corp_id) <> ''
       AND NOT EXISTS (SELECT 1 FROM wecom_authentication_organizations)
     ON CONFLICT (corp_id) DO UPDATE SET
-      app_secret_ciphertext = COALESCE(
-        wecom_authentication_organizations.app_secret_ciphertext,
-        EXCLUDED.app_secret_ciphertext
-      ),
       relay_callback_url = COALESCE(
         wecom_authentication_organizations.relay_callback_url,
         EXCLUDED.relay_callback_url
       );
+    UPDATE wecom_authentication_organizations AS organization
+    SET relay_callback_url = NULL, active = FALSE, updated_at = NOW()
+    WHERE organization.relay_callback_url IN (
+      SELECT duplicate.relay_callback_url
+      FROM wecom_authentication_organizations AS duplicate
+      WHERE duplicate.relay_callback_url IS NOT NULL
+      GROUP BY duplicate.relay_callback_url
+      HAVING COUNT(*) > 1
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS wecom_authentication_organizations_relay_callback_url_idx
+      ON wecom_authentication_organizations(relay_callback_url)
+      WHERE relay_callback_url IS NOT NULL;
     UPDATE wecom_authentication_configuration
     SET organizations_migrated_at = COALESCE(organizations_migrated_at, NOW())
     WHERE singleton_key = 'default';
@@ -821,7 +803,7 @@ async function migrateLegacyWeComBotIntegrations() {
         .map((action) => action.id));
       const organization = await getPool().query<{ id: string }>(`
         SELECT id FROM wecom_authentication_organizations
-        WHERE active AND corp_id <> '' AND app_secret_ciphertext IS NOT NULL
+        WHERE active AND corp_id <> '' AND relay_callback_url IS NOT NULL
         ORDER BY created_at, id
         LIMIT 1
       `);
@@ -1378,7 +1360,7 @@ async function reconcileEmployeeBindings(identity: ConsoleIdentity) {
 export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promise<EmployeeIntegrationsSnapshot> {
   await ensureSchema();
   await migrateLegacyWeComBotIntegrations();
-  const [applications, bindings, wecomIdentity] = await Promise.all([
+  const [applications, bindings, wecomIdentity, wecomOrganizations] = await Promise.all([
     getPool().query<IntegrationApplicationRow>(`
       SELECT id, platform, app_name, app_id, note, action_ids, active, created_at, updated_at
       FROM integration_applications
@@ -1386,6 +1368,12 @@ export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promis
     `),
     reconcileEmployeeBindings(identity),
     getWeComIdentityLinkSnapshot(identity),
+    getPool().query<EmployeeWeComOrganizationRow>(`
+      SELECT id, organization_name, active,
+             (active AND corp_id <> '' AND relay_callback_url IS NOT NULL) AS configured
+      FROM wecom_authentication_organizations
+      ORDER BY organization_name, created_at, id
+    `),
   ]);
   const resolved = await resolveEmployeeConnectorBindings({
     issuer: identity.principalIssuer,
@@ -1406,6 +1394,10 @@ export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promis
           : undefined,
         policyIds: "policyIds" in connection && Array.isArray(connection.policyIds)
           ? connection.policyIds.filter((policyId): policyId is string => typeof policyId === "string")
+          : undefined,
+        wecomOrganizationId: "wecomOrganizationId" in connection
+          && typeof connection.wecomOrganizationId === "string"
+          ? connection.wecomOrganizationId
           : undefined,
       }];
     })
@@ -1431,6 +1423,12 @@ export async function getEmployeeIntegrations(identity: ConsoleIdentity): Promis
     automaticWeComBotCount,
     wecomIdentity,
     availableConnections,
+    wecomOrganizations.rows.map((organization) => ({
+      id: organization.id,
+      organizationName: organization.organization_name,
+      active: organization.active,
+      configured: organization.configured,
+    })),
   );
 }
 
@@ -1530,6 +1528,7 @@ export function buildEmployeeIntegrationsSnapshot(
   automaticWeComBotCount = applications.filter((application) => application.platform === "wecom_bot" && application.active).length,
   wecomIdentity: EmployeeIntegrationsSnapshot["wecomIdentity"] = { linked: false, identities: [] },
   availableConnections: EmployeeAvailableConnection[] = [],
+  wecomOrganizations: EmployeeIntegrationsSnapshot["wecomOrganizations"] = [],
 ): EmployeeIntegrationsSnapshot {
   const bindingByApplication = new Map(
     bindings.map((binding) => [binding.applicationId, binding]),
@@ -1552,6 +1551,7 @@ export function buildEmployeeIntegrationsSnapshot(
   return {
     identity,
     wecomIdentity,
+    wecomOrganizations,
     applications: employeeApplications,
     availableConnections,
     automaticWeComBotCount,
@@ -1566,6 +1566,7 @@ type EmployeeResolvedConnection = {
   accessMode: "account_bound" | "controlled_shared";
   allowedActionIds?: string[];
   policyIds?: string[];
+  wecomOrganizationId?: string;
 };
 
 export function buildEmployeeAvailableConnections(
@@ -1577,6 +1578,7 @@ export function buildEmployeeAvailableConnections(
     connection: EmployeeResolvedConnection;
     actionIds: Set<string>;
     sources: Set<EmployeeAvailableConnection["authorizationSources"][number]>;
+    wecomOrganizationIds: Set<string>;
   }>();
 
   for (const connection of connections) {
@@ -1585,6 +1587,7 @@ export function buildEmployeeAvailableConnections(
       connection,
       actionIds: new Set<string>(),
       sources: new Set<EmployeeAvailableConnection["authorizationSources"][number]>(),
+      wecomOrganizationIds: new Set<string>(),
     };
     for (const actionId of connection.allowedActionIds || []) current.actionIds.add(actionId);
     if (connection.accessMode === "account_bound") {
@@ -1598,10 +1601,11 @@ export function buildEmployeeAvailableConnections(
         current.sources.add("manual");
       }
     }
+    if (connection.wecomOrganizationId) current.wecomOrganizationIds.add(connection.wecomOrganizationId);
     merged.set(key, current);
   }
 
-  return Array.from(merged.values()).map(({ connection, actionIds, sources }) => {
+  return Array.from(merged.values()).map(({ connection, actionIds, sources, wecomOrganizationIds }) => {
     const provider = providersByService.get(connection.service);
     const actionsById = new Map((provider?.actions || []).map((action) => [action.id, action]));
     return {
@@ -1612,6 +1616,7 @@ export function buildEmployeeAvailableConnections(
       displayName: connection.displayName || provider?.displayName || connection.connectionName,
       accessMode: connection.accessMode,
       authorizationSources: Array.from(sources),
+      ...(wecomOrganizationIds.size ? { wecomOrganizationIds: Array.from(wecomOrganizationIds).sort() } : {}),
       actions: Array.from(actionIds).sort().map((actionId) => {
         const action = actionsById.get(actionId);
         return {
@@ -2108,7 +2113,6 @@ const WECOM_VISIBILITY_CACHE_TTL_MS = 60_000;
 const WECOM_USER_ID_HASH_PATTERN = /^[a-f0-9]{64}$/;
 const WECOM_CORP_GROUP_PATTERN = /^wecom:[a-f0-9]{12}$/;
 const WECOM_IDENTITY_LINK_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-const WECOM_IDENTITY_LINK_LIFETIME_MS = 10 * 60 * 1_000;
 const WECOM_IDENTITY_LOGIN_LIFETIME_MS = 30 * 60 * 1_000;
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {
@@ -2141,7 +2145,7 @@ export function deriveTrustedWeComRelayIdentity(
   try {
     const parsed = new URL(identity.relayIssuer);
     if (
-      !["http:", "https:"].includes(parsed.protocol)
+      parsed.protocol !== "https:"
       || parsed.username
       || parsed.password
       || parsed.pathname !== "/wecom"
@@ -2193,7 +2197,6 @@ async function configuredWeComOrganization(client: PoolClient, organizationId: s
     FROM wecom_authentication_organizations
     WHERE id = $1 AND active
       AND corp_id <> ''
-      AND app_secret_ciphertext IS NOT NULL
       AND relay_callback_url IS NOT NULL
   `, [organizationId]);
   const organization = configuration.rows[0];
@@ -2447,7 +2450,7 @@ export async function completeVerifiedWeComIdentityLinkRequest(
 export async function getWeComLinkedPlatformIdentity(
   principalIssuer: string,
   principalSubject: string,
-  linkId?: string,
+  linkId: string,
 ): Promise<WeComLinkedPlatformIdentity | undefined> {
   await ensureSchema();
   const result = await getPool().query<WeComIdentityLinkRow>(`
@@ -2456,175 +2459,9 @@ export async function getWeComLinkedPlatformIdentity(
            linked_at, updated_at
     FROM wecom_identity_links
     WHERE principal_issuer = $1 AND principal_subject = $2
-      AND ($3::UUID IS NULL OR id = $3)
-    ORDER BY linked_at DESC, id
-    LIMIT 1
-  `, [principalIssuer, principalSubject, linkId || null]);
+      AND id = $3
+  `, [principalIssuer, principalSubject, linkId]);
   return result.rows[0] ? linkedPlatformIdentity(result.rows[0]) : undefined;
-}
-
-export async function createWeComIdentityLinkRequest(identity: ConsoleIdentity) {
-  await ensureSchema();
-  const requestToken = randomBytes(32).toString("base64url");
-  const browserNonce = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + WECOM_IDENTITY_LINK_LIFETIME_MS);
-  const client = await getPool().connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(`
-      DELETE FROM wecom_identity_link_requests
-      WHERE expires_at < NOW() - INTERVAL '1 day' OR consumed_at IS NOT NULL
-    `);
-    await client.query(`
-      DELETE FROM wecom_identity_link_requests
-      WHERE principal_issuer = $1 AND principal_subject = $2 AND consumed_at IS NULL
-    `, [identity.principalIssuer, identity.principalSubject]);
-    await client.query(`
-      INSERT INTO wecom_identity_link_requests (
-        request_hash, browser_nonce_hash, principal_issuer, principal_subject,
-        principal_email, principal_name, expires_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [
-      hashWeComLinkSecret(requestToken),
-      hashWeComLinkSecret(browserNonce),
-      identity.principalIssuer,
-      identity.principalSubject,
-      identity.email,
-      identity.name,
-      expiresAt,
-    ]);
-    await client.query("COMMIT");
-    return { requestToken, browserNonce, expiresAt: expiresAt.toISOString() };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-export async function completeWeComIdentityLinkRequest(
-  requestToken: string,
-  browserNonce: string,
-  platformIdentity: ConsoleIdentity,
-  relayIdentity: { corpId: string; userId: string; relayIssuer: string },
-) {
-  if (
-    !WECOM_IDENTITY_LINK_SECRET_PATTERN.test(requestToken)
-    || !WECOM_IDENTITY_LINK_SECRET_PATTERN.test(browserNonce)
-  ) {
-    throw new IntegrationStoreError("企微身份绑定请求无效", 400, "invalid_wecom_link_request");
-  }
-  await ensureSchema();
-  const client = await getPool().connect();
-  try {
-    await client.query("BEGIN");
-    const requestResult = await client.query<WeComIdentityLinkRequestRow>(`
-      SELECT request_hash, browser_nonce_hash, principal_issuer, principal_subject,
-             principal_email, principal_name, created_at, expires_at, consumed_at
-      FROM wecom_identity_link_requests
-      WHERE request_hash = $1 AND browser_nonce_hash = $2 AND consumed_at IS NULL
-      FOR UPDATE
-    `, [hashWeComLinkSecret(requestToken), hashWeComLinkSecret(browserNonce)]);
-    const linkRequest = requestResult.rows[0];
-    if (!linkRequest || new Date(linkRequest.expires_at).getTime() <= Date.now()) {
-      throw new IntegrationStoreError(
-        "企微身份绑定请求已失效，请重新发起",
-        410,
-        "expired_wecom_link_request",
-      );
-    }
-    if (
-      linkRequest.principal_issuer !== platformIdentity.principalIssuer
-      || linkRequest.principal_subject !== platformIdentity.principalSubject
-    ) {
-      throw new IntegrationStoreError(
-        "企微身份绑定请求不属于当前平台账号",
-        403,
-        "invalid_wecom_link_request",
-      );
-    }
-    const configuration = await client.query<{ id: string; corp_id: string }>(`
-      SELECT id, corp_id
-      FROM wecom_authentication_organizations
-      WHERE corp_id = $1 AND active AND app_secret_ciphertext IS NOT NULL
-    `, [relayIdentity.corpId.trim()]);
-    const organization = configuration.rows[0];
-    if (!organization) {
-      throw new IntegrationStoreError("企业微信认证尚未配置", 503, "wecom_authentication_unavailable");
-    }
-    const trusted = deriveTrustedWeComRelayIdentity(relayIdentity, organization.corp_id);
-    const existing = await client.query<WeComIdentityLinkRow>(`
-      SELECT id, organization_id, principal_issuer, principal_subject, wecom_issuer, wecom_subject,
-             wecom_corp_id_hash, wecom_user_id_hash, linked_at, updated_at
-      FROM wecom_identity_links
-      WHERE (wecom_issuer = $1 AND wecom_subject = $2)
-         OR (wecom_corp_id_hash = $3 AND wecom_user_id_hash = $4)
-      FOR UPDATE
-    `, [trusted.wecomIssuer, trusted.wecomSubject, trusted.corpIdHash, trusted.userIdHash]);
-    if (existing.rows.some((row) => (
-      row.principal_issuer !== linkRequest.principal_issuer
-      || row.principal_subject !== linkRequest.principal_subject
-    ))) {
-      throw new IntegrationStoreError(
-        "该企微身份已绑定到另一个平台账号",
-        409,
-        "wecom_identity_conflict",
-      );
-    }
-    const linked = await client.query<WeComIdentityLinkRow>(`
-      INSERT INTO wecom_identity_links (
-        organization_id, principal_issuer, principal_subject, principal_email, principal_name,
-        wecom_issuer, wecom_subject, wecom_corp_id_hash, wecom_user_id_hash
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT (principal_issuer, principal_subject, organization_id) DO UPDATE SET
-        principal_email = EXCLUDED.principal_email,
-        principal_name = EXCLUDED.principal_name,
-        wecom_issuer = EXCLUDED.wecom_issuer,
-        wecom_subject = EXCLUDED.wecom_subject,
-        wecom_corp_id_hash = EXCLUDED.wecom_corp_id_hash,
-        wecom_user_id_hash = EXCLUDED.wecom_user_id_hash,
-        linked_at = NOW(),
-        updated_at = NOW()
-      RETURNING id, organization_id, principal_issuer, principal_subject, wecom_issuer, wecom_subject,
-                wecom_corp_id_hash, wecom_user_id_hash, linked_at, updated_at
-    `, [
-      organization.id,
-      linkRequest.principal_issuer,
-      linkRequest.principal_subject,
-      linkRequest.principal_email,
-      linkRequest.principal_name,
-      trusted.wecomIssuer,
-      trusted.wecomSubject,
-      trusted.corpIdHash,
-      trusted.userIdHash,
-    ]);
-    await client.query(`
-      UPDATE wecom_identity_link_requests SET consumed_at = NOW() WHERE request_hash = $1
-    `, [linkRequest.request_hash]);
-    await client.query("COMMIT");
-    return {
-      linked: true as const,
-      linkedAt: new Date(linked.rows[0].linked_at).toISOString(),
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    if (
-      error
-      && typeof error === "object"
-      && "code" in error
-      && error.code === "23505"
-    ) {
-      throw new IntegrationStoreError(
-        "该企微身份已绑定到另一个平台账号",
-        409,
-        "wecom_identity_conflict",
-      );
-    }
-    throw error;
-  } finally {
-    client.release();
-  }
 }
 
 export async function getWeComIdentityLinkSnapshot(
@@ -2749,7 +2586,7 @@ async function resolveWeComVisibilityResources(input: {
     JOIN wecom_authentication_organizations AS organization
       ON organization.id = resource.wecom_organization_id
     WHERE resource.enabled AND organization.active
-      AND organization.app_secret_ciphertext IS NOT NULL
+      AND organization.corp_id <> ''
       AND organization.relay_callback_url IS NOT NULL
       AND resource.service = 'wecom_bot'
       AND resource.authorization_mode = 'wecom_visibility'
@@ -2938,6 +2775,7 @@ export async function resolveEmployeeConnectorBindings(input: {
     actionRestricted: true;
     allowedActionIds: Set<string>;
     policyIds: string[];
+    wecomOrganizationId?: string;
   }>();
   for (const row of sharedRows.rows) {
     const currentConnection = valid.get(`${row.service}\0${row.connection_name}`);
@@ -2979,6 +2817,7 @@ export async function resolveEmployeeConnectorBindings(input: {
         .filter((actionId) => !WECOM_BOT_SYSTEM_ONLY_ACTION_IDS.has(actionId))
         .sort(),
       policyIds: [`wecom-visibility:${row.resource_id}`],
+      wecomOrganizationId: row.wecom_organization_id,
     });
   }
   const boundServices = new Set([

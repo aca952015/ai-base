@@ -1,7 +1,7 @@
 # AI Base 基础架构
 
 - Status: Active
-- Last refreshed: 2026-08-19
+- Last refreshed: 2026-08-20
 - Scope: 项目结构、运行组件、入口路由、信任边界、数据所有权和变更落点
 
 本文档是 AI Base 结构与架构的统一事实源。运行命令、环境变量和操作流程见 [`README.md`](./README.md)，Console 体验见 [`DESIGN.md`](./DESIGN.md)，可观测字段见 [`docs/observability-schema.md`](./docs/observability-schema.md)。`.omx/plans` 仅表示提案。
@@ -41,10 +41,14 @@ Agent 客户端 ── Caddy :8080 /runtime ── Agent Runtime
 
 Agent Runtime / MCP Gateway / Envoy ── OTel Collector ── Jaeger / Prometheus
 
-企微工作台 ── Caddy /auth/wework ── Console ── 公网 ai-auth-relay ── 企业微信 API
-                                      ▲              │
-                                      └── 加密一次性身份结果 ──┘
+企微工作台 ── 公网 ai-auth-relay /launch/wecom ── 企业微信 OAuth / 固定回调
+                                      │                         │
+                                      └──── gettoken/getuserinfo┘
                                       │
+                                      └── path 一次性结果票据 ──▶ Console GET
+                                                                      │
+                                      Relay 一次性身份结果 ◀── 服务端消费
+                                                                      │
                          已绑定 ── 短期 Console 会话
                          未绑定 ── Pomerium/Dex ── 首次关联
 ```
@@ -54,10 +58,11 @@ Agent Runtime / MCP Gateway / Envoy ── OTel Collector ── Jaeger / Promet
 | 组件/路径 | 职责 | 边界或持久状态 |
 | --- | --- | --- |
 | `compose.yaml` | 单机拓扑、网络、卷、健康检查和依赖 | 只有 `global-gateway` 映射 loopback 宿主机端口 |
-| `deploy/global-gateway/` / `global-gateway` | Caddy 路由、请求头边界、企微引导入口分流 | 无业务状态；只按路径/Cookie 是否存在分流，不验证身份或解析 MCP JSON-RPC |
+| `deploy/global-gateway/` / `global-gateway` | Caddy 路由、请求头边界、企微引导入口分流 | 无业务状态；`caddy-data`/`caddy-config` 只持久化本地 TLS PKI 与运行配置，避免容器重建轮换开发证书；只按路径/Cookie 是否存在分流，不验证身份或解析 MCP JSON-RPC |
 | `deploy/pomerium/` / `pomerium` | 浏览器 SSO 和路由策略 | 会话写入 PostgreSQL Data Broker；不是 IdP |
 | `ai-console/` / `ai-console` | 管理 UI、服务端配置、身份映射、策略和 Envoy 配置生成 | PostgreSQL 与 `console-data`；Secret 不进入浏览器 |
 | `mcp-access-gateway/` | MCP OAuth/OIDC、Session、JSON-RPC 边界、公共工具名和员工授权 | Token 哈希写入 `mcp-auth-data`；员工 Token 不透传 Envoy |
+| `mcp-backend-adapter/` | 自定义 MCP 上游兼容、JSON 媒体类型规范化、配置限定的目标转发和凭据注入 | 以 Console 数据所有者 UID 1001 只读挂载 `console-data`；为未返回 Session ID 的合法无会话 MCP 合成内部 Session，不向公网开放 |
 | `deploy/llm-gateway/` / `llm-gateway` | Envoy 模型路由、协议转换、内部 MCP 注册和聚合 | 配置由 Console 生成；监听器只在 Compose 网络开放 |
 | `agent-runtime/` | PydanticAI Agent 编排、结构化输出和业务策略 | PostgreSQL；不保存 SaaS 凭据 |
 | `vendor/open-connector/` / `open-connector` | Provider、OAuth、具名连接、凭据和 Action 执行 | `open-connector-data`；固定上游边界，默认不修改 |
@@ -65,10 +70,10 @@ Agent Runtime / MCP Gateway / Envoy ── OTel Collector ── Jaeger / Promet
 | `rag-mcp/` | 将 LightRAG 只读能力适配为 Streamable HTTP MCP | 独立容器；不修改 LightRAG 镜像 |
 | `deploy/lightrag/` / `lightrag` | 文档、检索、图谱和引用查询 | PostgreSQL、LightRAG 数据卷和配置卷 |
 | `deploy/postgres/` / `postgres` | 控制面、身份映射、策略、关系、向量和图数据 | migration 必须兼容空库、已有库和重复执行 |
-| `egress-dns` | Envoy/Open Connector 公网 DoH 与企业内网 DNS 分流 | 仅 Compose 网络；SSRF 私网保护保持开启 |
+| `egress-dns` | Envoy、MCP Backend Adapter 和 Open Connector 的公网 DoH 与企业内网 DNS 分流 | 仅 Compose 网络；SSRF 私网保护保持开启 |
 | `deploy/otel-collector/`、`deploy/jaeger/`、`deploy/prometheus/` | Trace 净化、存储、SpanMetrics 和规则 | 遥测失败不影响业务；Trace/Metrics 不替代审计 |
 | `promptfoo` | 回归、安全和发布评测 | 仅 `quality` profile 按需运行 |
-| `../ai-auth-relay/` | 固定公网出口上的企业微信网页授权中继 | 仓库外独立部署；不持久化 CorpID、Secret、Token 或 UserID |
+| `../ai-auth-relay/` | 固定公网出口上的企业微信网页授权中继 | 仓库外独立部署；每租户环境持有 CorpID/App Secret，OAuth state、Access Token 和 UserID 结果只在内存短暂存在，不落盘 |
 | `deploy/silverbullet/space/` | Agent、外部连接和知识治理规范 | 规范文档，不是运行服务 |
 | `docs/`、`scripts/`、`.omx/plans/` | Schema、验证脚本和提案 | plans 不能作为已实现事实 |
 
@@ -88,7 +93,7 @@ Agent Runtime / MCP Gateway / Envoy ── OTel Collector ── Jaeger / Promet
 | `/knowledge/*`、`knowledge.localhost:8080` | LightRAG | 知识 API 与 Web UI |
 | `/llm-admin/*` | Envoy 管理端 | Console 使用的内部配置控制路径 |
 | `/promptfoo/*`、`promptfoo.localhost:8080` | Promptfoo | 仅 quality profile 可用 |
-| `ai-console.localhost.pomerium.io:8443` | Pomerium / AI Console | 默认走 Pomerium；`/auth/wework` 引导路径和带企微 Console 会话的请求由 Console 自行验证 |
+| `ai-console.localhost.pomerium.io:8443` | Pomerium / AI Console | 默认走 Pomerium；仅 `/auth/wework/launch/*`、`/auth/wework/status` 结果引导路径和带企微 Console 会话的请求由 Console 自行验证 |
 | `authenticate`、`jaeger`、`open-connector`.localhost.pomerium.io:8443 | Pomerium | 平台认证及管理员工作台入口 |
 | `/WW_verify_*.txt` | Caddy 静态目录 | 企业微信域名验证，不转发到 Relay 或 Console |
 
@@ -98,12 +103,13 @@ Prometheus、OTLP、PostgreSQL 及各服务原生管理端口只在 Compose 网�
 
 ### 公共 MCP
 
-链路为：MCP Client → Caddy → MCP Access Gateway → Envoy → MCP 上游。
+链路为：MCP Client → Caddy → MCP Access Gateway → Envoy → 系统 MCP 上游；自定义 MCP 的最后一段为 Envoy → MCP Backend Adapter → 配置中的 MCP 上游。
 
 - Gateway 提供发现、动态客户端注册、Authorization Code + S256 PKCE、Token 和 JWKS，并通过独立 OIDC Client 委托员工登录。
 - 每次请求验证 Access Token 的 issuer、audience、有效期和 scope；Refresh Token 仅以哈希持久化并支持撤销和滑动续期。
 - 外部 MCP Session 由 Gateway 签名并绑定 `issuer + subject + client_id`，不能跨员工复用；内部 Envoy Session 不直接暴露。
-- Envoy 内部工具名保持 `mcp-open-connector__*` 和 `mcp-rag__*`。Gateway 仅在 `tools/list`/`tools/call` 边界映射为 `connector__*` 和 `kb__*`，不改写参数、结果、其他上游或 Envoy 配置。
+- Envoy 内部工具名保持 `mcp-open-connector__*`、`mcp-rag__*` 和 `mcp-<namespace>__*`。Gateway 在公共 `tools/list`/`tools/call` 边界把内置工具映射为 `connector__*` 和 `kb__*`；每个管理员自定义 MCP 无论包含多少真实工具，都只暴露 `<namespace>__tools` 与 `<namespace>__execute`。两者的标题和说明按 Console 服务名称、命名空间以及当前策略实际放行的工具数量/代表能力实时生成。前者在当前 MCP Session 中发现该命名空间的工具并支持查询/分页，后者只把精确工具名和参数映射回同命名空间的 Envoy 工具；目录和说明均不跨 Session 缓存，也不跨命名空间执行。
+- MCP Backend Adapter 只接受 Console 已保存且启用的自定义命名空间，从只读配置卷解析目标和独立 Secret；请求不能提交或覆盖目标 URL。不含密钥的 MCP 元数据文件为只读 `0644`，独立密钥仍为数据所有者专用的 `0600`。Adapter 将带参数的 JSON Content-Type 规范化为 Envoy v1.0 MCP 解析器可识别的 `application/json`，保留真实上游 Session；当符合 Streamable HTTP 规范的无会话上游未返回 `Mcp-Session-Id` 时，仅向 Envoy 合成签名的内部 Session，并在后续转发前移除，不把合成值发送给上游。
 - Gateway 的 `connector__apps` 与 `connector__connections` 均从当前 `issuer + subject` 实时生成，只展示该员工的个人、受控共享和免认证连接；Action 查询必须先以这里返回的 service 限定范围。执行时再次解析员工连接并覆盖客户端连接名；无授权、歧义或解析服务失败时拒绝。
 - 员工 Access Token、Cookie 和浏览器身份头在进入 Envoy 前移除；公网 TraceContext 被清除后建立新的平台 Trace。
 
@@ -120,12 +126,12 @@ Prometheus、OTLP、PostgreSQL 及各服务原生管理端口只在 Compose 网�
 
 ### 企业微信身份绑定与自动恢复
 
-企业微信不是平台账号源，也不能创建或任意选择平台账号。管理员在 `/integrations/wecom-authentication` 按组织维护 CorpID、App Secret 和 Relay 地址；每个组织生成带稳定 `organization` ID 的独立应用首页。Secret 使用 AES-256-GCM 存入 PostgreSQL，浏览器、Pomerium、Dex 和 MCP Broker 均不接触明文。
+企业微信不是平台账号源，也不能创建或任意选择平台账号。管理员在 `/integrations/wecom-authentication` 按组织维护 CorpID 与 Relay 固定回调地址；每个组织的企业微信应用首页是对应 Relay Origin 上固定的 `/launch/wecom`，不携带本地组织 ID。Relay 回调地址在 PostgreSQL 中唯一映射一个组织。App Secret 只由对应 Relay 的部署环境持有，Console 不接收、保存或解密该 Secret。
 
-链路为：指定组织的企微工作台应用首页 → Console 将组织 ID 固化到一次性事务 → Relay 完成企微网页授权与 `gettoken/getuserinfo` → Console 先从认证票据读取事务令牌，再按事务回查组织凭据并验证 CorpID。已有绑定时，Console 签发 12 小时 HttpOnly 会话并按绑定的 `issuer + subject` 恢复用户；没有绑定时，才进入 Pomerium/Dex 确认平台账号并完成首次关联。
+链路为：企微工作台打开 Relay 固定 `/launch/wecom`（Relay 根路径只做无参数规范化跳转）→ Relay 设置 5 分钟 HttpOnly state Cookie 并直接进入企业微信网页授权 → 企业微信只回调该 Relay 的固定 HTTPS `/callbacks/wecom` → Relay 使用租户环境中的 CorpID/App Secret 和固定公网出口完成 `gettoken/getuserinfo`，把身份结果以随机结果 ID 暂存在内存 → Relay 将只包含结果 ID、自身固定回调地址和五分钟有效期的 AEAD 票据放入固定 Console `/auth/wework/launch/<ticket>` HTTPS path → Console 的 GET 路由直接验证票据，按回调地址唯一解析组织，并在 `POST /api/wecom/results` 上提交共享密钥域分离派生的 HMAC 消费证明，一次性取得身份结果 → Console 创建并立即验证平台关联事务。已有绑定时，Console 签发 12 小时 HttpOnly 会话并按具体绑定 ID 恢复用户；没有绑定时，才进入 Pomerium/Dex 确认平台账号并完成首次关联。浏览器不再执行过渡页、`history.replaceState` 或表单 POST，也不会从 Console 再跳回 Relay 发起 OAuth。
 
-- Console 与 Relay 只交换短期 AEAD 票据和随机授权 ID；企业微信只回调 Relay 的固定 `/callbacks/wecom`。
-- Relay 使用固定公网出口，不接受浏览器指定回调，不持久化 CorpID、Secret、Access Token 或 UserID。
+- Console 与 Relay 只交换短期 AEAD 结果票据和一次性随机结果 ID；浏览器 URL 不携带组织 ID、CorpID 或 UserID。Relay、Caddy 和 Console 的该入口不得记录完整请求路径，响应使用 `no-store` 与 `no-referrer`；企业微信只回调 Relay 的固定 `/callbacks/wecom`。
+- Relay 使用固定公网出口，只接受 HTTPS 公网回调，不接受浏览器指定回调；每个租户的 CorpID/App Secret 由环境配置提供，Access Token、OAuth state 和 UserID 结果只在内存中短暂存在，结果被消费、过期或服务重启后立即失效。当前每租户必须保持单实例；滚动、重启或扩为多副本会使在途五分钟事务失败关闭，若需要无损高可用必须先引入共享的一次性状态存储。
 - Console 只保存平台 `issuer + subject`、认证组织 ID、派生企微 Subject 及 CorpID/UserID 哈希；一个平台账号可在多个组织各绑定一个企微身份，同一具体企微身份仍只能归属一个平台账号。
 - 企微 Console 会话使用从服务端配置密钥域分离派生的 HMAC 密钥签名，并记录触发会话的具体绑定 ID；Caddy 只按 Cookie 是否存在分流，Console 每次请求都验证签名、固定有效期，并重新查询该绑定。解除其他组织绑定不影响当前会话，解除当前绑定后立即失效。
 - `/auth/wework/link` 固定经过 Pomerium，已有企微会话也不能绕过首次平台账号确认。过期、篡改、重放、企业不匹配、身份冲突、中继不可用或企微 API 失败均关闭失败。
@@ -148,7 +154,7 @@ Prometheus、OTLP、PostgreSQL 及各服务原生管理端口只在 Compose 网�
 | 模型 Provider Key | AI Console 服务端配置 | 以文件进入 Envoy 生成流程，不写入路由 YAML 或浏览器响应 |
 | SaaS 凭据、个人 OAuth Token 和企微个人机器人凭据 | Open Connector | 使用其静态加密键保存；企微 Bot Secret 不写入 Console 数据库或浏览器响应 |
 | 员工连接和共享授权 | AI Console + PostgreSQL | Gateway 每次调用重新解析，异常关闭失败 |
-| 企业微信认证 Secret | AI Console + PostgreSQL | 按组织配置，AES-256-GCM 加密；Relay 仅在对应一次性事务中短期使用 |
+| 企业微信认证 Secret | 对应租户的 Relay 部署环境 | Console/PostgreSQL 不作为权威来源；只由 Relay 用于企业微信身份交换，不进入浏览器或普通日志 |
 | 企业微信员工映射 | AI Console + PostgreSQL | 平台主体到多个组织身份的一对多映射；只保存组织 ID、派生 Subject 和 CorpID/UserID 哈希 |
 | 知识数据 | LightRAG + PostgreSQL/pgvector/AGE | RAG MCP 只读，Console 不读取正文 |
 | Trace 和指标 | OTel Collector → Jaeger/Prometheus | 先净化，只作诊断，不作审计账本 |

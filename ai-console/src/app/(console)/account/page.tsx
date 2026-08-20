@@ -14,7 +14,7 @@ export default async function AccountPage({
     <div className="page-stack">
       <PageHeader
         title="账号绑定"
-        description="维护个人 OAuth 账号，并将可信企业微信身份关联到当前平台账号。"
+        description="维护个人 OAuth 账号，并按企业微信组织查看当前平台账号的独立绑定关系。"
       />
       <AccountIntegrationManager wecomLinkResult={wecomLinkResult} />
     </div>

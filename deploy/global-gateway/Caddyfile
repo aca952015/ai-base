@@ -194,7 +194,7 @@ https://ai-console.localhost.pomerium.io:8443 {
 	tls internal
 
 	route {
-		@wecomBootstrap path /auth/wework /auth/wework/complete /auth/wework/status
+		@wecomBootstrap path /auth/wework/launch/* /auth/wework/status
 		handle @wecomBootstrap {
 			reverse_proxy ai-console:3000 {
 				header_up -X-Pomerium-Jwt-Assertion

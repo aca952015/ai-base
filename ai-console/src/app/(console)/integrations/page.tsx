@@ -68,7 +68,7 @@ export default async function IntegrationsPage() {
             <span className="settings-subpage-row__icon is-green"><Building2 size={19} /></span>
             <span className="settings-subpage-row__copy">
               <strong>企业微信认证</strong>
-              <small>CorpID、App Secret、认证入口与回调</small>
+              <small>CorpID、认证入口与中继映射</small>
             </span>
             <span className="settings-subpage-row__status">{wecomStatus}</span>
             <ChevronRight size={18} />
